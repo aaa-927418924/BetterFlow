@@ -201,6 +201,7 @@ public partial class MainWindow : System.Windows.Window
         }
 
         _isBusy = true;
+        UpdateAiModeDisplay();
         AiModeToggle.IsEnabled = false;
         ActionButton.IsEnabled = false;
         RuntimeStatus.Text = "OpenCode Zenを確認しています…";
@@ -225,6 +226,7 @@ public partial class MainWindow : System.Windows.Window
             _isBusy = false;
             AiModeToggle.IsEnabled = true;
             ActionButton.IsEnabled = true;
+            UpdateAiModeDisplay();
         }
     }
 
@@ -232,7 +234,7 @@ public partial class MainWindow : System.Windows.Window
     {
         AiModeToggle.IsChecked = _settings.AiModeEnabled;
         AiModeDescription.Text = _settings.AiModeEnabled
-            ? "オン: OpenCode Zenで文章を10行以内に整えます。"
+            ? "オン: 話し方を保ち、フィラーや言い直しを整えます。"
             : "オフ: 文字起こしをそのまま貼り付けます。";
         PrivacyNotice.Text = _settings.AiModeEnabled
             ? "AIモードでは文字起こしテキストをOpenCode Zenへ送信します。音声はPC内で処理します。"
@@ -286,6 +288,7 @@ public partial class MainWindow : System.Windows.Window
     private async Task StopAndProcessAsync()
     {
         _isBusy = true;
+        UpdateAiModeDisplay();
         ActionButton.IsEnabled = false;
         ActionButton.Content = "音声を文字起こししています…";
         RuntimeStatus.Text = "音声をPC内で文字起こししています…";
@@ -300,17 +303,17 @@ public partial class MainWindow : System.Windows.Window
             if (string.IsNullOrWhiteSpace(transcript))
                 throw new InvalidOperationException("音声を認識できませんでした。マイクに近づいて、もう一度お試しください。");
 
-            string prompt;
+            string text;
             string resultStatus;
             _indicator.HideStatus();
             if (!_settings.AiModeEnabled)
             {
-                prompt = PromptFormatter.PlainFallback(transcript);
+                text = TranscriptFormatter.NormalizeTranscript(transcript);
                 resultStatus = "文字起こしを入力欄へ貼り付けました。";
             }
             else if (!EnsureContributorConsent())
             {
-                prompt = PromptFormatter.PlainFallback(transcript);
+                text = TranscriptFormatter.NormalizeTranscript(transcript);
                 resultStatus = "送信をキャンセルしたため、文字起こしをそのまま貼り付けました。";
             }
             else
@@ -321,22 +324,20 @@ public partial class MainWindow : System.Windows.Window
                 {
                     if (!_openCode.IsRunning)
                         await EnsureOpenCodeReadyAsync();
-                    RuntimeStatus.Text = "OpenCode Zenで10行以下に整えています…";
+                    RuntimeStatus.Text = "Muse Sparkで話し方を保って文章を整えています…";
                     var response = await _openCode.RewriteAsync(transcript, _lifetime.Token);
-                    prompt = PromptFormatter.FitWithinTenLines(response);
-                    resultStatus = "プロンプトを入力欄へ貼り付けました。";
+                    text = response.Trim();
+                    resultStatus = "整えた文章を入力欄へ貼り付けました。";
                 }
                 catch (OperationCanceledException) when (_closing) { throw; }
                 catch (Exception ex)
                 {
-                    prompt = PromptFormatter.PlainFallback(transcript);
+                    text = TranscriptFormatter.NormalizeTranscript(transcript);
                     resultStatus = "AI変換に失敗したため文字起こしを貼り付けました。 " + ex.Message;
                 }
             }
 
-            ResultBox.Text = prompt;
-            ResultPanel.Visibility = System.Windows.Visibility.Visible;
-            PasteAndShow(prompt, resultStatus);
+            PasteAndShow(text, resultStatus);
             _indicator.ShowStatus("完了", TimeSpan.FromSeconds(1));
         }
         catch (OperationCanceledException) when (_closing) { _indicator.HideStatus(); }
@@ -351,6 +352,7 @@ public partial class MainWindow : System.Windows.Window
             _isBusy = false;
             ActionButton.IsEnabled = true;
             ActionButton.Content = "録音を開始";
+            UpdateAiModeDisplay();
         }
     }
 
@@ -379,19 +381,8 @@ public partial class MainWindow : System.Windows.Window
         }
         catch (Exception ex)
         {
-            RuntimeStatus.Text = "自動貼り付けに失敗しました。結果欄からコピーしてください。 " + ex.Message;
+            RuntimeStatus.Text = "自動貼り付けまたはクリップボードへのコピーに失敗しました。 " + ex.Message;
         }
-    }
-
-    private void CopyResultButton_Click(object sender, System.Windows.RoutedEventArgs e)
-    {
-        if (string.IsNullOrWhiteSpace(ResultBox.Text)) return;
-        try
-        {
-            System.Windows.Clipboard.SetText(ResultBox.Text);
-            RuntimeStatus.Text = "プロンプトをクリップボードにコピーしました。";
-        }
-        catch (Exception ex) { RuntimeStatus.Text = ex.Message; }
     }
 
     private void ShortcutChangeButton_Click(object sender, System.Windows.RoutedEventArgs e)

@@ -75,22 +75,6 @@
                         <TextBlock x:Name="RuntimeStatus" Text="" FontSize="12" Foreground="{StaticResource MutedBrush}"
                                    LineHeight="18" TextWrapping="Wrap" Margin="0,10,0,0" AutomationProperties.LiveSetting="Polite" />
 
-                        <Border x:Name="ResultPanel" Background="#282828" CornerRadius="12" Padding="12"
-                                Margin="0,14,0,0" Visibility="Collapsed">
-                            <StackPanel>
-                                <DockPanel LastChildFill="False" Margin="0,0,0,8">
-                                    <TextBlock x:Name="ResultLabel" Text="直前のプロンプト" FontSize="13" FontWeight="SemiBold" />
-                                    <Button Content="コピー" DockPanel.Dock="Right" Click="CopyResultButton_Click"
-                                            Background="Transparent" Foreground="#EAEAEA" BorderThickness="0"
-                                            FontFamily="Yu Gothic UI" FontSize="12" Cursor="Hand" />
-                                </DockPanel>
-                                <TextBox x:Name="ResultBox" MinHeight="58" MaxHeight="110" IsReadOnly="True"
-                                         AcceptsReturn="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto"
-                                         Padding="8" BorderThickness="0" Background="#202020" Foreground="#F4F4F4"
-                                         CaretBrush="#F4F4F4" FontFamily="Yu Gothic UI" FontSize="13"
-                                         AutomationProperties.LabeledBy="{Binding ElementName=ResultLabel}" />
-                            </StackPanel>
-                        </Border>
                     </StackPanel>
 
                     <Button x:Name="ActionButton" Grid.Row="2" Content="Setup" Width="210" Height="56"
