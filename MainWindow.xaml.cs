@@ -16,6 +16,7 @@ public partial class MainWindow : System.Windows.Window
     private readonly CancellationTokenSource _lifetime = new();
     private readonly OpenCodeService _openCode = new();
     private readonly IndicatorWindow _indicator;
+    private readonly bool _startHiddenInTray;
     private System.Windows.Forms.NotifyIcon? _trayIcon;
     private System.Windows.Forms.ContextMenuStrip? _trayMenu;
     private ToolStripMenuItem? _startupMenuItem;
@@ -27,6 +28,7 @@ public partial class MainWindow : System.Windows.Window
     private bool _isBusy;
     private bool _closing;
     private bool _hotkeyRegistered;
+    private bool _windowMessageHookAttached;
     private bool _exitRequested;
     private bool _syncingStartupMenu;
     private bool _isCapturingShortcut;
@@ -35,47 +37,49 @@ public partial class MainWindow : System.Windows.Window
     {
         InitializeComponent();
         _indicator = new IndicatorWindow();
-        if (Bootstrapper.IsModelReady())
+        _startHiddenInTray = Bootstrapper.IsModelReady();
+        if (_startHiddenInTray)
         {
             TitleText.Text = "アプリを起動しています…";
-            BodyText.Text = "OpenCodeと音声モデルを確認しています。";
+            BodyText.Text = "音声モデルを確認しています。";
             CapacityText.Text = string.Empty;
         }
         _settings = _settingsStore.Load();
         InitializeTrayIcon();
-        Loaded += MainWindow_Loaded;
         Closing += MainWindow_Closing;
         SystemEvents.SessionEnding += SystemEvents_SessionEnding;
+    }
+
+    internal bool ShouldStartHiddenInTray => _startHiddenInTray;
+
+    internal void StartHiddenInTray()
+    {
+        ShowInTaskbar = false;
+        _ = InitializeExistingSetupAsync();
     }
 
     protected override void OnSourceInitialized(EventArgs e)
     {
         base.OnSourceInitialized(e);
-        _source = (HwndSource?)System.Windows.PresentationSource.FromVisual(this);
-        _source?.AddHook(WindowMessageHook);
-        _hotkeyRegistered = _hotkey.Register(new WindowInteropHelper(this).Handle, GetConfiguredHotkey());
+        AttachWindowMessageHook(new WindowInteropHelper(this).Handle);
     }
 
-    private async void MainWindow_Loaded(object sender, System.Windows.RoutedEventArgs e)
+    private async Task InitializeExistingSetupAsync()
     {
         AppPaths.EnsureDirectories();
-        if (!Bootstrapper.IsModelReady()) return;
+        if (!_startHiddenInTray) return;
 
         TitleText.Text = "アプリを起動しています…";
-        BodyText.Text = "OpenCodeと音声モデルを確認しています。";
+        BodyText.Text = "音声モデルを確認しています。";
         CapacityText.Text = string.Empty;
-        if (StartupRegistration.IsTrayLaunchRequested)
-            HideToTray();
 
         ActionButton.IsEnabled = false;
-        SetupStatus.Text = "OpenCodeと音声モデルを確認しています…";
+        SetupStatus.Text = "音声モデルを確認しています…";
         SetupProgress.Visibility = System.Windows.Visibility.Visible;
         SetupProgress.IsIndeterminate = true;
-        var currentStage = "OpenCodeの確認";
+        var currentStage = "音声モデルの起動";
         try
         {
-            await EnsureOpenCodeReadyAsync();
-            currentStage = "音声モデルの起動";
             await LoadRecognizerAsync(_lifetime.Token);
             SetupStatus.Text = string.Empty;
         }
@@ -83,7 +87,7 @@ public partial class MainWindow : System.Windows.Window
         catch (Exception ex)
         {
             TitleText.Text = "起動できませんでした。";
-            BodyText.Text = "OpenCodeと音声モデルを確認して、Setupから再試行してください。";
+            BodyText.Text = "音声モデルを確認して、Setupから再試行してください。";
             CapacityText.Text = string.Empty;
             SetupStatus.Text = "Setupを押して再試行してください。";
             RuntimeStatus.Text = $"失敗した工程: {currentStage}\n{DescribeSetupError(ex)}";
@@ -115,13 +119,11 @@ public partial class MainWindow : System.Windows.Window
         SetupProgress.Visibility = System.Windows.Visibility.Visible;
         SetupProgress.IsIndeterminate = true;
         SetupProgress.Value = 0;
-        SetupStatus.Text = "既存のOpenCodeを確認しています…";
+        SetupStatus.Text = "音声モデルを準備しています…";
         RuntimeStatus.Text = string.Empty;
-        var currentStage = "OpenCodeの確認";
+        var currentStage = "音声モデルの取得";
         try
         {
-            await EnsureOpenCodeReadyAsync();
-            SetupProgress.IsIndeterminate = false;
             var progress = new Progress<SetupProgress>(update =>
             {
                 currentStage = update.Message.TrimEnd('…', '.');
@@ -164,21 +166,96 @@ public partial class MainWindow : System.Windows.Window
         await Task.Run(() => _openCode.StartAsync(_lifetime.Token), _lifetime.Token);
     }
 
+    private async void AiModeToggle_Click(object sender, System.Windows.RoutedEventArgs e)
+    {
+        var enableAiMode = AiModeToggle.IsChecked == true;
+        if (_asr is null || _isBusy || _recorder.IsRecording)
+        {
+            AiModeToggle.IsChecked = _settings.AiModeEnabled;
+            RuntimeStatus.Text = _recorder.IsRecording
+                ? "録音中はモードを切り替えられません。"
+                : "処理中はモードを切り替えられません。";
+            return;
+        }
+
+        if (enableAiMode == _settings.AiModeEnabled) return;
+
+        if (!enableAiMode)
+        {
+            _settings.AiModeEnabled = false;
+            try
+            {
+                _settingsStore.Save(_settings);
+                _openCode.Stop();
+                UpdateAiModeDisplay();
+                RuntimeStatus.Text = "文字起こしのみモードに切り替えました。";
+            }
+            catch (Exception ex)
+            {
+                _settings.AiModeEnabled = true;
+                AiModeToggle.IsChecked = true;
+                UpdateAiModeDisplay();
+                RuntimeStatus.Text = "モード設定を保存できませんでした。 " + ex.Message;
+            }
+            return;
+        }
+
+        _isBusy = true;
+        AiModeToggle.IsEnabled = false;
+        ActionButton.IsEnabled = false;
+        RuntimeStatus.Text = "OpenCode Zenを確認しています…";
+        try
+        {
+            await EnsureOpenCodeReadyAsync();
+            _settings.AiModeEnabled = true;
+            _settingsStore.Save(_settings);
+            UpdateAiModeDisplay();
+            RuntimeStatus.Text = "AIモードに切り替えました。";
+        }
+        catch (Exception ex)
+        {
+            _settings.AiModeEnabled = false;
+            AiModeToggle.IsChecked = false;
+            _openCode.Stop();
+            UpdateAiModeDisplay();
+            RuntimeStatus.Text = "AIモードを有効にできませんでした。文字起こしのみで利用できます。 " + ex.Message;
+        }
+        finally
+        {
+            _isBusy = false;
+            AiModeToggle.IsEnabled = true;
+            ActionButton.IsEnabled = true;
+        }
+    }
+
+    private void UpdateAiModeDisplay()
+    {
+        AiModeToggle.IsChecked = _settings.AiModeEnabled;
+        AiModeDescription.Text = _settings.AiModeEnabled
+            ? "オン: OpenCode Zenで文章を10行以内に整えます。"
+            : "オフ: 文字起こしをそのまま貼り付けます。";
+        PrivacyNotice.Text = _settings.AiModeEnabled
+            ? "AIモードでは文字起こしテキストをOpenCode Zenへ送信します。音声はPC内で処理します。"
+            : "音声と文字起こしはPC内で処理します。AIモードを使うときだけテキストをOpenCode Zenへ送信します。";
+    }
+
     private async Task LoadRecognizerAsync(CancellationToken cancellationToken)
     {
         var recognizer = await Task.Run(() => AsrService.Load(AppPaths.ModelFile, AppPaths.TokensFile), cancellationToken);
         cancellationToken.ThrowIfCancellationRequested();
         _asr?.Dispose();
         _asr = recognizer;
-        TitleText.Text = "セットアップが完了しました。";
+        RegisterConfiguredHotkey();
+        TitleText.Visibility = System.Windows.Visibility.Collapsed;
         BodyText.Text = "入力欄にカーソルを置き、ショートカットを押して話してください。\nもう一度押すと変換して貼り付けます。";
         CapacityText.Visibility = System.Windows.Visibility.Collapsed;
         ShortcutSettingsPanel.Visibility = System.Windows.Visibility.Visible;
         ShortcutCaptureStatus.Text = string.Empty;
         UpdateShortcutDisplay();
+        UpdateAiModeDisplay();
         PrivacyNotice.Visibility = System.Windows.Visibility.Visible;
-        ActionButton.Content = "録音を開始";
-        RuntimeStatus.Text = _hotkeyRegistered ? "準備完了" : "ショートカットを登録できません。ボタンから録音できます。";
+        ActionButton.Visibility = System.Windows.Visibility.Collapsed;
+        RuntimeStatus.Text = _hotkeyRegistered ? "準備完了" : "ショートカットが登録されていません。別のキーを設定してください。";
     }
 
     private async Task RecordButton_Click()
@@ -226,43 +303,47 @@ public partial class MainWindow : System.Windows.Window
             string prompt;
             string resultStatus;
             _indicator.HideStatus();
-            if (!EnsureContributorConsent())
+            if (!_settings.AiModeEnabled)
+            {
+                prompt = PromptFormatter.PlainFallback(transcript);
+                resultStatus = "文字起こしを入力欄へ貼り付けました。";
+            }
+            else if (!EnsureContributorConsent())
             {
                 prompt = PromptFormatter.PlainFallback(transcript);
                 resultStatus = "送信をキャンセルしたため、文字起こしをそのまま貼り付けました。";
             }
-            else if (_openCode.IsRunning)
+            else
             {
-                RuntimeStatus.Text = "OpenCode Zenで10行以下に整えています…";
+                RuntimeStatus.Text = "OpenCodeを準備しています…";
                 _indicator.ShowStatus("整形中");
                 try
                 {
+                    if (!_openCode.IsRunning)
+                        await EnsureOpenCodeReadyAsync();
+                    RuntimeStatus.Text = "OpenCode Zenで10行以下に整えています…";
                     var response = await _openCode.RewriteAsync(transcript, _lifetime.Token);
                     prompt = PromptFormatter.FitWithinTenLines(response);
                     resultStatus = "プロンプトを入力欄へ貼り付けました。";
                 }
+                catch (OperationCanceledException) when (_closing) { throw; }
                 catch (Exception ex)
                 {
                     prompt = PromptFormatter.PlainFallback(transcript);
-                    resultStatus = "文章変換に失敗したため文字起こしを貼り付けました。 " + ex.Message;
+                    resultStatus = "AI変換に失敗したため文字起こしを貼り付けました。 " + ex.Message;
                 }
-            }
-            else
-            {
-                prompt = PromptFormatter.PlainFallback(transcript);
-                resultStatus = "OpenCodeが起動していないため、文字起こしをそのまま貼り付けました。";
             }
 
             ResultBox.Text = prompt;
             ResultPanel.Visibility = System.Windows.Visibility.Visible;
             PasteAndShow(prompt, resultStatus);
-            _indicator.ShowStatus("完了");
+            _indicator.ShowStatus("完了", TimeSpan.FromSeconds(1));
         }
         catch (OperationCanceledException) when (_closing) { _indicator.HideStatus(); }
         catch (Exception ex)
         {
             RuntimeStatus.Text = ex.Message;
-            _indicator.ShowStatus("処理に失敗しました", TimeSpan.FromSeconds(2));
+            _indicator.ShowStatus("処理に失敗しました", TimeSpan.FromSeconds(1));
         }
         finally
         {
@@ -434,6 +515,36 @@ public partial class MainWindow : System.Windows.Window
         ShortcutCurrentText.Text = shortcut;
         System.Windows.Automation.AutomationProperties.SetName(
             ShortcutChangeButton, $"ショートカットキーを変更。現在: {shortcut}");
+    }
+
+    private void RegisterConfiguredHotkey()
+    {
+        _hotkey.Unregister();
+        _hotkeyRegistered = false;
+        if (_asr is null || _exitRequested) return;
+
+        var helper = new WindowInteropHelper(this);
+        var handle = helper.EnsureHandle();
+        AttachWindowMessageHook(handle);
+        _hotkeyRegistered = _hotkey.Register(handle, GetConfiguredHotkey());
+    }
+
+    private void AttachWindowMessageHook(IntPtr handle)
+    {
+        var source = HwndSource.FromHwnd(handle);
+        if (source is null) return;
+
+        if (!ReferenceEquals(_source, source))
+        {
+            if (_windowMessageHookAttached)
+                _source?.RemoveHook(WindowMessageHook);
+            _source = source;
+            _windowMessageHookAttached = false;
+        }
+
+        if (_windowMessageHookAttached) return;
+        _source.AddHook(WindowMessageHook);
+        _windowMessageHookAttached = true;
     }
 
     private static bool IsModifierKey(Key key) => key is Key.LeftCtrl or Key.RightCtrl

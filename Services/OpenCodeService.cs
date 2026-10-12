@@ -14,8 +14,12 @@ internal sealed class OpenCodeService : IDisposable
 {
     private const string ProviderId = "opencode";
     private const string ModelId = "muse-spark-1.3-contributor-free";
+    private const string ServerUsername = "opencode";
     private readonly SemaphoreSlim _gate = new(1, 1);
-    private readonly HttpClient _http = new() { Timeout = TimeSpan.FromMinutes(3) };
+    private readonly HttpClient _http = new(new HttpClientHandler { UseProxy = false })
+    {
+        Timeout = TimeSpan.FromMinutes(3)
+    };
     private Process? _process;
     private Uri? _baseUri;
     private string? _workspace;
@@ -28,7 +32,7 @@ internal sealed class OpenCodeService : IDisposable
 
         AppPaths.EnsureDirectories();
         var command = FindOpenCodeCommand() ?? throw new FileNotFoundException(
-            "OpenCodeが見つかりません。OpenCodeをインストールし、Zenへ接続してからSetupを押してください。アプリ内にAPIキーを入力する必要はありません。");
+            "AIモードを使うにはOpenCodeをインストールし、OpenCode Zenへ接続してください。アプリ内にAPIキーを入力する必要はありません。");
 
         var port = GetAvailablePort();
         var serverPassword = Convert.ToHexString(System.Security.Cryptography.RandomNumberGenerator.GetBytes(32));
@@ -37,10 +41,13 @@ internal sealed class OpenCodeService : IDisposable
         Directory.CreateDirectory(_workspace);
 
         var info = CreateStartInfo(command, port, _workspace);
+        info.Environment["OPENCODE_SERVER_USERNAME"] = ServerUsername;
         info.Environment["OPENCODE_SERVER_PASSWORD"] = serverPassword;
         _process = new Process { StartInfo = info, EnableRaisingEvents = true };
         _process.OutputDataReceived += DiscardOutput;
         _process.ErrorDataReceived += DiscardOutput;
+        var startupStage = "OpenCode serverの起動";
+        var lastHealthError = "OpenCode serverから応答がありません。";
         try
         {
             if (!_process.Start()) throw new InvalidOperationException("OpenCodeを起動できませんでした。");
@@ -49,32 +56,41 @@ internal sealed class OpenCodeService : IDisposable
             ConfigureHttpAuth(serverPassword);
 
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            timeout.CancelAfter(TimeSpan.FromSeconds(35));
-            while (!timeout.IsCancellationRequested)
+            timeout.CancelAfter(TimeSpan.FromSeconds(90));
+            startupStage = "OpenCode serverへの接続";
+            while (true)
             {
+                timeout.Token.ThrowIfCancellationRequested();
                 if (_process.HasExited)
-                    throw new InvalidOperationException("既存のOpenCodeを起動できませんでした。OpenCodeを一度開いてから、Setupをやり直してください。");
+                    throw new InvalidOperationException("AIモード用のOpenCode serverを起動できませんでした。OpenCodeのインストール状態を確認してください。");
                 try
                 {
                     using var response = await _http.GetAsync(new Uri(_baseUri, "global/health"), timeout.Token);
+                    if (response.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden)
+                        throw new InvalidOperationException("OpenCode serverのHTTP認証に失敗しました。AIモード用の認証設定を確認してください。");
+
                     if (response.IsSuccessStatusCode)
                     {
                         using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync(timeout.Token));
                         if (document.RootElement.TryGetProperty("healthy", out var healthy) && healthy.GetBoolean())
                         {
+                            startupStage = "OpenCode ZenとMuse Sparkの利用確認";
                             await EnsureZenModelAvailableAsync(timeout.Token);
                             return;
                         }
+                        lastHealthError = "OpenCode serverのhealth応答がhealthyではありません。";
                     }
+                    else lastHealthError = $"OpenCode serverのhealth応答はHTTP {(int)response.StatusCode}です。";
                 }
-                catch (HttpRequestException) { }
+                catch (HttpRequestException ex) { lastHealthError = ex.GetBaseException().Message; }
                 await Task.Delay(250, timeout.Token);
             }
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
+            var detail = startupStage == "OpenCode serverへの接続" ? " " + lastHealthError : string.Empty;
             StopProcess();
-            throw new TimeoutException("OpenCodeの起動を確認できませんでした。OpenCodeのインストール状態を確認して再試行してください。");
+            throw new TimeoutException($"{startupStage}が90秒以内に完了しませんでした。OpenCodeの起動状態とネットワーク設定を確認してください。{detail}");
         }
         catch
         {
@@ -89,7 +105,7 @@ internal sealed class OpenCodeService : IDisposable
         string? sessionId = null;
         try
         {
-            if (!IsRunning) throw new InvalidOperationException("OpenCodeが起動していません。Setupをやり直してください。");
+            if (!IsRunning) throw new InvalidOperationException("AIモード用のOpenCodeが起動していません。AIモードを再度有効にしてください。");
 
             using var create = await _http.PostAsync(new Uri(_baseUri!, "session"),
                 JsonBody(new { title = "Auto Prompt" }), cancellationToken);
@@ -105,7 +121,6 @@ internal sealed class OpenCodeService : IDisposable
                 agent = "plan",
                 model = new { providerID = ProviderId, modelID = ModelId },
                 system = systemPrompt,
-                tools = new Dictionary<string, bool> { ["*"] = false },
                 parts = new[] { new { type = "text", text = prompt } }
             };
             using var message = await _http.PostAsync(
@@ -128,7 +143,12 @@ internal sealed class OpenCodeService : IDisposable
 
             var result = string.Join("\n", texts).Trim();
             if (string.IsNullOrWhiteSpace(result))
-                throw new InvalidDataException("モデルから空の回答が返りました。");
+            {
+                var detail = ExtractResponseError(response.RootElement);
+                throw new InvalidDataException(string.IsNullOrWhiteSpace(detail)
+                    ? "モデルから空の回答が返りました。OpenCodeの応答内容を確認できませんでした。"
+                    : BuildResponseError(detail));
+            }
             return result;
         }
         finally
@@ -146,6 +166,8 @@ internal sealed class OpenCodeService : IDisposable
         }
     }
 
+    public void Stop() => StopProcess();
+
     public void Dispose()
     {
         StopProcess();
@@ -162,7 +184,7 @@ internal sealed class OpenCodeService : IDisposable
         var connected = root.TryGetProperty("connected", out var providers) && providers.ValueKind == JsonValueKind.Array &&
                         providers.EnumerateArray().Any(provider => provider.ValueKind == JsonValueKind.String && provider.GetString() == ProviderId);
         if (!connected)
-            throw new InvalidOperationException("OpenCode Zenが接続されていません。OpenCodeでOpenCode Zenを接続してから、Setupをやり直してください。アプリ内にAPIキーを入力する必要はありません。");
+            throw new InvalidOperationException("AIモードを使うにはOpenCodeでOpenCode Zenへ接続してください。アプリ内にAPIキーを入力する必要はありません。");
 
         var modelAvailable = false;
         if (root.TryGetProperty("all", out var allProviders) && allProviders.ValueKind == JsonValueKind.Array)
@@ -278,7 +300,7 @@ internal sealed class OpenCodeService : IDisposable
     private void ConfigureHttpAuth(string password)
     {
         _http.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Basic",
-            Convert.ToBase64String(Encoding.UTF8.GetBytes("opencode:" + password)));
+            Convert.ToBase64String(Encoding.UTF8.GetBytes(ServerUsername + ":" + password)));
     }
 
     private static StringContent JsonBody(object body) =>
@@ -290,17 +312,78 @@ internal sealed class OpenCodeService : IDisposable
         try
         {
             using var document = JsonDocument.Parse(body);
-            if (document.RootElement.TryGetProperty("error", out var error) && error.ValueKind == JsonValueKind.String)
-                safeDetail = " " + error.GetString();
+            if (document.RootElement.TryGetProperty("error", out var error))
+                safeDetail = ExtractErrorDetail(error) ?? "";
         }
         catch { }
+        if (statusCode == HttpStatusCode.Forbidden && !string.IsNullOrWhiteSpace(safeDetail))
+            return BuildResponseError(safeDetail);
         return statusCode switch
         {
             HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden => "OpenCode Zenの認証を確認できません。OpenCode側の接続状態を確認してください。",
             HttpStatusCode.NotFound => "OpenCode Zenで指定モデルが見つかりません。モデル一覧と利用可能なプランを確認してください。",
             HttpStatusCode.TooManyRequests => "OpenCode Zenの利用上限に達したようです。時間をおいて再試行してください。",
-            _ => $"OpenCodeからエラー ({(int)statusCode}) が返りました。{safeDetail}".Trim()
+            _ => $"OpenCodeからエラー ({(int)statusCode}) が返りました。 {safeDetail}".Trim()
         };
+    }
+
+    private static string? ExtractResponseError(JsonElement response)
+    {
+        if (response.TryGetProperty("info", out var info) &&
+            info.ValueKind == JsonValueKind.Object &&
+            info.TryGetProperty("error", out var infoError))
+            return ExtractErrorDetail(infoError);
+
+        return response.TryGetProperty("error", out var error)
+            ? ExtractErrorDetail(error)
+            : null;
+    }
+
+    private static string? ExtractErrorDetail(JsonElement error, int depth = 0)
+    {
+        if (depth > 6) return null;
+        if (error.ValueKind == JsonValueKind.String)
+            return LimitErrorDetail(error.GetString());
+        if (error.ValueKind != JsonValueKind.Object) return null;
+
+        foreach (var name in new[] { "message", "detail", "reason", "error_description" })
+        {
+            if (error.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String)
+                return LimitErrorDetail(value.GetString());
+        }
+
+        foreach (var name in new[] { "error", "data", "cause", "details" })
+        {
+            if (error.TryGetProperty(name, out var nested))
+            {
+                var detail = ExtractErrorDetail(nested, depth + 1);
+                if (!string.IsNullOrWhiteSpace(detail)) return detail;
+            }
+        }
+
+        foreach (var name in new[] { "name", "type" })
+        {
+            if (error.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String)
+                return LimitErrorDetail(value.GetString());
+        }
+
+        return null;
+    }
+
+    private static string BuildResponseError(string detail)
+    {
+        if (detail.Contains("can only be used from within OpenCode", StringComparison.OrdinalIgnoreCase) ||
+            detail.Contains("FreeTierError", StringComparison.OrdinalIgnoreCase))
+            return "OpenCode Zenの無料枠がこの要求を拒否しました。OpenCodeのツール設定または無料枠の判定を確認してください。詳細: " + detail;
+
+        return "OpenCodeからモデル応答エラーが返りました: " + detail;
+    }
+
+    private static string LimitErrorDetail(string? detail)
+    {
+        if (string.IsNullOrWhiteSpace(detail)) return string.Empty;
+        var normalized = Regex.Replace(detail, @"\s+", " ").Trim();
+        return normalized.Length <= 500 ? normalized : normalized[..500] + "…";
     }
 
     private static int GetAvailablePort()

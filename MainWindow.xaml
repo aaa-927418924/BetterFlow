@@ -15,7 +15,7 @@
                     <Grid.RowDefinitions>
                         <RowDefinition Height="58" />
                         <RowDefinition Height="*" />
-                        <RowDefinition Height="56" />
+                        <RowDefinition Height="Auto" />
                     </Grid.RowDefinitions>
 
                     <Grid Grid.Row="0" Background="Transparent" MouseLeftButtonDown="DragRegion_MouseLeftButtonDown">
@@ -49,9 +49,22 @@
                             <TextBlock x:Name="ShortcutCaptureStatus" Text="" FontSize="12"
                                        Foreground="{StaticResource MutedBrush}" LineHeight="18"
                                        Margin="0,5,0,0" AutomationProperties.LiveSetting="Polite" />
+                            <DockPanel Margin="0,12,0,0" LastChildFill="True">
+                                <ToggleButton x:Name="AiModeToggle" DockPanel.Dock="Right"
+                                              Style="{StaticResource ModeToggleStyle}" Click="AiModeToggle_Click"
+                                              IsChecked="False"
+                                              AutomationProperties.Name="AIによる文章整形モード"
+                                              AutomationProperties.HelpText="オフは文字起こしのみです。オンにすると認識した文章をOpenCode Zenで整えます。" />
+                                <StackPanel VerticalAlignment="Center" Margin="0,0,12,0">
+                                    <TextBlock x:Name="AiModeLabel" Text="AIによる文章整形" FontSize="14" />
+                                    <TextBlock x:Name="AiModeDescription" Text="オフ: 文字起こしのみ"
+                                               FontSize="12" Foreground="{StaticResource MutedBrush}"
+                                               AutomationProperties.LiveSetting="Polite" />
+                                </StackPanel>
+                            </DockPanel>
                         </StackPanel>
                         <TextBlock x:Name="PrivacyNotice"
-                                   Text="音声はPC内で処理し、文字起こしテキストをOpenCode Zenへ送信します。"
+                                   Text="音声と文字起こしはPC内で処理します。AIモードを使うときだけテキストをOpenCode Zenへ送信します。"
                                    FontSize="12" LineHeight="18" Foreground="{StaticResource MutedBrush}"
                                    Margin="0,18,0,0" Visibility="Collapsed" />
                         <ProgressBar x:Name="SetupProgress" Height="5" Minimum="0" Maximum="100" Value="0"

@@ -5,6 +5,7 @@ namespace AutoPrompt.Services;
 internal sealed class AppSettings
 {
     public bool ContributorTermsAccepted { get; set; }
+    public bool AiModeEnabled { get; set; } = false;
     public uint ShortcutModifiers { get; set; }
     public uint ShortcutVirtualKey { get; set; } = HotkeyBinding.RightAltVirtualKey;
 }

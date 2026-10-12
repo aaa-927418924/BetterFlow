@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Windows.Interop;
 using System.Windows.Input;
@@ -24,6 +23,8 @@ internal sealed class GlobalHotkey : IDisposable
     private const int WmKeyUp = 0x0101;
     private const int WmSysKeyDown = 0x0104;
     private const int WmSysKeyUp = 0x0105;
+    private const uint LlkhfExtended = 0x01;
+    private const uint LlkhfInjected = 0x10;
     private const uint ModAlt = 0x0001;
     private const uint ModControl = 0x0002;
     private const uint ModShift = 0x0004;
@@ -36,6 +37,9 @@ internal sealed class GlobalHotkey : IDisposable
     private const int VkRShift = 0xA1;
     private const int VkLWin = 0x5B;
     private const int VkRWin = 0x5C;
+    private const int VkMenu = 0x12;
+    private const int VkControl = 0x11;
+    private const int VkShift = 0x10;
 
     private IntPtr _handle;
     private IntPtr _keyboardHook;
@@ -44,6 +48,13 @@ internal sealed class GlobalHotkey : IDisposable
     private bool _registeredAsHotkey;
     private bool _registered;
     private bool _rightAltPressed;
+    private bool _leftAltDown;
+    private bool _leftControlDown;
+    private bool _rightControlDown;
+    private bool _leftShiftDown;
+    private bool _rightShiftDown;
+    private bool _leftWindowsDown;
+    private bool _rightWindowsDown;
 
     public bool Register(IntPtr handle, HotkeyBinding binding)
     {
@@ -55,17 +66,15 @@ internal sealed class GlobalHotkey : IDisposable
 
         if (binding.IsStandaloneRightAlt)
         {
-            _registeredAsHotkey = RegisterHotKey(handle, HotkeyId, ModNoRepeat, binding.VirtualKey);
-            if (_registeredAsHotkey)
-            {
-                _registered = true;
-                return true;
-            }
-
+            _leftAltDown = IsKeyDown(VkLMenu);
+            _leftControlDown = IsKeyDown(VkLControl);
+            _rightControlDown = IsKeyDown(VkRControl);
+            _leftShiftDown = IsKeyDown(VkLShift);
+            _rightShiftDown = IsKeyDown(VkRShift);
+            _leftWindowsDown = IsKeyDown(VkLWin);
+            _rightWindowsDown = IsKeyDown(VkRWin);
             _keyboardProc = KeyboardHookCallback;
-            using var process = Process.GetCurrentProcess();
-            var moduleName = process.MainModule?.ModuleName;
-            var module = GetModuleHandle(moduleName);
+            var module = GetModuleHandle(null);
             _keyboardHook = SetWindowsHookEx(WhKeyboardLl, _keyboardProc, module, 0);
             _registered = _keyboardHook != IntPtr.Zero;
             return _registered;
@@ -88,6 +97,13 @@ internal sealed class GlobalHotkey : IDisposable
         _keyboardProc = null;
         _registered = false;
         _rightAltPressed = false;
+        _leftAltDown = false;
+        _leftControlDown = false;
+        _rightControlDown = false;
+        _leftShiftDown = false;
+        _rightShiftDown = false;
+        _leftWindowsDown = false;
+        _rightWindowsDown = false;
     }
 
     public bool IsMessage(int id) => id == HotkeyId;
@@ -129,31 +145,66 @@ internal sealed class GlobalHotkey : IDisposable
         {
             var message = wParam.ToInt32();
             var keyInfo = Marshal.PtrToStructure<KeyboardData>(lParam);
-            if (keyInfo.VirtualKey == HotkeyBinding.RightAltVirtualKey)
+            var isKeyDown = message is WmKeyDown or WmSysKeyDown;
+            var isKeyUp = message is WmKeyUp or WmSysKeyUp;
+            if (IsRightAltKey(keyInfo))
             {
-                if ((message is WmKeyDown or WmSysKeyDown) && !IsOtherModifierDown())
+                if (isKeyDown && !IsOtherModifierDown())
                 {
-                    _rightAltPressed = true;
+                    if (!_rightAltPressed)
+                    {
+                        _rightAltPressed = true;
+                        PostMessage(_handle, MessageId, new IntPtr(HotkeyId), IntPtr.Zero);
+                    }
                     return new IntPtr(1);
                 }
 
-                if ((message is WmKeyUp or WmSysKeyUp) && _rightAltPressed)
+                if (isKeyUp && _rightAltPressed)
                 {
-                    var shouldTrigger = !IsOtherModifierDown();
                     _rightAltPressed = false;
-                    if (shouldTrigger)
-                        PostMessage(_handle, MessageId, new IntPtr(HotkeyId), IntPtr.Zero);
                     return new IntPtr(1);
                 }
             }
+
+            UpdateModifierState(keyInfo, isKeyDown, isKeyUp);
         }
 
         return CallNextHookEx(_keyboardHook, code, wParam, lParam);
     }
 
-    private static bool IsOtherModifierDown() =>
-        IsKeyDown(VkLMenu) || IsKeyDown(VkLControl) || IsKeyDown(VkRControl)
-        || IsKeyDown(VkLShift) || IsKeyDown(VkRShift) || IsKeyDown(VkLWin) || IsKeyDown(VkRWin);
+    private bool IsOtherModifierDown() =>
+        _leftAltDown || _leftControlDown || _rightControlDown
+        || _leftShiftDown || _rightShiftDown || _leftWindowsDown || _rightWindowsDown;
+
+    private void UpdateModifierState(KeyboardData keyInfo, bool isKeyDown, bool isKeyUp)
+    {
+        if ((!isKeyDown && !isKeyUp) || (keyInfo.Flags & LlkhfInjected) != 0)
+            return;
+
+        var key = (int)keyInfo.VirtualKey;
+        if (key == VkMenu)
+            key = (keyInfo.Flags & LlkhfExtended) != 0 ? (int)HotkeyBinding.RightAltVirtualKey : VkLMenu;
+        else if (key == VkControl)
+            key = (keyInfo.Flags & LlkhfExtended) != 0 ? VkRControl : VkLControl;
+        else if (key == VkShift)
+            key = keyInfo.ScanCode == 0x36 ? VkRShift : VkLShift;
+
+        var down = isKeyDown;
+        switch (key)
+        {
+            case VkLMenu: _leftAltDown = down; break;
+            case VkLControl: _leftControlDown = down; break;
+            case VkRControl: _rightControlDown = down; break;
+            case VkLShift: _leftShiftDown = down; break;
+            case VkRShift: _rightShiftDown = down; break;
+            case VkLWin: _leftWindowsDown = down; break;
+            case VkRWin: _rightWindowsDown = down; break;
+        }
+    }
+
+    private static bool IsRightAltKey(KeyboardData keyInfo) =>
+        keyInfo.VirtualKey == HotkeyBinding.RightAltVirtualKey
+        || (keyInfo.VirtualKey == VkMenu && (keyInfo.Flags & LlkhfExtended) != 0);
 
     private static bool IsKeyDown(int key) => (GetAsyncKeyState(key) & 0x8000) != 0;
 
