@@ -4,8 +4,10 @@ namespace AutoPrompt.Services;
 
 internal sealed class AppSettings
 {
-    public bool ContributorTermsAccepted { get; set; }
     public bool AiModeEnabled { get; set; } = false;
+    public string AiProviderId { get; set; } = AiProviderCatalog.OpenCodeZenFree;
+    public Dictionary<string, AiProviderSettings> AiProviders { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+    public string AiTermsAcceptedFor { get; set; } = string.Empty;
     public uint ShortcutModifiers { get; set; }
     public uint ShortcutVirtualKey { get; set; } = HotkeyBinding.RightAltVirtualKey;
 }

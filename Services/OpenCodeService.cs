@@ -13,7 +13,6 @@ namespace AutoPrompt.Services;
 internal sealed class OpenCodeService : IDisposable
 {
     private const string ProviderId = "opencode";
-    private const string ModelId = "muse-spark-1.3-contributor-free";
     private const string ServerUsername = "opencode";
     private readonly SemaphoreSlim _gate = new(1, 1);
     private readonly HttpClient _http = new(new HttpClientHandler { UseProxy = false })
@@ -74,8 +73,8 @@ internal sealed class OpenCodeService : IDisposable
                         using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync(timeout.Token));
                         if (document.RootElement.TryGetProperty("healthy", out var healthy) && healthy.GetBoolean())
                         {
-                            startupStage = "OpenCode ZenとMuse Sparkの利用確認";
-                            await EnsureZenModelAvailableAsync(timeout.Token);
+                            startupStage = "OpenCode Zenの接続確認";
+                            await GetConnectedZenProviderAsync(timeout.Token);
                             return;
                         }
                         lastHealthError = "OpenCode serverのhealth応答がhealthyではありません。";
@@ -99,13 +98,14 @@ internal sealed class OpenCodeService : IDisposable
         }
     }
 
-    public async Task<string> RewriteAsync(string transcript, CancellationToken cancellationToken = default)
+    public async Task<string> RewriteAsync(string transcript, string modelId, CancellationToken cancellationToken = default)
     {
         await _gate.WaitAsync(cancellationToken);
         string? sessionId = null;
         try
         {
             if (!IsRunning) throw new InvalidOperationException("AIモード用のOpenCodeが起動していません。AIモードを再度有効にしてください。");
+            await EnsureZenFreeModelAvailableAsync(modelId, cancellationToken);
 
             using var create = await _http.PostAsync(new Uri(_baseUri!, "session"),
                 JsonBody(new { title = "Auto Prompt" }), cancellationToken);
@@ -114,14 +114,12 @@ internal sealed class OpenCodeService : IDisposable
             sessionId = session.RootElement.GetProperty("id").GetString();
             if (string.IsNullOrWhiteSpace(sessionId)) throw new InvalidDataException("OpenCodeからセッションIDが返りませんでした。");
 
-            const string systemPrompt = "あなたは音声文字起こしを整える編集者です。話者の言い方、語調、敬語・くだけた表現を保ち、意味のないフィラーや重複だけを除いて、明白な誤認識や句読点を必要最小限に直してください。『いや、やっぱり』などの言い直しは、訂正された対象だけを最新の内容に置き換え、計画依頼など変更されていない要望や条件はすべて引き継いでください。変更前の案は捨て、訂正後の具体的な内容を要約で落とさないでください。箇条書きや見出しは使わず、話者が明確に列挙した複数項目を区別する必要がある場合だけ箇条書きを使ってください。元の発話にない事実、要件、背景、手順を追加せず、推測もしないでください。敬語への統一、要約、説明文の追加はしないでください。出力は整えた本文だけにし、ツールを呼び出さず文章変換だけを行ってください。例:『オープンコードで英語の暗記用アプリを作りたいんだけど計画を立ててほしい。いや、やっぱり英語の記事を翻訳付きで見れるアプリにして。』は『OpenCodeで英語の記事を翻訳付きで見れるアプリにして、計画を立ててほしい。』のように、変更後のアプリ内容と変わらない計画依頼を両方残します。";
-            var prompt = "次の音声文字起こしを、話者自身の言い方と文体を保って整えてください。\n\n--- 文字起こし ---\n" + transcript;
             var body = new
             {
                 agent = "plan",
-                model = new { providerID = ProviderId, modelID = ModelId },
-                system = systemPrompt,
-                parts = new[] { new { type = "text", text = prompt } }
+                model = new { providerID = ProviderId, modelID = modelId },
+                system = TranscriptRewritePrompt.SystemMessage,
+                parts = new[] { new { type = "text", text = TranscriptRewritePrompt.CreateUserMessage(transcript) } }
             };
             using var message = await _http.PostAsync(
                 new Uri(_baseUri!, $"session/{Uri.EscapeDataString(sessionId)}/message"), JsonBody(body), cancellationToken);
@@ -175,8 +173,50 @@ internal sealed class OpenCodeService : IDisposable
         _gate.Dispose();
     }
 
-    private async Task EnsureZenModelAvailableAsync(CancellationToken cancellationToken)
+    public async Task<IReadOnlyList<ZenModelOption>> GetZenFreeModelsAsync(CancellationToken cancellationToken = default)
     {
+        var provider = await GetConnectedZenProviderAsync(cancellationToken);
+        if (!provider.TryGetProperty("models", out var models))
+            return Array.Empty<ZenModelOption>();
+
+        var options = new List<ZenModelOption>();
+        if (models.ValueKind == JsonValueKind.Object)
+        {
+            foreach (var model in models.EnumerateObject())
+            {
+                if (!IsZenFreeModel(model.Name, model.Value)) continue;
+                options.Add(new ZenModelOption(model.Name, GetModelDisplayName(model.Name, model.Value)));
+            }
+        }
+        else if (models.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var model in models.EnumerateArray())
+            {
+                if (!model.TryGetProperty("id", out var modelIdElement)) continue;
+                var modelId = modelIdElement.GetString();
+                if (string.IsNullOrWhiteSpace(modelId) || !IsZenFreeModel(modelId, model)) continue;
+                options.Add(new ZenModelOption(modelId, GetModelDisplayName(modelId, model)));
+            }
+        }
+
+        return options.OrderByDescending(option => option.ModelId == "muse-spark-1.3-contributor-free")
+            .ThenBy(option => option.DisplayName, StringComparer.CurrentCultureIgnoreCase)
+            .ToArray();
+    }
+
+    public async Task EnsureZenFreeModelAvailableAsync(string modelId, CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(modelId)) throw new InvalidOperationException("OpenCode ZenのモデルIDを入力してください。");
+        var provider = await GetConnectedZenProviderAsync(cancellationToken);
+        if (!provider.TryGetProperty("models", out var models) || !TryGetModel(models, modelId, out var model))
+            throw new InvalidOperationException("OpenCode Zenで選択中のモデルを確認できません。モデル一覧と接続状態を確認してください。");
+        if (!IsZenFreeModel(modelId, model))
+            throw new InvalidOperationException("OpenCode Zen Freeで利用できるモデルを選択してください。");
+    }
+
+    private async Task<JsonElement> GetConnectedZenProviderAsync(CancellationToken cancellationToken)
+    {
+        if (!IsRunning) throw new InvalidOperationException("OpenCode serverが起動していません。");
         using var response = await _http.GetAsync(new Uri(_baseUri!, "provider"), cancellationToken);
         response.EnsureSuccessStatusCode();
         using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync(cancellationToken));
@@ -184,28 +224,52 @@ internal sealed class OpenCodeService : IDisposable
         var connected = root.TryGetProperty("connected", out var providers) && providers.ValueKind == JsonValueKind.Array &&
                         providers.EnumerateArray().Any(provider => provider.ValueKind == JsonValueKind.String && provider.GetString() == ProviderId);
         if (!connected)
-            throw new InvalidOperationException("AIモードを使うにはOpenCodeでOpenCode Zenへ接続してください。アプリ内にAPIキーを入力する必要はありません。");
+            throw new InvalidOperationException("AIモードを使うには、既存のOpenCodeでOpenCode Zenへ接続してください。アプリにAPIキーを入力する必要はありません。");
 
-        var modelAvailable = false;
         if (root.TryGetProperty("all", out var allProviders) && allProviders.ValueKind == JsonValueKind.Array)
         {
             foreach (var provider in allProviders.EnumerateArray())
             {
                 if (!provider.TryGetProperty("id", out var id) || id.GetString() != ProviderId ||
-                    !provider.TryGetProperty("models", out var models)) continue;
-                modelAvailable = models.ValueKind switch
-                {
-                    JsonValueKind.Object => models.TryGetProperty(ModelId, out _),
-                    JsonValueKind.Array => models.EnumerateArray().Any(model =>
-                        model.TryGetProperty("id", out var modelId) && modelId.GetString() == ModelId),
-                    _ => false
-                };
-                break;
+                    !provider.TryGetProperty("models", out _)) continue;
+                return provider.Clone();
             }
         }
-        if (!modelAvailable)
-            throw new InvalidOperationException("接続中のOpenCode ZenでMuse Spark 1.3 Contributor Freeを確認できません。OpenCodeのモデル一覧と接続状態を確認してください。");
+        throw new InvalidOperationException("OpenCode Zenのモデル一覧を読み込めませんでした。OpenCodeの接続状態を確認してください。");
     }
+
+    private static bool TryGetModel(JsonElement models, string modelId, out JsonElement result)
+    {
+        if (models.ValueKind == JsonValueKind.Object && models.TryGetProperty(modelId, out result)) return true;
+        if (models.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var model in models.EnumerateArray())
+            {
+                if (model.TryGetProperty("id", out var id) && id.ValueKind == JsonValueKind.String && id.GetString() == modelId)
+                {
+                    result = model;
+                    return true;
+                }
+            }
+        }
+        result = default;
+        return false;
+    }
+
+    private static bool IsZenFreeModel(string modelId, JsonElement model)
+    {
+        if (modelId.Contains("free", StringComparison.OrdinalIgnoreCase)) return true;
+        if (!model.TryGetProperty("cost", out var cost) || cost.ValueKind != JsonValueKind.Object) return false;
+        return IsZeroCost(cost, "input") && IsZeroCost(cost, "output");
+    }
+
+    private static bool IsZeroCost(JsonElement cost, string propertyName) =>
+        cost.TryGetProperty(propertyName, out var value) && value.ValueKind == JsonValueKind.Number && value.TryGetDecimal(out var amount) && amount == 0;
+
+    private static string GetModelDisplayName(string modelId, JsonElement model) =>
+        model.TryGetProperty("name", out var name) && name.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(name.GetString())
+            ? $"{name.GetString()} ({modelId})"
+            : modelId;
 
     private static OpenCodeCommand? FindOpenCodeCommand()
     {

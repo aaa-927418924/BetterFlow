@@ -10,13 +10,15 @@
 - セットアップ画面は添付参考画像に合わせた濃い角丸パネル、左上のアイコン、右下の明るい `Setup` ボタンで構成する。標準タイトルバーを使わない透過フレームレスウィンドウにし、パネルを画面いっぱいに広げる。上部をドラッグ領域、右上にカスタムの閉じるボタンを置く。`Setup` の文字は無効時も黒で表示する。
 - 画面・ウィンドウ・タスクバー・EXEのアイコンはプロジェクト直下の `icon.svg` を元に生成する。
 - 音声認識はNVIDIA `parakeet-tdt_ctc-0.6b-ja` のINT8 ONNXモデル。初回にGitHubからアーカイブを取得し、サイズとSHA-256を確認してユーザーのローカルアプリデータ領域へ展開する。
-- 文章変換はOpenCode Zen Free `Muse Spark 1.3 Contributor`（provider ID `opencode`、model ID `muse-spark-1.3-contributor-free`）。
+- 既定の文章変換サービスはOpenCode Zen Freeで、既定モデルは `Muse Spark 1.3 Contributor`（provider ID `opencode`、model ID `muse-spark-1.3-contributor-free`）。セットアップ後にOpenCode Zen Freeの利用可能な無料モデル、DeepSeek、OpenRouter、Gemini、またはOpenAI互換APIとモデルIDを選べる。
 - 既定はAIを使わない文字起こしモード。セットアップ後のショートカット設定画面にあるトグルでAIモードを切り替え、選択をユーザー設定へ保存する。OpenCodeはAIモードを選ぶ時だけ起動し、文字起こしモードではOpenCodeへ接続・送信しない。
 - AIモードの通常整形は、話者の言語・話し方・敬語/くだけた表現を維持し、意味のないフィラー・重複を除去、自己訂正は最後の意図を採用する。文体を敬語に統一せず、要約・補足・推測もしない。
 - Auto PromptはOpenCodeを同梱・ダウンロードせず、各PCに既にあるOpenCode CLIを `PATH` から検索する。PC名やユーザー名を含む絶対パスをコードへ固定しない。
-- OpenCodeは利用者の通常のユーザー環境・設定・認証で起動する。Auto PromptはAPIキーを受け取らず、認証ファイルやOpenCode設定ファイルも読み書きしない。OpenCode Zenの接続はOpenCode側で済ませておく必要がある。
+- OpenCode Zen Freeは利用者の通常のユーザー環境・設定・認証で起動する。Auto PromptはZen用APIキーを受け取らず、認証ファイルやOpenCode設定ファイルも読み書きしない。OpenCode Zenの接続はOpenCode側で済ませておく必要がある。
+- DeepSeek、OpenRouter、Gemini、OpenAI互換APIは直接接続する。APIキーはWindows DPAPIのユーザー保護で暗号化して設定へ保存し、平文では書き込まない。OpenAI互換APIはHTTPSを必須とし、HTTPはloopback接続に限る。APIキーはログへ出さない。
 - OpenCodeのheadless serverはAIモードを使う時だけloopbackの空きポートで起動し、そのサーバープロセスだけに一時的なHTTP Basic認証を設定する。モードを文字起こしのみに戻す時とアプリ終了時に、自分で起動したサーバーと空の一時作業フォルダーを閉じる。
-- 変換要求ではモデルを明示し、既定のPlanエージェントへ文章のみを返す指示を渡す。個別リクエストから全ツールを無効化する設定は送らない。OpenCode Zenの無料枠は、Read等を含まないツール一覧を拒否する既知の挙動があるため、Planの標準制限を使う。一時セッションは変換後に削除する。音声は端末外へ送らず、文字起こしをOpenCode Zenへ送信して生成結果を受信する。Muse Spark 1.3 Contributor Freeのプロンプト・回答がMetaの将来モデルの学習に使われる条件を、初回送信前の確認で明示する。[OpenCode Zen](https://docs.opencode.ai/docs/zen/)
+- OpenCode Zenの変換要求では選択モデルを指定し、無料モデル以外は拒否する。既定のPlanエージェントへ文章のみを返す指示を渡す。個別リクエストから全ツールを無効化する設定は送らない。OpenCode Zenの無料枠は、Read等を含まないツール一覧を拒否する既知の挙動があるため、Planの標準制限を使う。一時セッションは変換後に削除する。音声は端末外へ送らず、文字起こしを選択中のサービスへ送信して生成結果を受信する。初期設定モデルのデータ利用条件は初回送信前の確認で明示する。[OpenCode Zen](https://docs.opencode.ai/docs/zen/)
+- 直接APIはDeepSeekとOpenRouterのChat Completions、Geminiの`generateContent`、OpenAI互換Chat Completionsを使う。ユーザーがモデルIDを設定する。APIキーの暗号化は現在のWindowsユーザーに結び付く。
 - グローバルショートカットの既定値は右Alt。セットアップ完了後の画面で右Alt単独または修飾キーとの組み合わせへ変更でき、設定は再起動後も保持する。録音ボタンやセットアップ完了見出しは表示せず、右Alt単独は低レベルキーボードフックで検知する。
 - 録音・認識・整形中は画像参照に合わせた背景透過の状態ピルを画面下中央に表示し、画面下端から約12px（フルHD・倍率100%）の位置に置く。クリックとフォーカスを受け取らない。
 

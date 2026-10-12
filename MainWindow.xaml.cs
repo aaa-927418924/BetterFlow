@@ -15,6 +15,7 @@ public partial class MainWindow : System.Windows.Window
     private readonly MicrophoneRecorder _recorder = new();
     private readonly CancellationTokenSource _lifetime = new();
     private readonly OpenCodeService _openCode = new();
+    private readonly AiModelService _aiModelService = new();
     private readonly IndicatorWindow _indicator;
     private readonly bool _startHiddenInTray;
     private System.Windows.Forms.NotifyIcon? _trayIcon;
@@ -32,6 +33,8 @@ public partial class MainWindow : System.Windows.Window
     private bool _exitRequested;
     private bool _syncingStartupMenu;
     private bool _isCapturingShortcut;
+    private bool _loadingAiProviderUi;
+    private IReadOnlyList<ZenModelOption> _zenModelOptions = Array.Empty<ZenModelOption>();
 
     public MainWindow()
     {
@@ -45,6 +48,8 @@ public partial class MainWindow : System.Windows.Window
             CapacityText.Text = string.Empty;
         }
         _settings = _settingsStore.Load();
+        NormalizeAiSettings();
+        InitializeAiProviderUi();
         InitializeTrayIcon();
         Closing += MainWindow_Closing;
         SystemEvents.SessionEnding += SystemEvents_SessionEnding;
@@ -204,10 +209,18 @@ public partial class MainWindow : System.Windows.Window
         UpdateAiModeDisplay();
         AiModeToggle.IsEnabled = false;
         ActionButton.IsEnabled = false;
-        RuntimeStatus.Text = "OpenCode Zenを確認しています…";
+        RuntimeStatus.Text = "選択したAIサービスを確認しています…";
         try
         {
-            await EnsureOpenCodeReadyAsync();
+            CaptureCurrentProviderSettings(_settings.AiProviderId);
+            ValidateCurrentProviderSettings();
+            _settingsStore.Save(_settings);
+            if (AiProviderCatalog.UsesOpenCode(_settings.AiProviderId))
+            {
+                await EnsureOpenCodeReadyAsync();
+                await _openCode.EnsureZenFreeModelAvailableAsync(
+                    GetProviderSettings(_settings.AiProviderId).ModelId, _lifetime.Token);
+            }
             _settings.AiModeEnabled = true;
             _settingsStore.Save(_settings);
             UpdateAiModeDisplay();
@@ -234,11 +247,226 @@ public partial class MainWindow : System.Windows.Window
     {
         AiModeToggle.IsChecked = _settings.AiModeEnabled;
         AiModeDescription.Text = _settings.AiModeEnabled
-            ? "オン: 話し方を保ち、フィラーや言い直しを整えます。"
+            ? "オン: 選択したAIサービスで文章を整えます。"
             : "オフ: 文字起こしをそのまま貼り付けます。";
+        var providerName = GetProviderDisplayName(_settings.AiProviderId);
         PrivacyNotice.Text = _settings.AiModeEnabled
-            ? "AIモードでは文字起こしテキストをOpenCode Zenへ送信します。音声はPC内で処理します。"
-            : "音声と文字起こしはPC内で処理します。AIモードを使うときだけテキストをOpenCode Zenへ送信します。";
+            ? $"AIモードでは文字起こしテキストを{providerName}へ送信します。音声はPC内で処理します。"
+            : "音声と文字起こしはPC内で処理します。AIモードを使うときだけ文字起こしを選択中のサービスへ送信します。";
+    }
+
+    private void NormalizeAiSettings()
+    {
+        _settings.AiProviders ??= new Dictionary<string, AiProviderSettings>(StringComparer.OrdinalIgnoreCase);
+        if (!AiProviderCatalog.Options.Any(option => option.Id == _settings.AiProviderId))
+            _settings.AiProviderId = AiProviderCatalog.OpenCodeZenFree;
+        _ = GetProviderSettings(_settings.AiProviderId);
+    }
+
+    private void InitializeAiProviderUi()
+    {
+        _loadingAiProviderUi = true;
+        AiProviderCombo.ItemsSource = AiProviderCatalog.Options;
+        AiProviderCombo.DisplayMemberPath = nameof(AiProviderOption.DisplayName);
+        AiProviderCombo.SelectedValuePath = nameof(AiProviderOption.Id);
+        LoadAiProviderControls(_settings.AiProviderId);
+        _loadingAiProviderUi = false;
+    }
+
+    private AiProviderSettings GetProviderSettings(string providerId)
+    {
+        _settings.AiProviders ??= new Dictionary<string, AiProviderSettings>(StringComparer.OrdinalIgnoreCase);
+        if (!_settings.AiProviders.TryGetValue(providerId, out var settings) || settings is null)
+        {
+            settings = AiProviderCatalog.CreateDefaultSettings(providerId);
+            _settings.AiProviders[providerId] = settings;
+        }
+        return settings;
+    }
+
+    private void LoadAiProviderControls(string providerId)
+    {
+        _loadingAiProviderUi = true;
+        AiProviderCombo.SelectedValue = providerId;
+        var settings = GetProviderSettings(providerId);
+        var usesOpenCode = AiProviderCatalog.UsesOpenCode(providerId);
+        ZenProviderPanel.Visibility = usesOpenCode ? System.Windows.Visibility.Visible : System.Windows.Visibility.Collapsed;
+        ApiProviderPanel.Visibility = usesOpenCode ? System.Windows.Visibility.Collapsed : System.Windows.Visibility.Visible;
+        CompatibleEndpointPanel.Visibility = providerId == AiProviderCatalog.OpenAiCompatible
+            ? System.Windows.Visibility.Visible
+            : System.Windows.Visibility.Collapsed;
+
+        if (usesOpenCode)
+        {
+            ZenModelCombo.ItemsSource = _zenModelOptions;
+            var selectedModel = _zenModelOptions.FirstOrDefault(option => option.ModelId == settings.ModelId);
+            ZenModelCombo.SelectedItem = selectedModel;
+            if (selectedModel is null) ZenModelCombo.Text = settings.ModelId;
+            else ZenModelCombo.Text = selectedModel.DisplayName;
+            AiProviderDescription.Text = "既存のOpenCode設定を使います。アプリにAPIキーを入力する必要はありません。";
+        }
+        else
+        {
+            ApiModelTextBox.Text = settings.ModelId;
+            ApiBaseUrlTextBox.Text = settings.BaseUrl;
+            ApiKeyPasswordBox.Clear();
+            ApiKeyStatus.Text = string.IsNullOrWhiteSpace(settings.ProtectedApiKey)
+                ? "APIキーを入力して保存してください。"
+                : "APIキーを保存済みです。新しいキーを入力すると置き換えます。";
+            AiProviderDescription.Text = providerId == AiProviderCatalog.OpenAiCompatible
+                ? "APIキー、モデルID、OpenAI互換APIのベースURLを指定してください。"
+                : "APIキーとモデルIDを指定してください。キーはWindowsのユーザー保護領域に保存します。";
+        }
+        _loadingAiProviderUi = false;
+    }
+
+    private void CaptureCurrentProviderSettings(string providerId)
+    {
+        var settings = GetProviderSettings(providerId);
+        if (AiProviderCatalog.UsesOpenCode(providerId))
+        {
+            settings.ModelId = GetSelectedZenModelId();
+            return;
+        }
+
+        settings.ModelId = ApiModelTextBox.Text.Trim();
+        if (providerId == AiProviderCatalog.OpenAiCompatible)
+            settings.BaseUrl = ApiBaseUrlTextBox.Text.Trim();
+
+        var newApiKey = ApiKeyPasswordBox.Password;
+        if (!string.IsNullOrWhiteSpace(newApiKey))
+            settings.ProtectedApiKey = CredentialProtector.Protect(newApiKey);
+        ApiKeyPasswordBox.Clear();
+    }
+
+    private string GetSelectedZenModelId()
+    {
+        var text = ZenModelCombo.Text.Trim();
+        if (ZenModelCombo.SelectedItem is ZenModelOption option &&
+            (text == option.DisplayName || text == option.ModelId))
+            return option.ModelId;
+        return text;
+    }
+
+    private void ValidateCurrentProviderSettings(bool requireApiKey = true)
+    {
+        var settings = GetProviderSettings(_settings.AiProviderId);
+        if (string.IsNullOrWhiteSpace(settings.ModelId))
+            throw new InvalidOperationException("モデルIDを入力してください。");
+
+        if (AiProviderCatalog.UsesOpenCode(_settings.AiProviderId)) return;
+
+        if (_settings.AiProviderId == AiProviderCatalog.OpenAiCompatible &&
+            (!Uri.TryCreate(settings.BaseUrl, UriKind.Absolute, out var baseUri) ||
+             (baseUri.Scheme != Uri.UriSchemeHttp && baseUri.Scheme != Uri.UriSchemeHttps) ||
+             !string.IsNullOrEmpty(baseUri.UserInfo) ||
+             (baseUri.Scheme == Uri.UriSchemeHttp && !baseUri.IsLoopback)))
+            throw new InvalidOperationException("HTTPSのベースURLを入力してください。HTTPはlocalhostなどのローカル接続だけ利用できます。URLにユーザー名やパスワードは含めないでください。");
+
+        if (!requireApiKey) return;
+        if (string.IsNullOrWhiteSpace(settings.ProtectedApiKey))
+            throw new InvalidOperationException("APIキーを入力して保存してください。");
+        if (string.IsNullOrWhiteSpace(CredentialProtector.Unprotect(settings.ProtectedApiKey)))
+            throw new InvalidOperationException("APIキーを入力して保存してください。");
+    }
+
+    private string GetProviderDisplayName(string providerId) =>
+        AiProviderCatalog.Options.FirstOrDefault(option => option.Id == providerId)?.DisplayName ?? "AIサービス";
+
+    private void AiProviderCombo_SelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
+    {
+        if (_loadingAiProviderUi || AiProviderCombo.SelectedValue is not string newProviderId ||
+            newProviderId == _settings.AiProviderId) return;
+
+        if (_settings.AiModeEnabled || _isBusy || _recorder.IsRecording)
+        {
+            LoadAiProviderControls(_settings.AiProviderId);
+            RuntimeStatus.Text = _settings.AiModeEnabled
+                ? "サービスを変更するには、先にAIモードをオフにしてください。"
+                : "録音または処理が終わってからサービスを変更してください。";
+            return;
+        }
+
+        var oldProviderId = _settings.AiProviderId;
+        try
+        {
+            CaptureCurrentProviderSettings(oldProviderId);
+            _settings.AiProviderId = newProviderId;
+            _ = GetProviderSettings(newProviderId);
+            _settingsStore.Save(_settings);
+            if (!AiProviderCatalog.UsesOpenCode(newProviderId)) _openCode.Stop();
+            LoadAiProviderControls(newProviderId);
+            UpdateAiModeDisplay();
+            RuntimeStatus.Text = "AIサービスを切り替えました。設定を確認して保存してください。";
+        }
+        catch (Exception ex)
+        {
+            _settings.AiProviderId = oldProviderId;
+            LoadAiProviderControls(oldProviderId);
+            RuntimeStatus.Text = "AIサービスを切り替えられませんでした。 " + ex.Message;
+        }
+    }
+
+    private void SaveAiProviderSettings_Click(object sender, System.Windows.RoutedEventArgs e)
+    {
+        if (_settings.AiModeEnabled)
+        {
+            RuntimeStatus.Text = "設定を変更するには、先にAIモードをオフにしてください。";
+            return;
+        }
+        if (_isBusy || _recorder.IsRecording)
+        {
+            RuntimeStatus.Text = "録音または処理が終わってから設定してください。";
+            return;
+        }
+
+        try
+        {
+            CaptureCurrentProviderSettings(_settings.AiProviderId);
+            ValidateCurrentProviderSettings(requireApiKey: false);
+            _settingsStore.Save(_settings);
+            LoadAiProviderControls(_settings.AiProviderId);
+            RuntimeStatus.Text = "AIサービスとモデルの設定を保存しました。";
+        }
+        catch (Exception ex)
+        {
+            RuntimeStatus.Text = "モデル設定を保存できませんでした。 " + ex.Message;
+        }
+    }
+
+    private async void RefreshZenModels_Click(object sender, System.Windows.RoutedEventArgs e)
+    {
+        if (_settings.AiModeEnabled || _isBusy || _recorder.IsRecording)
+        {
+            ZenModelStatus.Text = "モデル一覧を更新するには、AIモードをオフにしてください。";
+            return;
+        }
+
+        var wasRunning = _openCode.IsRunning;
+        RefreshZenModelsButton.IsEnabled = false;
+        ZenModelStatus.Text = "既存のOpenCodeからモデル一覧を読み込んでいます…";
+        var selectedModelId = GetSelectedZenModelId();
+        try
+        {
+            await EnsureOpenCodeReadyAsync();
+            _zenModelOptions = await _openCode.GetZenFreeModelsAsync(_lifetime.Token);
+            ZenModelCombo.ItemsSource = _zenModelOptions;
+            var selected = _zenModelOptions.FirstOrDefault(option => option.ModelId == selectedModelId);
+            ZenModelCombo.SelectedItem = selected;
+            ZenModelCombo.Text = selected?.DisplayName ?? selectedModelId;
+            ZenModelStatus.Text = _zenModelOptions.Count == 0
+                ? "OpenCode Zen Freeのモデルが見つかりませんでした。OpenCodeの接続状態を確認してください。"
+                : $"{_zenModelOptions.Count}件の無料モデルを読み込みました。";
+        }
+        catch (Exception ex)
+        {
+            ZenModelStatus.Text = "モデル一覧を読み込めませんでした。 " + ex.Message;
+        }
+        finally
+        {
+            if (!wasRunning && !_settings.AiModeEnabled) _openCode.Stop();
+            RefreshZenModelsButton.IsEnabled = true;
+        }
     }
 
     private async Task LoadRecognizerAsync(CancellationToken cancellationToken)
@@ -252,6 +480,7 @@ public partial class MainWindow : System.Windows.Window
         BodyText.Text = "入力欄にカーソルを置き、ショートカットを押して話してください。\nもう一度押すと変換して貼り付けます。";
         CapacityText.Visibility = System.Windows.Visibility.Collapsed;
         ShortcutSettingsPanel.Visibility = System.Windows.Visibility.Visible;
+        AiProviderSettingsPanel.Visibility = System.Windows.Visibility.Visible;
         ShortcutCaptureStatus.Text = string.Empty;
         UpdateShortcutDisplay();
         UpdateAiModeDisplay();
@@ -311,21 +540,31 @@ public partial class MainWindow : System.Windows.Window
                 text = TranscriptFormatter.NormalizeTranscript(transcript);
                 resultStatus = "文字起こしを入力欄へ貼り付けました。";
             }
-            else if (!EnsureContributorConsent())
+            else if (!EnsureAiDataConsent())
             {
                 text = TranscriptFormatter.NormalizeTranscript(transcript);
                 resultStatus = "送信をキャンセルしたため、文字起こしをそのまま貼り付けました。";
             }
             else
             {
-                RuntimeStatus.Text = "OpenCodeを準備しています…";
+                RuntimeStatus.Text = "AIサービスを準備しています…";
                 _indicator.ShowStatus("整形中");
                 try
                 {
-                    if (!_openCode.IsRunning)
-                        await EnsureOpenCodeReadyAsync();
-                    RuntimeStatus.Text = "Muse Sparkで話し方を保って文章を整えています…";
-                    var response = await _openCode.RewriteAsync(transcript, _lifetime.Token);
+                    RuntimeStatus.Text = "AIサービスで文章を整えています…";
+                    var providerSettings = GetProviderSettings(_settings.AiProviderId);
+                    string response;
+                    if (AiProviderCatalog.UsesOpenCode(_settings.AiProviderId))
+                    {
+                        if (!_openCode.IsRunning) await EnsureOpenCodeReadyAsync();
+                        response = await _openCode.RewriteAsync(transcript, providerSettings.ModelId, _lifetime.Token);
+                    }
+                    else
+                    {
+                        var apiKey = CredentialProtector.Unprotect(providerSettings.ProtectedApiKey);
+                        response = await _aiModelService.RewriteAsync(
+                            _settings.AiProviderId, providerSettings, apiKey, transcript, _lifetime.Token);
+                    }
                     text = response.Trim();
                     resultStatus = "整えた文章を入力欄へ貼り付けました。";
                 }
@@ -356,16 +595,24 @@ public partial class MainWindow : System.Windows.Window
         }
     }
 
-    private bool EnsureContributorConsent()
+    private bool EnsureAiDataConsent()
     {
-        if (_settings.ContributorTermsAccepted) return true;
+        var providerSettings = GetProviderSettings(_settings.AiProviderId);
+        var termsKey = $"{_settings.AiProviderId}|{providerSettings.ModelId}|{providerSettings.BaseUrl}";
+        if (string.Equals(_settings.AiTermsAcceptedFor, termsKey, StringComparison.Ordinal)) return true;
+
+        var providerSpecificTerms = AiProviderCatalog.UsesOpenCode(_settings.AiProviderId) &&
+                                    providerSettings.ModelId == "muse-spark-1.3-contributor-free"
+            ? "\n\n現在の無料モデルでは、入力と回答がMetaの今後のモデル学習に利用される条件です。"
+            : string.Empty;
 
         var result = System.Windows.MessageBox.Show(this,
-            "音声そのものはPC内で処理し、文字起こしテキストを既存のOpenCode設定で接続されたOpenCode Zenへ送信します。生成結果を受信して入力欄へ貼り付けます。\n\nMuse Spark 1.3 Contributor Freeは、プロンプトと回答をMetaの将来モデルの学習に使う条件です。\n\nこの内容を確認し、送信を続けますか?",
+            "音声はPC内で処理します。文字起こしテキストは選択したAIサービスへ送信し、生成文を受信して入力欄へ貼り付けます。サービスの利用規約とデータ利用条件を確認してください。" +
+            providerSpecificTerms + "\n\n送信を続けますか?",
             "データ送信の確認", System.Windows.MessageBoxButton.YesNo, System.Windows.MessageBoxImage.Information);
         if (result != System.Windows.MessageBoxResult.Yes) return false;
 
-        _settings.ContributorTermsAccepted = true;
+        _settings.AiTermsAcceptedFor = termsKey;
         _settingsStore.Save(_settings);
         return true;
     }
@@ -689,6 +936,7 @@ public partial class MainWindow : System.Windows.Window
         _recorder.Dispose();
         _asr?.Dispose();
         _openCode.Dispose();
+        _aiModelService.Dispose();
         if (_trayIcon is not null)
         {
             _trayIcon.Visible = false;
