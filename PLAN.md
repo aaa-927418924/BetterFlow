@@ -1,5 +1,13 @@
 # Auto Prompt 実装計画
 
+## 2026-10-12 改修チェックポイント
+
+- ユーザー要望: Zen APIキー入力を廃止し、このPCに既にあるOpenCodeを既存のユーザー設定・認証で使う。
+- ユーザー要望: 添付画像のコンパクトな暗色セットアップ画面に変更する。
+- ユーザー要望: 追加された `icon.svg` を画面、ウィンドウ、タスクバー、EXEアイコンに使う。
+- 実装前確認: 作業ツリーは既存コミット `3670237` 時点でクリーン。ローカルOpenCode実行ファイルと `icon.svg` を確認。
+- この記録と `icon.svg` を `docs: checkpoint local OpenCode and dark UI revision` として実装前にコミットする。
+
 ## 実装・発行の状態（2026-10-12）
 
 - 実装前の計画を `2445272`（`docs: checkpoint implementation plan`）として先にコミット済み。
