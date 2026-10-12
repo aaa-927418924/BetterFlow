@@ -1,4 +1,5 @@
 using System.Windows.Interop;
+using System.Windows.Input;
 using AutoPrompt.Services;
 
 namespace AutoPrompt;
@@ -255,6 +256,15 @@ public partial class MainWindow : System.Windows.Window
         }
         catch (Exception ex) { RuntimeStatus.Text = ex.Message; }
     }
+
+    private void DragRegion_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        if (e.ButtonState != MouseButtonState.Pressed) return;
+        try { DragMove(); }
+        catch (InvalidOperationException) { }
+    }
+
+    private void CloseButton_Click(object sender, System.Windows.RoutedEventArgs e) => Close();
 
     private IntPtr WindowMessageHook(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
     {

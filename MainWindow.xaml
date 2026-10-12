@@ -3,12 +3,12 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="Auto Prompt"
         Icon="pack://application:,,,/AutoPrompt;component/Assets/AutoPrompt.ico"
-        Width="720" Height="700" MinWidth="720" MinHeight="700" MaxWidth="720" MaxHeight="700"
-        WindowStartupLocation="CenterScreen" Background="{StaticResource WindowBrush}"
-        ResizeMode="NoResize" UseLayoutRounding="True" SnapsToDevicePixels="True">
-    <Grid Background="{StaticResource WindowBrush}">
-        <Border Width="600" Height="600" Background="{StaticResource OuterPanelBrush}"
-                CornerRadius="34" Padding="20" HorizontalAlignment="Center" VerticalAlignment="Center">
+        Width="640" Height="640" MinWidth="640" MinHeight="640" MaxWidth="640" MaxHeight="640"
+        WindowStartupLocation="CenterScreen" WindowStyle="None" AllowsTransparency="True"
+        Background="Transparent" ResizeMode="NoResize" UseLayoutRounding="True" SnapsToDevicePixels="True">
+    <Grid Background="Transparent">
+        <Border Background="{StaticResource OuterPanelBrush}"
+                CornerRadius="34" Padding="20" HorizontalAlignment="Stretch" VerticalAlignment="Stretch">
             <Border Background="{StaticResource PanelBrush}" CornerRadius="30" Padding="22">
                 <Grid>
                     <Grid.RowDefinitions>
@@ -17,10 +17,15 @@
                         <RowDefinition Height="56" />
                     </Grid.RowDefinitions>
 
-                    <Image Grid.Row="0" Source="pack://application:,,,/AutoPrompt;component/Assets/AutoPrompt.png"
-                           Width="62" Height="58" HorizontalAlignment="Left" VerticalAlignment="Top"
-                           Stretch="Uniform" RenderOptions.BitmapScalingMode="HighQuality"
-                           AutomationProperties.Name="Auto Prompt" />
+                    <Grid Grid.Row="0" Background="Transparent" MouseLeftButtonDown="DragRegion_MouseLeftButtonDown">
+                        <Image Source="pack://application:,,,/AutoPrompt;component/Assets/AutoPrompt.png"
+                               Width="62" Height="58" HorizontalAlignment="Left" VerticalAlignment="Top"
+                               Stretch="Uniform" RenderOptions.BitmapScalingMode="HighQuality"
+                               AutomationProperties.Name="Auto Prompt" />
+                        <Button Content="×" HorizontalAlignment="Right" VerticalAlignment="Top"
+                                Style="{StaticResource WindowControlButtonStyle}" Click="CloseButton_Click"
+                                ToolTip="閉じる" AutomationProperties.Name="閉じる" />
+                    </Grid>
 
                     <StackPanel Grid.Row="1" Margin="0,16,0,14">
                         <TextBlock x:Name="TitleText" Text="起動には初回セットアップが必要です。"

@@ -7,7 +7,7 @@
 ## 決定事項
 
 - 対象はWindows x64。配布物は.NET 8を同梱した自己完結型の単一EXE。
-- セットアップ画面は添付参考画像に合わせた白い余白、濃い角丸パネル、左上のアイコン、右下の明るい `Setup` ボタンで構成する。
+- セットアップ画面は添付参考画像に合わせた濃い角丸パネル、左上のアイコン、右下の明るい `Setup` ボタンで構成する。標準タイトルバーを使わない透過フレームレスウィンドウにし、パネルを画面いっぱいに広げる。上部をドラッグ領域、右上にカスタムの閉じるボタンを置く。`Setup` の文字は無効時も黒で表示する。
 - 画面・ウィンドウ・タスクバー・EXEのアイコンはプロジェクト直下の `icon.svg` を元に生成する。
 - 音声認識はNVIDIA `parakeet-tdt_ctc-0.6b-ja` のINT8 ONNXモデル。初回にGitHubからアーカイブを取得し、サイズとSHA-256を確認してユーザーのローカルアプリデータ領域へ展開する。
 - 文章変換はOpenCode Zen Free `Muse Spark 1.3 Contributor`（provider ID `opencode`、model ID `muse-spark-1.3-contributor-free`）。
@@ -35,5 +35,5 @@
 - 初回セットアップ、モデル取得、SHA-256検証、ローカル文字起こし、グローバルショートカット、OpenCode連携、貼り付け、単一EXE発行を実装。
 - 初回チェックポイント: `097a715 docs: checkpoint local OpenCode and dark UI revision`。
 - OpenCode Serverの利用方法・loopback・Basic認証と、モデル指定形式は2026-10-12に公式OpenCode資料を確認。
-- Release発行成功。`artifacts/publish` と配布先 `dist` は `AutoPrompt.exe` だけで、サイズは81,254,708 bytes、SHA-256は `5566A7B77F8E4FE707189C1DA45CDB597DE15F1FD738E52AB93CCE3975A7E0AC`。
+- Release発行成功。`artifacts/publish` と配布先 `dist` は `AutoPrompt.exe` だけで、サイズは81,255,176 bytes、SHA-256は `EE08B4577BEFCB052D78ECF57CEB9F6E5A34FF67B05C92A1DF8EAAEDA51A7B98`。今回の修正はコンパイル済みだが、画面の実起動・視覚確認は未実施。
 - このPCではOpenCodeのバージョンコマンドは確認できたが、既存プロファイルの読み出しは実施しない。サーバー起動、認証、モデル生成、マイク、画面の実起動は確認していない。
