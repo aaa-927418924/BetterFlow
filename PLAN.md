@@ -35,5 +35,6 @@
 - 初回セットアップ、モデル取得、SHA-256検証、ローカル文字起こし、グローバルショートカット、OpenCode連携、貼り付け、単一EXE発行を実装。
 - 初回チェックポイント: `097a715 docs: checkpoint local OpenCode and dark UI revision`。
 - OpenCode Serverの利用方法・loopback・Basic認証と、モデル指定形式は2026-10-12に公式OpenCode資料を確認。
-- Release発行成功。`artifacts/publish` と配布先 `dist` は `AutoPrompt.exe` だけで、サイズは81,255,176 bytes、SHA-256は `EE08B4577BEFCB052D78ECF57CEB9F6E5A34FF67B05C92A1DF8EAAEDA51A7B98`。今回の修正はコンパイル済みだが、画面の実起動・視覚確認は未実施。
+- `Setup` の文字はWPF共通のTextBlockスタイルに色を上書きされないよう、ボタンテンプレート内のTextBlockで黒を直接指定する。
+- Release発行成功。`artifacts/publish` と配布先 `dist` は `AutoPrompt.exe` だけで、サイズは81,255,213 bytes、SHA-256は `97923F3BFEFB57EA0966A80FCF1FACBB9218738BCA6B8F24620BCBDF8DD234EB`。今回の修正はコンパイル済みだが、画面の実起動・視覚確認は未実施。
 - このPCではOpenCodeのバージョンコマンドは確認できたが、既存プロファイルの読み出しは実施しない。サーバー起動、認証、モデル生成、マイク、画面の実起動は確認していない。
