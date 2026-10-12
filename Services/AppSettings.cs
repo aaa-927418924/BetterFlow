@@ -1,15 +1,25 @@
 using System.IO;
+using System.Text.Json.Serialization;
 
 namespace AutoPrompt.Services;
 
 internal sealed class AppSettings
 {
     public bool AiModeEnabled { get; set; } = false;
-    public string AiProviderId { get; set; } = AiProviderCatalog.OpenCodeZenFree;
-    public Dictionary<string, AiProviderSettings> AiProviders { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+    public string OpenCodeModelProviderId { get; set; } = "opencode";
+    public string OpenCodeModelId { get; set; } = string.Empty;
     public string AiTermsAcceptedFor { get; set; } = string.Empty;
+    public string MicrophoneDeviceId { get; set; } = AudioInputDeviceOption.SystemDefaultId;
     public uint ShortcutModifiers { get; set; }
     public uint ShortcutVirtualKey { get; set; } = HotkeyBinding.RightAltVirtualKey;
+
+    [JsonPropertyName("AiProviderId")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? LegacyAiProviderId { get; set; }
+
+    [JsonPropertyName("AiProviders")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public Dictionary<string, LegacyAiProviderSettings>? LegacyAiProviders { get; set; }
 }
 
 internal sealed class SettingsStore

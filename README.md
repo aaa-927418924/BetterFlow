@@ -1,6 +1,10 @@
 # Auto Prompt
 
-Windows x64向けの音声入力アプリです。入力欄にカーソルを置いて **右Alt** を押して話し、もう一度押すと録音を停止します。ショートカットとAIモードはセットアップ後の同じ画面から変更できます。既定ではAIを使わず、PC内で文字起こしした文章をそのまま入力欄へ貼り付けます。AIモードでは選択したサービスで文章を整え、話し方や敬語・くだけた表現を保ってフィラーや言い直しを調整します。初期設定はOpenCode Zen FreeのMuse Spark 1.3 Contributorです。設定画面で別のZen FreeモデルやDeepSeek、OpenRouter、Gemini、OpenAI互換APIへ変更できます。言い直しでは変更された内容だけを置き換え、計画など変わらない依頼も残します。箇条書きは発話で複数項目が明確に列挙されたときだけ使います。
+音声入力デバイスは設定から変更できます。初期値はWindowsのシステム既定マイクです。
+
+モデル一覧にはOpenCode serverが接続済みとして返すproviderのモデルだけを表示します。全providerのカタログは一覧に含めません。
+
+Windows x64向けの音声入力アプリです。入力欄にカーソルを置いて **右Alt** を押して話し、もう一度押すと録音を停止します。ショートカットとAIモードはセットアップ後の同じ画面から変更できます。既定ではAIを使わず、PC内で文字起こしした文章をそのまま入力欄へ貼り付けます。AIモードではOpenCodeのモデルで文章を整え、話し方や敬語・くだけた表現を保ってフィラーや言い直しを調整します。初期選択はOpenCode Zen FreeのMuse Spark 1.3 Contributorです。モデル一覧を更新すると、OpenCode Desktopの現在のユーザープロファイルで利用できるモデルやDesktopで追加したモデルから選べます。Auto Prompt独自のAPIキー・Base URL設定はありません。言い直しでは変更された内容だけを置き換え、計画など変わらない依頼も残します。箇条書きは発話で複数項目が明確に列挙されたときだけ使います。
 
 初回画面は白い外周と標準タイトルバーのない角丸フレームレスウィンドウです。上端をドラッグして移動でき、右上のボタンで閉じられます。`Setup` ボタンの文字は黒で表示します。
 
@@ -12,16 +16,16 @@ Windows x64向けの音声入力アプリです。入力欄にカーソルを置
 
 録音・認識・文章整形中は、画面下中央に背景透過の小さなステータスインジケーターを表示します。表示全体を前のサイズの約半分に縮め、アイコンが切れないようにしました。完了・失敗の表示は処理終了から1秒後に消えます。フルHD・表示倍率100%では画面下端から約12pxの位置で、他のアプリの入力やクリックを妨げません。
 
-OpenCode Zen Freeを選んだ場合、AIモードをオンにするとPATH上の既存OpenCodeを優先して起動します。なければアプリが保存した公式OpenCode CLIを自動で使います。OpenCodeはそのWindowsユーザーの通常の設定・認証を引き継ぎ、アプリはOpenCodeの認証ファイルやZen用APIキーを読み書きしません。新しいPCでOpenCode Zenを使う場合は、OpenCode Zenへのサインインと認証が一度必要です。これはOpenCode側のアカウント認証のため、Auto Promptが無人で作成・代行することはありません。認証が未完了でも、既定の文字起こしモードは利用できます。別のAPIサービスを選ぶ場合は、サービス、モデルID、APIキーを設定します。OpenAI互換APIはHTTPSを使い、HTTPはlocalhostなどローカル接続に限ります。APIキーはWindowsのユーザー保護機能で暗号化して保存します。
+AIモードをオンにすると、PATH上の既存OpenCodeを優先して起動します。なければアプリが保存した公式OpenCode CLIを使います。OpenCodeは同じWindowsユーザーのOpenCode Desktopと共通の設定・認証プロファイルを参照します。Desktopでモデルを追加・接続した後、Auto Promptの一覧を更新してください。モデルの接続設定や認証はOpenCode側で管理し、Auto PromptはOpenCodeの設定ファイルや認証情報を読み書きしません。初回サインインが必要なモデルは、OpenCode Desktop側で認証してください。認証が未完了でも、既定の文字起こしモードは利用できます。
 
 ## データの扱い
 
 - 音声の録音と文字起こしはPC内で行い、音声自体は送信しません。
 - 既定の文字起こしモードでは音声・文字起こしともPC内だけで処理します。
-- AIモードの場合だけ、文字起こしを選択したOpenCode ZenまたはAPIサービスへ送信し、生成結果を受信します。音声は送信しません。
+- AIモードの場合だけ、文字起こしをローカルのOpenCode server経由で選択中のモデルへ送信し、生成結果を受信します。音声は送信しません。
 - 初期設定の無料モデルでは、文字起こしと回答をMetaの将来モデルの学習に使う条件です。アプリは初回送信前に確認を表示します。[OpenCode Zenのモデル・データ利用条件](https://docs.opencode.ai/docs/zen/)
 - OpenCode Zenでは一時セッションを作成し、変換後に削除します。サーバーはloopbackだけで待ち受けます。既定のPlanエージェントと「ツールを使わず文章だけを返す」指示で文章変換を依頼します。
-- APIサービスは設定画面でモデルIDと必要なAPIキーを指定します。DeepSeekとOpenRouterはChat Completions API、Geminiは`generateContent` API、OpenAI互換は指定ベースURLのChat Completions APIを使います。[DeepSeek](https://api-docs.deepseek.com/api/create-chat-completion/)、[OpenRouter](https://openrouter.ai/docs/api/api-reference/chat/send-chat-completion-request)、[Gemini](https://ai.google.dev/gemini-api/docs/generate-content/text-generation)
+- AIモードで使うモデルと認証はOpenCode Desktopのユーザープロファイルに従います。Auto PromptからOpenCode設定内のモデル一覧を読み、選択したprovider/model IDをローカルOpenCode serverへ渡します。
 - OpenCodeのユーザー設定・認証ファイルは読み書きせず、OpenCode自身が通常どおり参照します。
 
 ## 音声認識モデルの根拠

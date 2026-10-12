@@ -12,14 +12,45 @@ internal sealed class MicrophoneRecorder : IDisposable
     private TaskCompletionSource? _stopped;
     private Exception? _recordingError;
 
+    public static IReadOnlyList<AudioInputDeviceOption> GetInputDevices()
+    {
+        var devices = new List<AudioInputDeviceOption>
+        {
+            new(AudioInputDeviceOption.SystemDefaultId, -1, "システム設定のマイク (既定)")
+        };
+        var duplicateNames = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        for (var deviceNumber = 0; deviceNumber < WaveInEvent.DeviceCount; deviceNumber++)
+        {
+            var capabilities = WaveInEvent.GetCapabilities(deviceNumber);
+            var productName = capabilities.ProductName?.Trim();
+            if (string.IsNullOrWhiteSpace(productName))
+                productName = $"音声入力デバイス {deviceNumber + 1}";
+
+            duplicateNames.TryGetValue(productName, out var occurrence);
+            occurrence++;
+            duplicateNames[productName] = occurrence;
+            var id = capabilities.NameGuid == Guid.Empty
+                ? $"wavein:{productName}:{occurrence}"
+                : $"wavein:{capabilities.NameGuid:D}:{occurrence}";
+            var displayName = occurrence == 1
+                ? productName
+                : $"{productName} ({occurrence})";
+            devices.Add(new AudioInputDeviceOption(id, deviceNumber, displayName));
+        }
+
+        return devices;
+    }
+
     public bool IsRecording => _waveIn is not null;
 
-    public void Start()
+    public void Start(int deviceNumber = -1)
     {
         if (_waveIn is not null)
             throw new InvalidOperationException("録音はすでに開始しています。");
-        if (WaveIn.DeviceCount == 0)
+        if (WaveInEvent.DeviceCount == 0)
             throw new InvalidOperationException("マイクが見つかりません。マイクを接続してからやり直してください。");
+        if (deviceNumber < -1 || deviceNumber >= WaveInEvent.DeviceCount)
+            throw new InvalidOperationException("選択したマイクが見つかりません。一覧を更新するか、システム設定のマイクを選んでください。");
 
         _audio = new MemoryStream();
         _recordingError = null;
@@ -27,7 +58,7 @@ internal sealed class MicrophoneRecorder : IDisposable
 
         var recorder = new WaveInEvent
         {
-            DeviceNumber = 0,
+            DeviceNumber = deviceNumber,
             WaveFormat = new WaveFormat(16000, 16, 1),
             BufferMilliseconds = 100
         };

@@ -56,7 +56,7 @@
                                               Style="{StaticResource ModeToggleStyle}" Click="AiModeToggle_Click"
                                               IsChecked="False"
                                               AutomationProperties.Name="AIによる文章整形モード"
-                                              AutomationProperties.HelpText="オフは文字起こしのみです。オンにすると認識した文章を選択中のAIサービスで整えます。" />
+                                              AutomationProperties.HelpText="オフは文字起こしのみです。オンにすると認識した文章をOpenCodeの選択モデルで整えます。" />
                                 <StackPanel VerticalAlignment="Center" Margin="0,0,12,0">
                                     <TextBlock x:Name="AiModeLabel" Text="AIによる文章整形" FontSize="14" />
                                     <TextBlock x:Name="AiModeDescription" Text="オフ: 文字起こしのみ"
@@ -65,99 +65,49 @@
                                 </StackPanel>
                             </DockPanel>
                         </StackPanel>
-                        <StackPanel x:Name="AiProviderSettingsPanel" Margin="0,16,0,0" Visibility="Collapsed">
-                            <TextBlock Text="AIサービスとモデル" FontSize="14" FontWeight="SemiBold" />
-                            <TextBlock Text="AIモードをオフにしてから設定を変更できます。音声は送信せず、文字起こしテキストだけを選択したサービスへ送信します。"
+                        <StackPanel x:Name="MicrophoneSettingsPanel" Margin="0,16,0,0" Visibility="Collapsed">
+                            <TextBlock Text="音声入力デバイス" FontSize="14" FontWeight="SemiBold" />
+                            <TextBlock Text="既定ではWindowsのシステム設定で選ばれているマイクを使います。必要に応じて入力デバイスを指定できます。"
                                        FontSize="12" Foreground="{StaticResource MutedBrush}" LineHeight="17" Margin="0,4,0,0" />
-                            <TextBlock Text="サービス" FontSize="12" Foreground="{StaticResource MutedBrush}" Margin="0,12,0,4" />
-                            <ComboBox x:Name="AiProviderCombo" MinHeight="40" Padding="8,5"
-                                      Background="#333333" Foreground="#F4F4F4" BorderBrush="#686868"
-                                      FontFamily="Yu Gothic UI" FontSize="14"
-                                      SelectionChanged="AiProviderCombo_SelectionChanged"
-                                      AutomationProperties.Name="文章整形に使うAIサービス">
-                                <ComboBox.ItemContainerStyle>
-                                    <Style TargetType="ComboBoxItem">
-                                        <Setter Property="Background" Value="#333333" />
-                                        <Setter Property="Foreground" Value="#F4F4F4" />
-                                        <Setter Property="Padding" Value="8,6" />
-                                        <Style.Triggers>
-                                            <Trigger Property="IsHighlighted" Value="True">
-                                                <Setter Property="Background" Value="#555555" />
-                                            </Trigger>
-                                            <Trigger Property="IsSelected" Value="True">
-                                                <Setter Property="Background" Value="#444444" />
-                                            </Trigger>
-                                        </Style.Triggers>
-                                    </Style>
-                                </ComboBox.ItemContainerStyle>
-                            </ComboBox>
-                            <TextBlock x:Name="AiProviderDescription" FontSize="12" Foreground="{StaticResource MutedBrush}"
-                                       LineHeight="17" Margin="0,5,0,0" AutomationProperties.LiveSetting="Polite" />
-
-                            <StackPanel x:Name="ZenProviderPanel" Margin="0,10,0,0" Visibility="Collapsed">
-                                <TextBlock Text="モデル" FontSize="12" Foreground="{StaticResource MutedBrush}" Margin="0,0,0,4" />
-                                <DockPanel LastChildFill="True">
-                                    <Button x:Name="RefreshZenModelsButton" DockPanel.Dock="Right" Content="一覧を更新"
-                                            MinWidth="92" Height="40" Padding="8,0" Margin="8,0,0,0"
-                                            Background="#383838" Foreground="#F4F4F4" BorderBrush="#686868"
-                                            BorderThickness="1" FontFamily="Yu Gothic UI" FontSize="12" Cursor="Hand"
-                                            Click="RefreshZenModels_Click" AutomationProperties.Name="OpenCode Zen Freeのモデル一覧を更新" />
-                                    <ComboBox x:Name="ZenModelCombo" IsEditable="True" MinHeight="40" Padding="8,5"
-                                              Background="#333333" Foreground="#F4F4F4" BorderBrush="#686868"
-                                              FontFamily="Yu Gothic UI" FontSize="13" DisplayMemberPath="DisplayName"
-                                              TextSearch.TextPath="ModelId" AutomationProperties.Name="OpenCode Zen FreeのモデルID">
-                                        <ComboBox.ItemContainerStyle>
-                                            <Style TargetType="ComboBoxItem">
-                                                <Setter Property="Background" Value="#333333" />
-                                                <Setter Property="Foreground" Value="#F4F4F4" />
-                                                <Setter Property="Padding" Value="8,6" />
-                                                <Style.Triggers>
-                                                    <Trigger Property="IsHighlighted" Value="True">
-                                                        <Setter Property="Background" Value="#555555" />
-                                                    </Trigger>
-                                                    <Trigger Property="IsSelected" Value="True">
-                                                        <Setter Property="Background" Value="#444444" />
-                                                    </Trigger>
-                                                </Style.Triggers>
-                                            </Style>
-                                        </ComboBox.ItemContainerStyle>
-                                    </ComboBox>
-                                </DockPanel>
-                                <TextBlock x:Name="ZenModelStatus" FontSize="11" Foreground="{StaticResource MutedBrush}"
-                                           Margin="0,5,0,0" AutomationProperties.LiveSetting="Polite" />
-                            </StackPanel>
-
-                            <StackPanel x:Name="ApiProviderPanel" Margin="0,10,0,0" Visibility="Collapsed">
-                                <TextBlock Text="モデルID" FontSize="12" Foreground="{StaticResource MutedBrush}" Margin="0,0,0,4" />
-                                <TextBox x:Name="ApiModelTextBox" MinHeight="40" Padding="8,7"
-                                         Background="#333333" Foreground="#F4F4F4" CaretBrush="#F4F4F4"
-                                         BorderBrush="#686868" FontFamily="Yu Gothic UI" FontSize="13"
-                                         AutomationProperties.Name="AIモデルID" />
-                                <StackPanel x:Name="CompatibleEndpointPanel" Margin="0,10,0,0" Visibility="Collapsed">
-                                    <TextBlock Text="APIのベースURL" FontSize="12" Foreground="{StaticResource MutedBrush}" Margin="0,0,0,4" />
-                                    <TextBox x:Name="ApiBaseUrlTextBox" MinHeight="40" Padding="8,7"
-                                             Background="#333333" Foreground="#F4F4F4" CaretBrush="#F4F4F4"
-                                             BorderBrush="#686868" FontFamily="Yu Gothic UI" FontSize="13"
-                                             AutomationProperties.Name="OpenAI互換APIのベースURL" />
-                                </StackPanel>
-                                <TextBlock Text="APIキー" FontSize="12" Foreground="{StaticResource MutedBrush}" Margin="0,10,0,4" />
-                                <PasswordBox x:Name="ApiKeyPasswordBox" MinHeight="40" Padding="8,7"
-                                             Background="#333333" Foreground="#F4F4F4" BorderBrush="#686868"
-                                             FontFamily="Yu Gothic UI" FontSize="13"
-                                             AutomationProperties.Name="APIキー" />
-                                <TextBlock x:Name="ApiKeyStatus" FontSize="11" Foreground="{StaticResource MutedBrush}"
-                                           Margin="0,5,0,0" AutomationProperties.LiveSetting="Polite" />
-                            </StackPanel>
-
-                            <Button x:Name="SaveAiProviderSettingsButton" Content="モデル設定を保存"
-                                    MinHeight="42" Padding="16,0" Margin="0,12,0,0"
-                                    HorizontalAlignment="Right" Background="#383838" Foreground="#F4F4F4"
-                                    BorderBrush="#686868" BorderThickness="1" FontFamily="Yu Gothic UI"
-                                    FontSize="13" Cursor="Hand" Click="SaveAiProviderSettings_Click"
-                                    AutomationProperties.Name="AIサービスとモデル設定を保存" />
+                            <DockPanel Margin="0,8,0,0" LastChildFill="True">
+                                <Button x:Name="RefreshMicrophoneDevicesButton" DockPanel.Dock="Right" Content="再読み込み"
+                                        MinWidth="92" Height="40" Padding="8,0" Margin="8,0,0,0"
+                                        Background="#383838" Foreground="#F4F4F4" BorderBrush="#686868"
+                                        BorderThickness="1" FontFamily="Yu Gothic UI" FontSize="12" Cursor="Hand"
+                                        Click="RefreshMicrophoneDevices_Click" AutomationProperties.Name="音声入力デバイス一覧を再読み込み" />
+                                <ComboBox x:Name="MicrophoneDeviceCombo" IsEditable="False" MinHeight="40"
+                                          Background="#333333" Foreground="#F4F4F4" BorderBrush="#686868"
+                                          FontFamily="Yu Gothic UI" FontSize="13" DisplayMemberPath="DisplayName"
+                                          Style="{StaticResource DarkComboBoxStyle}"
+                                          SelectionChanged="MicrophoneDeviceCombo_SelectionChanged"
+                                          AutomationProperties.Name="音声入力デバイス" />
+                            </DockPanel>
+                            <TextBlock x:Name="MicrophoneDeviceStatus" FontSize="11" Foreground="{StaticResource MutedBrush}"
+                                       Margin="0,5,0,0" AutomationProperties.LiveSetting="Polite" />
+                        </StackPanel>
+                        <StackPanel x:Name="OpenCodeModelSettingsPanel" Margin="0,16,0,0" Visibility="Collapsed">
+                            <TextBlock Text="OpenCodeモデル" FontSize="14" FontWeight="SemiBold" />
+                            <TextBlock Text="OpenCode Desktopのユーザープロファイルで利用できるモデルを選べます。Desktopでモデルを追加したら一覧を更新してください。接続設定と認証はOpenCodeの設定を使います。"
+                                       FontSize="12" Foreground="{StaticResource MutedBrush}" LineHeight="17" Margin="0,4,0,0" />
+                            <TextBlock Text="モデル" FontSize="12" Foreground="{StaticResource MutedBrush}" Margin="0,12,0,4" />
+                            <DockPanel LastChildFill="True">
+                                <Button x:Name="RefreshOpenCodeModelsButton" DockPanel.Dock="Right" Content="一覧を更新"
+                                        MinWidth="92" Height="40" Padding="8,0" Margin="8,0,0,0"
+                                        Background="#383838" Foreground="#F4F4F4" BorderBrush="#686868"
+                                        BorderThickness="1" FontFamily="Yu Gothic UI" FontSize="12" Cursor="Hand"
+                                        Click="RefreshOpenCodeModels_Click" AutomationProperties.Name="OpenCodeモデル一覧を更新" />
+                                <ComboBox x:Name="OpenCodeModelCombo" IsEditable="False" MinHeight="40"
+                                          Background="#333333" Foreground="#F4F4F4" BorderBrush="#686868"
+                                          FontFamily="Yu Gothic UI" FontSize="13" DisplayMemberPath="DisplayName"
+                                          Style="{StaticResource DarkComboBoxStyle}"
+                                          SelectionChanged="OpenCodeModelCombo_SelectionChanged"
+                                          AutomationProperties.Name="OpenCode Desktopのモデル" />
+                            </DockPanel>
+                            <TextBlock x:Name="OpenCodeModelStatus" FontSize="11" Foreground="{StaticResource MutedBrush}"
+                                       Margin="0,5,0,0" AutomationProperties.LiveSetting="Polite" />
                         </StackPanel>
                         <TextBlock x:Name="PrivacyNotice"
-                                   Text="音声と文字起こしはPC内で処理します。AIモードを使うときだけ文字起こしを選択中のサービスへ送信します。"
+                                   Text="音声と文字起こしはPC内で処理します。AIモードを使うときだけ文字起こしテキストをOpenCode経由で選択中のモデルへ送信します。"
                                    FontSize="12" LineHeight="18" Foreground="{StaticResource MutedBrush}"
                                    Margin="0,18,0,0" Visibility="Collapsed" />
                         <ProgressBar x:Name="SetupProgress" Height="5" Minimum="0" Maximum="100" Value="0"
