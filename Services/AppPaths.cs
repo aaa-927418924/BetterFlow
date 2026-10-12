@@ -15,6 +15,9 @@ internal static class AppPaths
     public static string ModelSetupLockFile => Path.Combine(Root, "model-setup.lock");
     public static string DownloadDirectory => Path.Combine(Root, "downloads");
     public static string TemporaryDirectory => Path.Combine(Root, "staging");
+    public static string OpenCodeDirectory => Path.Combine(Root, "opencode");
+    public static string OpenCodeExecutable => Path.Combine(OpenCodeDirectory, "opencode.exe");
+    public static string OpenCodeSetupLockFile => Path.Combine(Root, "opencode-setup.lock");
 
     public static void EnsureDirectories()
     {

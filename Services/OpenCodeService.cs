@@ -30,8 +30,14 @@ internal sealed class OpenCodeService : IDisposable
         if (IsRunning) return;
 
         AppPaths.EnsureDirectories();
-        var command = FindOpenCodeCommand() ?? throw new FileNotFoundException(
-            "AIモードを使うにはOpenCodeをインストールし、OpenCode Zenへ接続してください。アプリ内にAPIキーを入力する必要はありません。");
+        var command = FindOpenCodeCommand();
+        if (command is null)
+        {
+            await new OpenCodeInstaller().EnsureInstalledAsync(null, cancellationToken);
+            command = FindOpenCodeCommand();
+        }
+        if (command is null)
+            throw new FileNotFoundException("OpenCodeを自動で準備できませんでした。ネットワーク接続と空き容量を確認してください。");
 
         var port = GetAvailablePort();
         var serverPassword = Convert.ToHexString(System.Security.Cryptography.RandomNumberGenerator.GetBytes(32));
@@ -224,7 +230,7 @@ internal sealed class OpenCodeService : IDisposable
         var connected = root.TryGetProperty("connected", out var providers) && providers.ValueKind == JsonValueKind.Array &&
                         providers.EnumerateArray().Any(provider => provider.ValueKind == JsonValueKind.String && provider.GetString() == ProviderId);
         if (!connected)
-            throw new InvalidOperationException("AIモードを使うには、既存のOpenCodeでOpenCode Zenへ接続してください。アプリにAPIキーを入力する必要はありません。");
+            throw new InvalidOperationException("OpenCode Zenが未接続です。OpenCode Zenへのサインインと接続設定を済ませてから再試行してください。Auto Promptは認証情報を読み書きしません。");
 
         if (root.TryGetProperty("all", out var allProviders) && allProviders.ValueKind == JsonValueKind.Array)
         {
@@ -271,6 +277,8 @@ internal sealed class OpenCodeService : IDisposable
             ? $"{name.GetString()} ({modelId})"
             : modelId;
 
+    public static bool IsCommandAvailable() => FindOpenCodeCommand() is not null;
+
     private static OpenCodeCommand? FindOpenCodeCommand()
     {
         var directories = (Environment.GetEnvironmentVariable("PATH") ?? string.Empty)
@@ -305,6 +313,9 @@ internal sealed class OpenCodeService : IDisposable
             if (File.Exists(script))
                 return new OpenCodeCommand(script, OpenCodeLaunchKind.PowerShellScript);
         }
+
+        if (OpenCodeInstaller.IsUsableExecutable(AppPaths.OpenCodeExecutable))
+            return new OpenCodeCommand(AppPaths.OpenCodeExecutable, OpenCodeLaunchKind.Executable);
 
         return null;
     }

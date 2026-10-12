@@ -13,8 +13,8 @@
 - 既定の文章変換サービスはOpenCode Zen Freeで、既定モデルは `Muse Spark 1.3 Contributor`（provider ID `opencode`、model ID `muse-spark-1.3-contributor-free`）。セットアップ後にOpenCode Zen Freeの利用可能な無料モデル、DeepSeek、OpenRouter、Gemini、またはOpenAI互換APIとモデルIDを選べる。
 - 既定はAIを使わない文字起こしモード。セットアップ後のショートカット設定画面にあるトグルでAIモードを切り替え、選択をユーザー設定へ保存する。OpenCodeはAIモードを選ぶ時だけ起動し、文字起こしモードではOpenCodeへ接続・送信しない。
 - AIモードの通常整形は、話者の言語・話し方・敬語/くだけた表現を維持し、意味のないフィラー・重複を除去、自己訂正は最後の意図を採用する。文体を敬語に統一せず、要約・補足・推測もしない。
-- Auto PromptはOpenCodeを同梱・ダウンロードせず、各PCに既にあるOpenCode CLIを `PATH` から検索する。PC名やユーザー名を含む絶対パスをコードへ固定しない。
-- OpenCode Zen Freeは利用者の通常のユーザー環境・設定・認証で起動する。Auto PromptはZen用APIキーを受け取らず、認証ファイルやOpenCode設定ファイルも読み書きしない。OpenCode Zenの接続はOpenCode側で済ませておく必要がある。
+- 初回SetupではOpenCode公式GitHub Releases APIから最新安定版Windows x64 baseline CLIを取得し、公式APIのSHA-256とサイズを照合してから `%LOCALAPPDATA%\AutoPrompt\opencode` に展開する。既存OpenCodeが `PATH` にある場合はそちらを優先する。アプリはPATHやシステム設定を変更せず、ユーザー名・PC固有の絶対パスをコードへ固定しない。
+- OpenCode Zen Freeは利用者の通常のユーザー環境・設定・認証で起動する。Auto PromptはZen用APIキーを受け取らず、認証ファイルやOpenCode設定ファイルも読み書きしない。OpenCode本体の自動導入はできるが、OpenCode Zenを初めて使うPCでは利用者によるサインイン・認証が必要。
 - DeepSeek、OpenRouter、Gemini、OpenAI互換APIは直接接続する。APIキーはWindows DPAPIのユーザー保護で暗号化して設定へ保存し、平文では書き込まない。OpenAI互換APIはHTTPSを必須とし、HTTPはloopback接続に限る。APIキーはログへ出さない。
 - OpenCodeのheadless serverはAIモードを使う時だけloopbackの空きポートで起動し、そのサーバープロセスだけに一時的なHTTP Basic認証を設定する。モードを文字起こしのみに戻す時とアプリ終了時に、自分で起動したサーバーと空の一時作業フォルダーを閉じる。
 - OpenCode Zenの変換要求では選択モデルを指定し、無料モデル以外は拒否する。既定のPlanエージェントへ文章のみを返す指示を渡す。個別リクエストから全ツールを無効化する設定は送らない。OpenCode Zenの無料枠は、Read等を含まないツール一覧を拒否する既知の挙動があるため、Planの標準制限を使う。一時セッションは変換後に削除する。音声は端末外へ送らず、文字起こしを選択中のサービスへ送信して生成結果を受信する。初期設定モデルのデータ利用条件は初回送信前の確認で明示する。[OpenCode Zen](https://docs.opencode.ai/docs/zen/)
@@ -29,10 +29,10 @@
 ## 初回セットアップ
 
 1. 日本語音声モデルをダウンロードし、サイズ・SHA-256を照合して展開する。
-2. Parakeetをメモリへロードする。
-3. 文字起こしのみで利用可能にする。OpenCodeの確認・起動はAIモードを選んだ時に行う。
+2. 既存OpenCode CLIがPATHに見つからない場合、公式GitHub Releases APIから最新安定版をダウンロードし、サイズ・SHA-256を確認してアプリ用領域に展開する。ダウンロードに失敗してもローカル文字起こしは利用でき、AIモード選択時に再試行する。
+3. Parakeetをメモリへロードし、文字起こしのみで利用可能にする。OpenCode serverの起動・モデルへの接続はAIモード選択時に行う。
 
-モデルアーカイブは約489 MB。展開中の一時ファイルを含めて約1.2 GBの空き容量を必要とする。モデル本体と設定は `Environment.SpecialFolder.LocalApplicationData` を基点とするため、保存先は各PCのユーザー環境に合わせて決まる。
+モデルアーカイブは約489 MB。展開中の一時ファイルを含めて約1.2 GBの空き容量を必要とする。OpenCodeは最新安定版のbaseline版を追加取得する。音声モデル・OpenCode CLI・設定は `Environment.SpecialFolder.LocalApplicationData` を基点とするため、保存先は各PCのユーザー環境に合わせて決まる。
 
 ## 実装・確認状況
 
@@ -60,3 +60,6 @@
 - 同日、Release単一EXE発行と`dist/AutoPrompt.exe`差し替えに成功。発行元と配布先は81,266,904 bytes、SHA-256 `EB41095D05528D278DE441A69C8BE638D4A50686EBAC77EB8947B926C8BA5325`で一致。NU1900が発生。画面・トグル・ホットキー・マイク・OpenCode Zenへの生成要求は未確認。
 - 2026-10-13: 実装前チェックポイントを`3ece302 fix: stabilize OpenCode setup and transcription controls`として作成。
 - 2026-10-13: 話し方維持の整形とプロンプトモードを追加したが、ユーザーによる実使用で箇条書きが不要な箇所にも出る問題が報告され、プロンプトモードは撤去。自己訂正では変更された内容だけを置き換え、計画など継続する依頼を保持する指示を追加し、通常は箇条書きを使わない。結果カードと「直前の変換結果」見出し、コピー操作も削除。Release単一EXE `artifacts/publish/AutoPrompt.exe` と `dist/AutoPrompt.exe` は81,266,346 bytes、SHA-256 `E87C097048F868159545E5F7E85AB3AB0A1BF84106E7BEE7FEBD71EA37019035` で一致。NU1900警告あり。新しい整形指示のMuse Spark実生成と画面実操作は未確認。
+- 2026-10-13: OpenCode自動導入の実装前チェックポイントを`c6a73df feat: add configurable AI providers`として作成。
+- 2026-10-13: 初回Setupで、PATH上に既存OpenCodeがない場合にOpenCode公式GitHub Releases APIの最新安定版Windows x64 baseline CLIをダウンロードし、APIが返すサイズとSHA-256を検証して`%LOCALAPPDATA%\\AutoPrompt\\opencode`へ展開する処理を追加。既存OpenCodeを優先し、PATHやシステム設定は変更しない。初回Setupでの取得が失敗してもローカル文字起こしは利用可能で、AIモード有効化時に再試行する。最新APIのv1.19.0 baseline ZIP（62,173,954 bytes、SHA-256 `2759ca3449fe946d82da3be43d2e85332127399686aafceaff153b90c3079c56`）はメタデータまで確認し、アーカイブ自体の取得・展開は未実施。公式Zen資料はアカウントへのサインインと認証情報の設定を要求するため、初回認証まで自動代行はせず、初回画面に案内を追加。
+- 同日、配布資産名をWindows x64 baseline版へ統一して再発行し、`dist/AutoPrompt.exe`を更新。発行元と配布先は81,286,388 bytes、SHA-256 `37940B52F13C2A923EDE1747056ABFCE94B120E59138EF5ACAFCD99BDCEDA406`で一致。NuGet脆弱性フィード取得失敗によるNU1900警告あり。アプリの実起動、OpenCode自動ダウンロード・展開、Zen認証、モデルへの実要求、画面操作は未確認。テストスイートは実行していない。

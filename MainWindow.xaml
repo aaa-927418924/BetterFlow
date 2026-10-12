@@ -33,7 +33,7 @@
                     <StackPanel>
                         <TextBlock x:Name="TitleText" Text="起動には初回セットアップが必要です。"
                                    FontSize="23" FontWeight="Normal" LineHeight="34" />
-                        <TextBlock x:Name="BodyText" Text="モデルのダウンロード後に&#10;アプリが使用可能になります。"
+                        <TextBlock x:Name="BodyText" Text="日本語音声モデルとOpenCodeを自動で準備します。&#10;OpenCode Zenの利用には別途サインインが必要です。"
                                    FontSize="16" LineHeight="22" Margin="0,20,0,0" />
                         <TextBlock x:Name="CapacityText" Text="必要な空き容量: 約1.2 GB"
                                    FontSize="15" Margin="0,18,0,0" />

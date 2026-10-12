@@ -127,6 +127,7 @@ public partial class MainWindow : System.Windows.Window
         SetupStatus.Text = "音声モデルを準備しています…";
         RuntimeStatus.Text = string.Empty;
         var currentStage = "音声モデルの取得";
+        string? openCodeSetupIssue = null;
         try
         {
             var progress = new Progress<SetupProgress>(update =>
@@ -136,11 +137,24 @@ public partial class MainWindow : System.Windows.Window
                 SetupProgress.Value = Math.Clamp(update.Percent, 0, 100);
             });
             await new Bootstrapper().EnsureModelAsync(progress, _lifetime.Token);
+            currentStage = "OpenCodeの準備";
+            try
+            {
+                await new OpenCodeInstaller().EnsureInstalledAsync(progress, _lifetime.Token);
+            }
+            catch (OperationCanceledException) { throw; }
+            catch (Exception ex)
+            {
+                openCodeSetupIssue = DescribeSetupError(ex);
+            }
             currentStage = "音声モデルの起動";
             SetupStatus.Text = "音声モデルを起動しています…";
             await LoadRecognizerAsync(_lifetime.Token);
             SetupProgress.Value = 100;
             SetupStatus.Text = string.Empty;
+            RuntimeStatus.Text = openCodeSetupIssue is null
+                ? string.Empty
+                : "文字起こしは利用できます。OpenCodeの自動セットアップは完了しませんでした。AIモードを選ぶと再試行します。 " + openCodeSetupIssue;
         }
         catch (OperationCanceledException) when (_closing) { }
         catch (Exception ex)
@@ -168,6 +182,9 @@ public partial class MainWindow : System.Windows.Window
 
     private async Task EnsureOpenCodeReadyAsync()
     {
+        var progress = new Progress<SetupProgress>(update => RuntimeStatus.Text = update.Message);
+        await new OpenCodeInstaller().EnsureInstalledAsync(progress, _lifetime.Token);
+        RuntimeStatus.Text = "OpenCodeを起動しています…";
         await Task.Run(() => _openCode.StartAsync(_lifetime.Token), _lifetime.Token);
     }
 
@@ -303,7 +320,7 @@ public partial class MainWindow : System.Windows.Window
             ZenModelCombo.SelectedItem = selectedModel;
             if (selectedModel is null) ZenModelCombo.Text = settings.ModelId;
             else ZenModelCombo.Text = selectedModel.DisplayName;
-            AiProviderDescription.Text = "既存のOpenCode設定を使います。アプリにAPIキーを入力する必要はありません。";
+            AiProviderDescription.Text = "OpenCodeを自動で準備し、通常のユーザー設定と認証を使います。アプリに認証情報を入力する必要はありません。";
         }
         else
         {
