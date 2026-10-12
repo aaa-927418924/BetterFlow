@@ -12,6 +12,7 @@ internal static class AppPaths
     public static string ModelFile => Path.Combine(ModelDirectory, "model.int8.onnx");
     public static string TokensFile => Path.Combine(ModelDirectory, "tokens.txt");
     public static string SettingsFile => Path.Combine(Root, "settings.json");
+    public static string ModelSetupLockFile => Path.Combine(Root, "model-setup.lock");
     public static string DownloadDirectory => Path.Combine(Root, "downloads");
     public static string TemporaryDirectory => Path.Combine(Root, "staging");
 

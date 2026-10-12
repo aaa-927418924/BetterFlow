@@ -1,3 +1,4 @@
+using System.IO;
 using System.Windows.Interop;
 using System.Windows.Input;
 using AutoPrompt.Services;
@@ -44,9 +45,11 @@ public partial class MainWindow : System.Windows.Window
         SetupStatus.Text = "OpenCodeと音声モデルを確認しています…";
         SetupProgress.Visibility = System.Windows.Visibility.Visible;
         SetupProgress.IsIndeterminate = true;
+        var currentStage = "OpenCodeの確認";
         try
         {
             await EnsureOpenCodeReadyAsync();
+            currentStage = "音声モデルの起動";
             await LoadRecognizerAsync(_lifetime.Token);
             SetupStatus.Text = string.Empty;
         }
@@ -54,7 +57,7 @@ public partial class MainWindow : System.Windows.Window
         catch (Exception ex)
         {
             SetupStatus.Text = "Setupを押して再試行してください。";
-            RuntimeStatus.Text = ex.Message;
+            RuntimeStatus.Text = $"失敗した工程: {currentStage}\n{DescribeSetupError(ex)}";
         }
         finally
         {
@@ -85,16 +88,20 @@ public partial class MainWindow : System.Windows.Window
         SetupProgress.Value = 0;
         SetupStatus.Text = "既存のOpenCodeを確認しています…";
         RuntimeStatus.Text = string.Empty;
+        var currentStage = "OpenCodeの確認";
         try
         {
             await EnsureOpenCodeReadyAsync();
             SetupProgress.IsIndeterminate = false;
             var progress = new Progress<SetupProgress>(update =>
             {
+                currentStage = update.Message.TrimEnd('…', '.');
                 SetupStatus.Text = update.Message;
                 SetupProgress.Value = Math.Clamp(update.Percent, 0, 100);
             });
             await new Bootstrapper().EnsureModelAsync(progress, _lifetime.Token);
+            currentStage = "音声モデルの起動";
+            SetupStatus.Text = "音声モデルを起動しています…";
             await LoadRecognizerAsync(_lifetime.Token);
             SetupProgress.Value = 100;
             SetupStatus.Text = string.Empty;
@@ -103,7 +110,7 @@ public partial class MainWindow : System.Windows.Window
         catch (Exception ex)
         {
             SetupStatus.Text = "セットアップできませんでした。内容を確認して、もう一度お試しください。";
-            RuntimeStatus.Text = ex.Message;
+            RuntimeStatus.Text = $"失敗した工程: {currentStage}\n{DescribeSetupError(ex)}";
         }
         finally
         {
@@ -113,6 +120,14 @@ public partial class MainWindow : System.Windows.Window
             ActionButton.IsEnabled = true;
             if (_asr is null) ActionButton.Content = "Setup";
         }
+    }
+
+    private static string DescribeSetupError(Exception exception)
+    {
+        var root = exception.GetBaseException();
+        if (root is IOException io && (io.HResult & 0xFFFF) is 32 or 33)
+            return "ファイルが別の処理で使用中です。実行中のセットアップがあれば完了を待ち、他のアプリで対象ファイルを開いていないか確認して再試行してください。\n" + root.Message;
+        return root.Message;
     }
 
     private async Task EnsureOpenCodeReadyAsync()

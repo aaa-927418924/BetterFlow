@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.IO;
 using System.Net.Http;
 using System.Security.Cryptography;
@@ -10,24 +11,35 @@ internal sealed class Bootstrapper
     private const string ModelUrl = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-nemo-parakeet-tdt_ctc-0.6b-ja-35000-int8.tar.bz2";
     private const long ModelArchiveSize = 489_389_564;
     private const string ModelArchiveSha256 = "4b0a800ef29f4f4c8667339bf6f60d5bfdc2852ddc9dc5741aea65b6f8d1306b";
+    private static readonly TimeSpan SetupLockTimeout = TimeSpan.FromMinutes(10);
 
     private static readonly HttpClient Client = new() { Timeout = Timeout.InfiniteTimeSpan };
 
     public async Task EnsureModelAsync(IProgress<SetupProgress> progress, CancellationToken cancellationToken)
     {
         AppPaths.EnsureDirectories();
+        progress.Report(new SetupProgress("音声モデルのセットアップ状態を確認しています…", 0));
+        await using var setupLock = await AcquireSetupLockAsync(cancellationToken);
 
         if (!IsModelReady())
         {
             EnsureFreeSpace(1_200_000_000);
-            progress.Report(new SetupProgress("日本語音声モデルをダウンロードしています…", 1));
-            var archivePath = Path.Combine(AppPaths.DownloadDirectory, "parakeet-ja-int8.tar.bz2");
-            await DownloadVerifiedAsync(ModelUrl, archivePath, ModelArchiveSize, ModelArchiveSha256,
-                value => progress.Report(new SetupProgress("日本語音声モデルをダウンロードしています…", value * 0.75)), cancellationToken);
-            ExtractModel(archivePath, cancellationToken, progress);
-            if (!IsModelReady())
-                throw new InvalidDataException("音声モデルの必要ファイルが見つかりませんでした。");
-            TryDelete(archivePath);
+            var setupDirectory = Path.Combine(AppPaths.TemporaryDirectory, "setup-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(setupDirectory);
+            try
+            {
+                progress.Report(new SetupProgress("日本語音声モデルをダウンロードしています…", 1));
+                var archivePath = Path.Combine(setupDirectory, "parakeet-ja-int8.tar.bz2");
+                await DownloadVerifiedAsync(ModelUrl, archivePath, ModelArchiveSize, ModelArchiveSha256,
+                    value => progress.Report(new SetupProgress("日本語音声モデルをダウンロードしています…", value * 0.75)), cancellationToken);
+                await Task.Run(() => ExtractModel(archivePath, cancellationToken, progress), cancellationToken);
+                if (!IsModelReady())
+                    throw new InvalidDataException("音声モデルの必要ファイルが見つかりませんでした。");
+            }
+            finally
+            {
+                TryDeleteDirectory(setupDirectory);
+            }
         }
         else
         {
@@ -36,6 +48,28 @@ internal sealed class Bootstrapper
 
         progress.Report(new SetupProgress("音声モデルを起動しています…", 98));
     }
+
+    private static async Task<FileStream> AcquireSetupLockAsync(CancellationToken cancellationToken)
+    {
+        var elapsed = Stopwatch.StartNew();
+        while (true)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            try
+            {
+                return new FileStream(AppPaths.ModelSetupLockFile, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
+            }
+            catch (IOException ex) when (IsSharingViolation(ex))
+            {
+                if (elapsed.Elapsed >= SetupLockTimeout)
+                    throw new IOException("別のAuto Promptが音声モデルをセットアップ中です。起動中のセットアップが終わるまで待ってから再試行してください。", ex);
+                await Task.Delay(300, cancellationToken);
+            }
+        }
+    }
+
+    private static bool IsSharingViolation(IOException exception) =>
+        (exception.HResult & 0xFFFF) is 32 or 33;
 
     public static bool IsModelReady() =>
         File.Exists(AppPaths.ModelFile) && new FileInfo(AppPaths.ModelFile).Length > 500_000_000 &&
@@ -75,14 +109,15 @@ internal sealed class Bootstrapper
                     throw new InvalidDataException($"ダウンロードサイズが一致しません。 ({total:N0}/{expectedSize:N0} bytes)");
             }
 
-            await using var verify = File.OpenRead(partial);
-            var actualHash = Convert.ToHexString(await SHA256.HashDataAsync(verify, cancellationToken)).ToLowerInvariant();
+            string actualHash;
+            await using (var verify = File.OpenRead(partial))
+                actualHash = Convert.ToHexString(await SHA256.HashDataAsync(verify, cancellationToken)).ToLowerInvariant();
             if (!CryptographicOperations.FixedTimeEquals(
                     System.Text.Encoding.ASCII.GetBytes(actualHash),
                     System.Text.Encoding.ASCII.GetBytes(expectedSha256)))
                 throw new InvalidDataException("ダウンロードしたファイルのSHA-256が一致しません。");
 
-            File.Move(partial, destination, overwrite: true);
+            await MoveFileWithRetryAsync(partial, destination, overwrite: true, cancellationToken);
             report(100);
         }
         catch
@@ -122,8 +157,8 @@ internal sealed class Bootstrapper
                 throw new InvalidDataException("音声モデルのアーカイブに必要ファイルがありません。");
 
             Directory.CreateDirectory(AppPaths.ModelDirectory);
-            File.Move(Path.Combine(staging, "model.int8.onnx"), AppPaths.ModelFile, overwrite: true);
-            File.Move(Path.Combine(staging, "tokens.txt"), AppPaths.TokensFile, overwrite: true);
+            MoveFileWithRetry(Path.Combine(staging, "model.int8.onnx"), AppPaths.ModelFile, overwrite: true, cancellationToken);
+            MoveFileWithRetry(Path.Combine(staging, "tokens.txt"), AppPaths.TokensFile, overwrite: true, cancellationToken);
         }
         finally
         {
@@ -142,6 +177,49 @@ internal sealed class Bootstrapper
     private static void TryDelete(string path)
     {
         try { if (File.Exists(path)) File.Delete(path); } catch { }
+    }
+
+    private static void TryDeleteDirectory(string path)
+    {
+        try { if (Directory.Exists(path)) Directory.Delete(path, recursive: true); } catch { }
+    }
+
+    private static void MoveFileWithRetry(string source, string destination, bool overwrite, CancellationToken cancellationToken)
+    {
+        var elapsed = Stopwatch.StartNew();
+        while (true)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            try
+            {
+                File.Move(source, destination, overwrite);
+                return;
+            }
+            catch (IOException ex) when (IsSharingViolation(ex))
+            {
+                if (elapsed.Elapsed >= TimeSpan.FromSeconds(8)) throw;
+                Thread.Sleep(250);
+            }
+        }
+    }
+
+    private static async Task MoveFileWithRetryAsync(string source, string destination, bool overwrite, CancellationToken cancellationToken)
+    {
+        var elapsed = Stopwatch.StartNew();
+        while (true)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            try
+            {
+                File.Move(source, destination, overwrite);
+                return;
+            }
+            catch (IOException ex) when (IsSharingViolation(ex))
+            {
+                if (elapsed.Elapsed >= TimeSpan.FromSeconds(8)) throw;
+                await Task.Delay(250, cancellationToken);
+            }
+        }
     }
 }
 
