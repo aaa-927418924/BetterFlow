@@ -1,7 +1,10 @@
 using System.IO;
+using Microsoft.Win32;
 using System.Windows.Interop;
 using System.Windows.Input;
 using AutoPrompt.Services;
+using ToolStripMenuItem = System.Windows.Forms.ToolStripMenuItem;
+using ToolStripSeparator = System.Windows.Forms.ToolStripSeparator;
 
 namespace AutoPrompt;
 
@@ -12,6 +15,10 @@ public partial class MainWindow : System.Windows.Window
     private readonly MicrophoneRecorder _recorder = new();
     private readonly CancellationTokenSource _lifetime = new();
     private readonly OpenCodeService _openCode = new();
+    private System.Windows.Forms.NotifyIcon? _trayIcon;
+    private System.Windows.Forms.ContextMenuStrip? _trayMenu;
+    private ToolStripMenuItem? _startupMenuItem;
+    private System.Drawing.Icon? _ownedTrayIcon;
     private AsrService? _asr;
     private AppSettings _settings;
     private HwndSource? _source;
@@ -19,13 +26,23 @@ public partial class MainWindow : System.Windows.Window
     private bool _isBusy;
     private bool _closing;
     private bool _hotkeyRegistered;
+    private bool _exitRequested;
+    private bool _syncingStartupMenu;
 
     public MainWindow()
     {
         InitializeComponent();
+        if (Bootstrapper.IsModelReady())
+        {
+            TitleText.Text = "アプリを起動しています…";
+            BodyText.Text = "OpenCodeと音声モデルを確認しています。";
+            CapacityText.Text = string.Empty;
+        }
         _settings = _settingsStore.Load();
+        InitializeTrayIcon();
         Loaded += MainWindow_Loaded;
         Closing += MainWindow_Closing;
+        SystemEvents.SessionEnding += SystemEvents_SessionEnding;
     }
 
     protected override void OnSourceInitialized(EventArgs e)
@@ -40,6 +57,12 @@ public partial class MainWindow : System.Windows.Window
     {
         AppPaths.EnsureDirectories();
         if (!Bootstrapper.IsModelReady()) return;
+
+        TitleText.Text = "アプリを起動しています…";
+        BodyText.Text = "OpenCodeと音声モデルを確認しています。";
+        CapacityText.Text = string.Empty;
+        if (StartupRegistration.IsTrayLaunchRequested)
+            HideToTray();
 
         ActionButton.IsEnabled = false;
         SetupStatus.Text = "OpenCodeと音声モデルを確認しています…";
@@ -56,6 +79,9 @@ public partial class MainWindow : System.Windows.Window
         catch (OperationCanceledException) when (_closing) { }
         catch (Exception ex)
         {
+            TitleText.Text = "起動できませんでした。";
+            BodyText.Text = "OpenCodeと音声モデルを確認して、Setupから再試行してください。";
+            CapacityText.Text = string.Empty;
             SetupStatus.Text = "Setupを押して再試行してください。";
             RuntimeStatus.Text = $"失敗した工程: {currentStage}\n{DescribeSetupError(ex)}";
         }
@@ -281,6 +307,95 @@ public partial class MainWindow : System.Windows.Window
 
     private void CloseButton_Click(object sender, System.Windows.RoutedEventArgs e) => Close();
 
+    private void InitializeTrayIcon()
+    {
+        _trayMenu = new System.Windows.Forms.ContextMenuStrip();
+        _startupMenuItem = new ToolStripMenuItem("Windows起動時に自動起動")
+        {
+            CheckOnClick = true,
+            Checked = StartupRegistration.IsEnabled
+        };
+        _startupMenuItem.CheckedChanged += StartupMenuItem_CheckedChanged;
+
+        var exitMenuItem = new ToolStripMenuItem("アプリを完全に終了する");
+        exitMenuItem.Click += (_, _) => ExitApplication();
+
+        _trayMenu.Items.Add(_startupMenuItem);
+        _trayMenu.Items.Add(new ToolStripSeparator());
+        _trayMenu.Items.Add(exitMenuItem);
+        _trayMenu.Opening += (_, _) => RefreshStartupMenuItem();
+
+        try
+        {
+            var executablePath = Environment.ProcessPath;
+            if (!string.IsNullOrWhiteSpace(executablePath))
+                _ownedTrayIcon = System.Drawing.Icon.ExtractAssociatedIcon(executablePath);
+        }
+        catch { }
+
+        _trayIcon = new System.Windows.Forms.NotifyIcon
+        {
+            Icon = _ownedTrayIcon ?? System.Drawing.SystemIcons.Application,
+            Text = "Auto Prompt",
+            ContextMenuStrip = _trayMenu,
+            Visible = true
+        };
+        _trayIcon.DoubleClick += (_, _) => RestoreFromTray();
+    }
+
+    private void StartupMenuItem_CheckedChanged(object? sender, EventArgs e)
+    {
+        if (_syncingStartupMenu || _startupMenuItem is null) return;
+
+        try
+        {
+            StartupRegistration.SetEnabled(_startupMenuItem.Checked);
+        }
+        catch (Exception ex)
+        {
+            _syncingStartupMenu = true;
+            _startupMenuItem.Checked = !_startupMenuItem.Checked;
+            _syncingStartupMenu = false;
+            System.Windows.MessageBox.Show(
+                "Windows起動時の自動起動設定を変更できませんでした。\n" + ex.Message,
+                "Auto Prompt",
+                System.Windows.MessageBoxButton.OK,
+                System.Windows.MessageBoxImage.Error);
+        }
+    }
+
+    private void RefreshStartupMenuItem()
+    {
+        if (_startupMenuItem is null) return;
+        _syncingStartupMenu = true;
+        _startupMenuItem.Checked = StartupRegistration.IsEnabled;
+        _syncingStartupMenu = false;
+    }
+
+    private void HideToTray()
+    {
+        ShowInTaskbar = false;
+        Hide();
+    }
+
+    private void RestoreFromTray()
+    {
+        if (_exitRequested) return;
+        ShowInTaskbar = true;
+        if (!IsVisible) Show();
+        if (WindowState == System.Windows.WindowState.Minimized)
+            WindowState = System.Windows.WindowState.Normal;
+        Activate();
+    }
+
+    private void ExitApplication()
+    {
+        _exitRequested = true;
+        Close();
+    }
+
+    private void SystemEvents_SessionEnding(object? sender, SessionEndingEventArgs e) => _exitRequested = true;
+
     private IntPtr WindowMessageHook(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
     {
         if (msg == GlobalHotkey.MessageId && _hotkey.IsMessage(wParam.ToInt32()))
@@ -293,13 +408,28 @@ public partial class MainWindow : System.Windows.Window
 
     private void MainWindow_Closing(object? sender, System.ComponentModel.CancelEventArgs e)
     {
+        if (!_exitRequested)
+        {
+            e.Cancel = true;
+            HideToTray();
+            return;
+        }
+
         _closing = true;
         _lifetime.Cancel();
+        SystemEvents.SessionEnding -= SystemEvents_SessionEnding;
         _hotkey.Dispose();
         _source?.RemoveHook(WindowMessageHook);
         _recorder.Dispose();
         _asr?.Dispose();
         _openCode.Dispose();
+        if (_trayIcon is not null)
+        {
+            _trayIcon.Visible = false;
+            _trayIcon.Dispose();
+        }
+        _trayMenu?.Dispose();
+        _ownedTrayIcon?.Dispose();
         _lifetime.Dispose();
     }
 }
