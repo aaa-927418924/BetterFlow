@@ -4,20 +4,12 @@
              StartupUri="MainWindow.xaml"
              ShutdownMode="OnMainWindowClose">
     <Application.Resources>
-        <SolidColorBrush x:Key="PageBrush" Color="#F3F6FA" />
-        <SolidColorBrush x:Key="SurfaceBrush" Color="#FFFFFF" />
-        <SolidColorBrush x:Key="TextBrush" Color="#182437" />
-        <SolidColorBrush x:Key="MutedBrush" Color="#5C6B80" />
-        <SolidColorBrush x:Key="BorderBrush" Color="#DCE4EE" />
-        <SolidColorBrush x:Key="AccentBrush" Color="#2563EB" />
-        <SolidColorBrush x:Key="AccentHoverBrush" Color="#1D4ED8" />
-        <SolidColorBrush x:Key="AccentPaleBrush" Color="#EAF1FF" />
-        <SolidColorBrush x:Key="SuccessBrush" Color="#176B4D" />
-        <SolidColorBrush x:Key="SuccessPaleBrush" Color="#E8F7EF" />
-        <SolidColorBrush x:Key="WarningBrush" Color="#805A00" />
-        <SolidColorBrush x:Key="WarningPaleBrush" Color="#FFF3D8" />
-        <SolidColorBrush x:Key="ErrorBrush" Color="#A42B2B" />
-        <SolidColorBrush x:Key="ErrorPaleBrush" Color="#FDEBEA" />
+        <SolidColorBrush x:Key="WindowBrush" Color="#FFFFFF" />
+        <SolidColorBrush x:Key="PanelBrush" Color="#202020" />
+        <SolidColorBrush x:Key="OuterPanelBrush" Color="#2B2B2B" />
+        <SolidColorBrush x:Key="TextBrush" Color="#F4F4F4" />
+        <SolidColorBrush x:Key="MutedBrush" Color="#BEBEBE" />
+        <SolidColorBrush x:Key="ActionBrush" Color="#EAEAEA" />
 
         <Style TargetType="TextBlock">
             <Setter Property="FontFamily" Value="Yu Gothic UI" />
@@ -25,63 +17,25 @@
             <Setter Property="TextWrapping" Value="Wrap" />
         </Style>
 
-        <Style x:Key="CardStyle" TargetType="Border">
-            <Setter Property="Background" Value="{StaticResource SurfaceBrush}" />
-            <Setter Property="BorderBrush" Value="{StaticResource BorderBrush}" />
-            <Setter Property="BorderThickness" Value="1" />
-            <Setter Property="CornerRadius" Value="18" />
-            <Setter Property="Padding" Value="22" />
-            <Setter Property="Margin" Value="0,0,0,16" />
-        </Style>
-
         <Style x:Key="PrimaryButtonStyle" TargetType="Button">
-            <Setter Property="Background" Value="{StaticResource AccentBrush}" />
-            <Setter Property="Foreground" Value="White" />
+            <Setter Property="Background" Value="{StaticResource ActionBrush}" />
+            <Setter Property="Foreground" Value="#171717" />
             <Setter Property="BorderThickness" Value="0" />
-            <Setter Property="Padding" Value="20,13" />
-            <Setter Property="MinHeight" Value="48" />
             <Setter Property="FontFamily" Value="Yu Gothic UI" />
-            <Setter Property="FontSize" Value="15" />
-            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="FontSize" Value="18" />
             <Setter Property="Cursor" Value="Hand" />
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="Button">
-                        <Border x:Name="ButtonBorder" Background="{TemplateBinding Background}" CornerRadius="12" Padding="{TemplateBinding Padding}">
+                        <Border x:Name="ButtonBorder" Background="{TemplateBinding Background}" CornerRadius="28">
                             <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" RecognizesAccessKey="True" />
                         </Border>
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="ButtonBorder" Property="Background" Value="{StaticResource AccentHoverBrush}" />
+                                <Setter TargetName="ButtonBorder" Property="Background" Value="#FFFFFF" />
                             </Trigger>
                             <Trigger Property="IsKeyboardFocused" Value="True">
-                                <Setter TargetName="ButtonBorder" Property="BorderBrush" Value="{StaticResource TextBrush}" />
-                                <Setter TargetName="ButtonBorder" Property="BorderThickness" Value="2" />
-                            </Trigger>
-                            <Trigger Property="IsEnabled" Value="False">
-                                <Setter TargetName="ButtonBorder" Property="Opacity" Value="0.55" />
-                            </Trigger>
-                        </ControlTemplate.Triggers>
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
-        </Style>
-
-        <Style x:Key="SecondaryButtonStyle" TargetType="Button" BasedOn="{StaticResource PrimaryButtonStyle}">
-            <Setter Property="Background" Value="{StaticResource AccentPaleBrush}" />
-            <Setter Property="Foreground" Value="{StaticResource TextBrush}" />
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="Button">
-                        <Border x:Name="ButtonBorder" Background="{TemplateBinding Background}" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="12" Padding="{TemplateBinding Padding}">
-                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" RecognizesAccessKey="True" />
-                        </Border>
-                        <ControlTemplate.Triggers>
-                            <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="ButtonBorder" Property="Background" Value="#DCE8FF" />
-                            </Trigger>
-                            <Trigger Property="IsKeyboardFocused" Value="True">
-                                <Setter TargetName="ButtonBorder" Property="BorderBrush" Value="{StaticResource AccentBrush}" />
+                                <Setter TargetName="ButtonBorder" Property="BorderBrush" Value="#242424" />
                                 <Setter TargetName="ButtonBorder" Property="BorderThickness" Value="2" />
                             </Trigger>
                             <Trigger Property="IsEnabled" Value="False">

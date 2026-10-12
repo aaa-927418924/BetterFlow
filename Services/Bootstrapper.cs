@@ -1,5 +1,4 @@
 using System.IO;
-using System.IO.Compression;
 using System.Net.Http;
 using System.Security.Cryptography;
 using SharpCompress.Readers;
@@ -8,41 +7,23 @@ namespace AutoPrompt.Services;
 
 internal sealed class Bootstrapper
 {
-    private const string OpenCodeUrl = "https://github.com/anomalyco/opencode/releases/download/v1.19.0/opencode-windows-x64.zip";
-    private const long OpenCodeSize = 62_173_956;
-    private const string OpenCodeSha256 = "17108e9448c4fdad48eb8714c4ed6f5dfc9cf86c2eb8f2ce5d02043fef806eb5";
-
     private const string ModelUrl = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-nemo-parakeet-tdt_ctc-0.6b-ja-35000-int8.tar.bz2";
     private const long ModelArchiveSize = 489_389_564;
     private const string ModelArchiveSha256 = "4b0a800ef29f4f4c8667339bf6f60d5bfdc2852ddc9dc5741aea65b6f8d1306b";
 
     private static readonly HttpClient Client = new() { Timeout = Timeout.InfiniteTimeSpan };
 
-    public async Task EnsureAssetsAsync(IProgress<SetupProgress> progress, CancellationToken cancellationToken)
+    public async Task EnsureModelAsync(IProgress<SetupProgress> progress, CancellationToken cancellationToken)
     {
         AppPaths.EnsureDirectories();
-
-        if (!File.Exists(AppPaths.OpenCodeExecutable) || new FileInfo(AppPaths.OpenCodeExecutable).Length < 10_000_000)
-        {
-            progress.Report(new SetupProgress("OpenCodeをダウンロードしています…", 1));
-            var zipPath = Path.Combine(AppPaths.DownloadDirectory, "opencode-windows-x64.zip");
-            await DownloadVerifiedAsync(OpenCodeUrl, zipPath, OpenCodeSize, OpenCodeSha256,
-                value => progress.Report(new SetupProgress("OpenCodeをダウンロードしています…", value * 0.15)), cancellationToken);
-            ExtractOpenCode(zipPath, cancellationToken);
-            TryDelete(zipPath);
-        }
-        else
-        {
-            progress.Report(new SetupProgress("OpenCodeを確認しました。", 15));
-        }
 
         if (!IsModelReady())
         {
             EnsureFreeSpace(1_200_000_000);
-            progress.Report(new SetupProgress("日本語音声モデルをダウンロードしています…", 16));
+            progress.Report(new SetupProgress("日本語音声モデルをダウンロードしています…", 1));
             var archivePath = Path.Combine(AppPaths.DownloadDirectory, "parakeet-ja-int8.tar.bz2");
             await DownloadVerifiedAsync(ModelUrl, archivePath, ModelArchiveSize, ModelArchiveSha256,
-                value => progress.Report(new SetupProgress("日本語音声モデルをダウンロードしています…", 15 + value * 0.75)), cancellationToken);
+                value => progress.Report(new SetupProgress("日本語音声モデルをダウンロードしています…", value * 0.75)), cancellationToken);
             ExtractModel(archivePath, cancellationToken, progress);
             if (!IsModelReady())
                 throw new InvalidDataException("音声モデルの必要ファイルが見つかりませんでした。");
@@ -109,25 +90,6 @@ internal sealed class Bootstrapper
             TryDelete(partial);
             throw;
         }
-    }
-
-    private static void ExtractOpenCode(string zipPath, CancellationToken cancellationToken)
-    {
-        var entryName = "opencode.exe";
-        var temporary = AppPaths.OpenCodeExecutable + ".tmp";
-        TryDelete(temporary);
-        using (var archive = ZipFile.OpenRead(zipPath))
-        {
-            var matches = archive.Entries.Where(entry =>
-                string.Equals(Path.GetFileName(entry.FullName.Replace('\\', '/')), entryName, StringComparison.OrdinalIgnoreCase)).ToArray();
-            if (matches.Length != 1)
-                throw new InvalidDataException("OpenCodeのZIP内で実行ファイルを一意に特定できませんでした。");
-            using var input = matches[0].Open();
-            using var output = new FileStream(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None);
-            input.CopyTo(output);
-            cancellationToken.ThrowIfCancellationRequested();
-        }
-        File.Move(temporary, AppPaths.OpenCodeExecutable, overwrite: true);
     }
 
     private static void ExtractModel(string archivePath, CancellationToken cancellationToken, IProgress<SetupProgress> progress)

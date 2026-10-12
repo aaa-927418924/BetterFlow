@@ -1,80 +1,43 @@
 using System.Diagnostics;
 using System.IO;
-using System.Net.Http;
 using System.Net;
+using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Net.Sockets;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 
 namespace AutoPrompt.Services;
 
 internal sealed class OpenCodeService : IDisposable
 {
+    private const string ProviderId = "opencode";
     private const string ModelId = "muse-spark-1.3-contributor-free";
-    private const string AgentId = "autoprompt";
     private readonly SemaphoreSlim _gate = new(1, 1);
     private readonly HttpClient _http = new() { Timeout = TimeSpan.FromMinutes(3) };
     private Process? _process;
     private Uri? _baseUri;
-    private string? _sessionPassword;
     private string? _workspace;
 
     public bool IsRunning => _process is { HasExited: false } && _baseUri is not null;
 
-    public async Task StartAsync(string apiKey, CancellationToken cancellationToken = default)
+    public async Task StartAsync(CancellationToken cancellationToken = default)
     {
-        if (string.IsNullOrWhiteSpace(apiKey))
-            throw new InvalidOperationException("OpenCode Zen APIキーを入力してください。");
         if (IsRunning) return;
 
         AppPaths.EnsureDirectories();
-        if (!File.Exists(AppPaths.OpenCodeExecutable))
-            throw new FileNotFoundException("OpenCodeが見つかりません。セットアップをもう一度実行してください。", AppPaths.OpenCodeExecutable);
+        var command = FindOpenCodeCommand() ?? throw new FileNotFoundException(
+            "OpenCodeが見つかりません。OpenCodeをインストールし、Zenへ接続してからSetupを押してください。アプリ内にAPIキーを入力する必要はありません。");
 
         var port = GetAvailablePort();
-        _sessionPassword = Convert.ToHexString(System.Security.Cryptography.RandomNumberGenerator.GetBytes(32));
+        var serverPassword = Convert.ToHexString(System.Security.Cryptography.RandomNumberGenerator.GetBytes(32));
         _baseUri = new Uri($"http://127.0.0.1:{port}/");
         _workspace = Path.Combine(AppPaths.TemporaryDirectory, "workspace-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(_workspace);
 
-        var info = new ProcessStartInfo
-        {
-            FileName = AppPaths.OpenCodeExecutable,
-            WorkingDirectory = _workspace,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true
-        };
-        info.ArgumentList.Add("serve");
-        info.ArgumentList.Add("--hostname");
-        info.ArgumentList.Add("127.0.0.1");
-        info.ArgumentList.Add("--port");
-        info.ArgumentList.Add(port.ToString(System.Globalization.CultureInfo.InvariantCulture));
-
-        var privateHome = Path.Combine(AppPaths.OpenCodeHome, "profile");
-        var configHome = Path.Combine(AppPaths.OpenCodeHome, "config");
-        var cacheHome = Path.Combine(AppPaths.OpenCodeHome, "cache");
-        var dataHome = AppPaths.OpenCodeData;
-        Directory.CreateDirectory(privateHome);
-        Directory.CreateDirectory(configHome);
-        Directory.CreateDirectory(cacheHome);
-        Directory.CreateDirectory(dataHome);
-
-        info.Environment["USERPROFILE"] = privateHome;
-        info.Environment["HOME"] = privateHome;
-        info.Environment["APPDATA"] = Path.Combine(privateHome, "AppData", "Roaming");
-        info.Environment["LOCALAPPDATA"] = Path.Combine(privateHome, "AppData", "Local");
-        info.Environment["XDG_CONFIG_HOME"] = configHome;
-        info.Environment["XDG_DATA_HOME"] = dataHome;
-        info.Environment["XDG_CACHE_HOME"] = cacheHome;
-        info.Environment["AUTOPROMPT_ZEN_API_KEY"] = apiKey;
-        info.Environment["OPENCODE_SERVER_PASSWORD"] = _sessionPassword;
-        info.Environment["OPENCODE_DISABLE_AUTOUPDATE"] = "true";
-        info.Environment["OPENCODE_DISABLE_DEFAULT_PLUGINS"] = "true";
-        info.Environment["OPENCODE_CONFIG_CONTENT"] = BuildConfiguration();
-
+        var info = CreateStartInfo(command, port, _workspace);
+        info.Environment["OPENCODE_SERVER_PASSWORD"] = serverPassword;
         _process = new Process { StartInfo = info, EnableRaisingEvents = true };
         _process.OutputDataReceived += DiscardOutput;
         _process.ErrorDataReceived += DiscardOutput;
@@ -83,21 +46,25 @@ internal sealed class OpenCodeService : IDisposable
             if (!_process.Start()) throw new InvalidOperationException("OpenCodeを起動できませんでした。");
             _process.BeginOutputReadLine();
             _process.BeginErrorReadLine();
-            ConfigureHttpAuth(_sessionPassword);
+            ConfigureHttpAuth(serverPassword);
 
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             timeout.CancelAfter(TimeSpan.FromSeconds(35));
             while (!timeout.IsCancellationRequested)
             {
                 if (_process.HasExited)
-                    throw new InvalidOperationException("OpenCodeが起動直後に終了しました。アプリを再起動してもう一度お試しください。");
+                    throw new InvalidOperationException("既存のOpenCodeを起動できませんでした。OpenCodeを一度開いてから、Setupをやり直してください。");
                 try
                 {
                     using var response = await _http.GetAsync(new Uri(_baseUri, "global/health"), timeout.Token);
                     if (response.IsSuccessStatusCode)
                     {
                         using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync(timeout.Token));
-                        if (document.RootElement.TryGetProperty("healthy", out var healthy) && healthy.GetBoolean()) return;
+                        if (document.RootElement.TryGetProperty("healthy", out var healthy) && healthy.GetBoolean())
+                        {
+                            await EnsureZenModelAvailableAsync(timeout.Token);
+                            return;
+                        }
                     }
                 }
                 catch (HttpRequestException) { }
@@ -107,7 +74,7 @@ internal sealed class OpenCodeService : IDisposable
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
             StopProcess();
-            throw new TimeoutException("OpenCodeの起動を確認できませんでした。通信設定を確認して再試行してください。");
+            throw new TimeoutException("OpenCodeの起動を確認できませんでした。OpenCodeのインストール状態を確認して再試行してください。");
         }
         catch
         {
@@ -122,7 +89,7 @@ internal sealed class OpenCodeService : IDisposable
         string? sessionId = null;
         try
         {
-            if (!IsRunning) throw new InvalidOperationException("OpenCodeは起動していません。APIキーを登録し直してください。");
+            if (!IsRunning) throw new InvalidOperationException("OpenCodeが起動していません。Setupをやり直してください。");
 
             using var create = await _http.PostAsync(new Uri(_baseUri!, "session"),
                 JsonBody(new { title = "Auto Prompt" }), cancellationToken);
@@ -131,15 +98,23 @@ internal sealed class OpenCodeService : IDisposable
             sessionId = session.RootElement.GetProperty("id").GetString();
             if (string.IsNullOrWhiteSpace(sessionId)) throw new InvalidDataException("OpenCodeからセッションIDが返りませんでした。");
 
-            var prompt = "次の日本語の文字起こしを、元の意図・対象・条件を保った短く明確な指示文に整えてください。\n" +
-                         "出力は日本語、最大10行、前置きや解説なし。必要なら箇条書きを使い、曖昧な事実を勝手に補わないでください。\n\n" + transcript;
-            using var message = await _http.PostAsync(new Uri(_baseUri!, $"session/{Uri.EscapeDataString(sessionId)}/message"),
-                JsonBody(new { agent = AgentId, parts = new[] { new { type = "text", text = prompt } } }), cancellationToken);
-            var body = await message.Content.ReadAsStringAsync(cancellationToken);
+            const string systemPrompt = "あなたは日本語の音声入力を簡潔なプロンプトに整える編集者です。ユーザーの意図・対象・条件を保ち、事実を補わず、出力は日本語で最大10行にしてください。前置きや解説は付けず、ツールを使わずに文章だけを返してください。";
+            var prompt = "次の文字起こしを、元の意味を保った短く明確な指示文に整えてください。\n\n" + transcript;
+            var body = new
+            {
+                agent = "plan",
+                model = new { providerID = ProviderId, modelID = ModelId },
+                system = systemPrompt,
+                tools = new Dictionary<string, bool> { ["*"] = false },
+                parts = new[] { new { type = "text", text = prompt } }
+            };
+            using var message = await _http.PostAsync(
+                new Uri(_baseUri!, $"session/{Uri.EscapeDataString(sessionId)}/message"), JsonBody(body), cancellationToken);
+            var responseBody = await message.Content.ReadAsStringAsync(cancellationToken);
             if (!message.IsSuccessStatusCode)
-                throw new HttpRequestException(BuildProviderError(message.StatusCode, body), null, message.StatusCode);
+                throw new HttpRequestException(BuildProviderError(message.StatusCode, responseBody), null, message.StatusCode);
 
-            using var response = JsonDocument.Parse(body);
+            using var response = JsonDocument.Parse(responseBody);
             var texts = new List<string>();
             if (response.RootElement.TryGetProperty("parts", out var parts) && parts.ValueKind == JsonValueKind.Array)
             {
@@ -162,7 +137,8 @@ internal sealed class OpenCodeService : IDisposable
             {
                 try
                 {
-                    using var delete = await _http.DeleteAsync(new Uri(_baseUri!, $"session/{Uri.EscapeDataString(sessionId)}"), cancellationToken);
+                    using var delete = await _http.DeleteAsync(
+                        new Uri(_baseUri!, $"session/{Uri.EscapeDataString(sessionId)}"), cancellationToken);
                 }
                 catch { }
             }
@@ -177,43 +153,127 @@ internal sealed class OpenCodeService : IDisposable
         _gate.Dispose();
     }
 
-    private static string BuildConfiguration() => JsonSerializer.Serialize(
-        new Dictionary<string, object>
+    private async Task EnsureZenModelAvailableAsync(CancellationToken cancellationToken)
+    {
+        using var response = await _http.GetAsync(new Uri(_baseUri!, "provider"), cancellationToken);
+        response.EnsureSuccessStatusCode();
+        using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync(cancellationToken));
+        var root = document.RootElement;
+        var connected = root.TryGetProperty("connected", out var providers) && providers.ValueKind == JsonValueKind.Array &&
+                        providers.EnumerateArray().Any(provider => provider.ValueKind == JsonValueKind.String && provider.GetString() == ProviderId);
+        if (!connected)
+            throw new InvalidOperationException("OpenCode Zenが接続されていません。OpenCodeでOpenCode Zenを接続してから、Setupをやり直してください。アプリ内にAPIキーを入力する必要はありません。");
+
+        var modelAvailable = false;
+        if (root.TryGetProperty("all", out var allProviders) && allProviders.ValueKind == JsonValueKind.Array)
         {
-            ["$schema"] = "https://opencode.ai/config.json",
-            ["model"] = $"zen/{ModelId}",
-            ["small_model"] = $"zen/{ModelId}",
-            ["plugin"] = Array.Empty<string>(),
-            ["mcp"] = new { },
-            ["tools"] = new Dictionary<string, bool> { ["*"] = false },
-            ["provider"] = new Dictionary<string, object>
+            foreach (var provider in allProviders.EnumerateArray())
             {
-                ["zen"] = new
+                if (!provider.TryGetProperty("id", out var id) || id.GetString() != ProviderId ||
+                    !provider.TryGetProperty("models", out var models)) continue;
+                modelAvailable = models.ValueKind switch
                 {
-                    npm = "@ai-sdk/openai",
-                    name = "OpenCode Zen",
-                    options = new { baseURL = "https://opencode.ai/zen/v1", apiKey = "{env:AUTOPROMPT_ZEN_API_KEY}" },
-                    models = new Dictionary<string, object>
-                    {
-                        [ModelId] = new
-                        {
-                            name = "Muse Spark 1.3 Contributor Free",
-                            limit = new { context = 128_000, output = 4_096 }
-                        }
-                    }
-                }
-            },
-            ["agent"] = new Dictionary<string, object>
-            {
-                [AgentId] = new
-                {
-                    mode = "primary",
-                    model = $"zen/{ModelId}",
-                    permission = new Dictionary<string, string> { ["*"] = "deny" },
-                    prompt = "You only rewrite the user's Japanese speech transcript into a concise Japanese prompt. Preserve intent and constraints. Output at most 10 lines, with no preamble or explanation. Do not invent details. Do not use tools."
-                }
+                    JsonValueKind.Object => models.TryGetProperty(ModelId, out _),
+                    JsonValueKind.Array => models.EnumerateArray().Any(model =>
+                        model.TryGetProperty("id", out var modelId) && modelId.GetString() == ModelId),
+                    _ => false
+                };
+                break;
             }
-        });
+        }
+        if (!modelAvailable)
+            throw new InvalidOperationException("接続中のOpenCode ZenでMuse Spark 1.3 Contributor Freeを確認できません。OpenCodeのモデル一覧と接続状態を確認してください。");
+    }
+
+    private static OpenCodeCommand? FindOpenCodeCommand()
+    {
+        var directories = (Environment.GetEnvironmentVariable("PATH") ?? string.Empty)
+            .Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(path => path.Trim('"'))
+            .Where(Directory.Exists)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        OpenCodeCommand? commandScript = null;
+        foreach (var directory in directories)
+        {
+            var shim = Path.Combine(directory, "opencode.cmd");
+            if (!File.Exists(shim)) continue;
+            var target = ResolveNpmShimTarget(shim);
+            if (target is not null) return new OpenCodeCommand(target, OpenCodeLaunchKind.Executable);
+            commandScript ??= new OpenCodeCommand(shim, OpenCodeLaunchKind.CommandScript);
+        }
+
+        foreach (var directory in directories)
+        {
+            var executable = Path.Combine(directory, "opencode.exe");
+            if (File.Exists(executable))
+                return new OpenCodeCommand(executable, OpenCodeLaunchKind.Executable);
+        }
+
+        if (commandScript is not null) return commandScript;
+
+        foreach (var directory in directories)
+        {
+            var script = Path.Combine(directory, "opencode.ps1");
+            if (File.Exists(script))
+                return new OpenCodeCommand(script, OpenCodeLaunchKind.PowerShellScript);
+        }
+
+        return null;
+    }
+
+    private static string? ResolveNpmShimTarget(string shimPath)
+    {
+        try
+        {
+            var script = File.ReadAllText(shimPath);
+            var match = Regex.Match(script,
+                "\\\"%dp0%[\\\\/](?<relative>node_modules[\\\\/]opencode-ai[\\\\/]bin[\\\\/]opencode\\.exe)\\\"",
+                RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+            if (!match.Success) return null;
+            var relative = match.Groups["relative"].Value.Replace('\\', Path.DirectorySeparatorChar);
+            var target = Path.GetFullPath(Path.Combine(Path.GetDirectoryName(shimPath)!, relative));
+            return File.Exists(target) ? target : null;
+        }
+        catch { return null; }
+    }
+
+    private static ProcessStartInfo CreateStartInfo(OpenCodeCommand command, int port, string workspace)
+    {
+        var info = new ProcessStartInfo
+        {
+            WorkingDirectory = workspace,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true
+        };
+        var arguments = $"serve --hostname 127.0.0.1 --port {port.ToString(System.Globalization.CultureInfo.InvariantCulture)}";
+        switch (command.Kind)
+        {
+            case OpenCodeLaunchKind.Executable:
+                info.FileName = command.Path;
+                foreach (var argument in new[] { "serve", "--hostname", "127.0.0.1", "--port", port.ToString(System.Globalization.CultureInfo.InvariantCulture) })
+                    info.ArgumentList.Add(argument);
+                break;
+            case OpenCodeLaunchKind.CommandScript:
+                info.FileName = Environment.GetEnvironmentVariable("ComSpec") ?? "cmd.exe";
+                info.ArgumentList.Add("/d");
+                info.ArgumentList.Add("/s");
+                info.ArgumentList.Add("/c");
+                info.ArgumentList.Add($"call \"{command.Path}\" {arguments}");
+                break;
+            case OpenCodeLaunchKind.PowerShellScript:
+                info.FileName = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System),
+                    "WindowsPowerShell", "v1.0", "powershell.exe");
+                foreach (var argument in new[] { "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", command.Path,
+                             "serve", "--hostname", "127.0.0.1", "--port", port.ToString(System.Globalization.CultureInfo.InvariantCulture) })
+                    info.ArgumentList.Add(argument);
+                break;
+        }
+        return info;
+    }
 
     private void ConfigureHttpAuth(string password)
     {
@@ -236,9 +296,10 @@ internal sealed class OpenCodeService : IDisposable
         catch { }
         return statusCode switch
         {
-            HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden => "Zenの認証に失敗しました。APIキーを確認してください。",
-            HttpStatusCode.TooManyRequests => "Zenの利用上限に達したようです。時間をおいて再試行してください。",
-            _ => $"OpenCode Zenからエラー ({(int)statusCode}) が返りました。{safeDetail}".Trim()
+            HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden => "OpenCode Zenの認証を確認できません。OpenCode側の接続状態を確認してください。",
+            HttpStatusCode.NotFound => "OpenCode Zenで指定モデルが見つかりません。モデル一覧と利用可能なプランを確認してください。",
+            HttpStatusCode.TooManyRequests => "OpenCode Zenの利用上限に達したようです。時間をおいて再試行してください。",
+            _ => $"OpenCodeからエラー ({(int)statusCode}) が返りました。{safeDetail}".Trim()
         };
     }
 
@@ -256,18 +317,19 @@ internal sealed class OpenCodeService : IDisposable
         var process = _process;
         _process = null;
         _baseUri = null;
-        _sessionPassword = null;
-        if (process is null) return;
-        try
+        if (process is not null)
         {
-            if (!process.HasExited)
+            try
             {
-                process.Kill(entireProcessTree: true);
-                process.WaitForExit(3000);
+                if (!process.HasExited)
+                {
+                    process.Kill(entireProcessTree: true);
+                    process.WaitForExit(3000);
+                }
             }
+            catch { }
+            process.Dispose();
         }
-        catch { }
-        process.Dispose();
         var workspace = _workspace;
         _workspace = null;
         if (!string.IsNullOrWhiteSpace(workspace))
@@ -275,4 +337,7 @@ internal sealed class OpenCodeService : IDisposable
             try { Directory.Delete(workspace, recursive: true); } catch { }
         }
     }
+
+    private sealed record OpenCodeCommand(string Path, OpenCodeLaunchKind Kind);
+    private enum OpenCodeLaunchKind { Executable, CommandScript, PowerShellScript }
 }
