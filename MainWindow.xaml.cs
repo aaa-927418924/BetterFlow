@@ -15,6 +15,7 @@ public partial class MainWindow : System.Windows.Window
     private readonly MicrophoneRecorder _recorder = new();
     private readonly CancellationTokenSource _lifetime = new();
     private readonly OpenCodeService _openCode = new();
+    private readonly IndicatorWindow _indicator;
     private System.Windows.Forms.NotifyIcon? _trayIcon;
     private System.Windows.Forms.ContextMenuStrip? _trayMenu;
     private ToolStripMenuItem? _startupMenuItem;
@@ -28,10 +29,12 @@ public partial class MainWindow : System.Windows.Window
     private bool _hotkeyRegistered;
     private bool _exitRequested;
     private bool _syncingStartupMenu;
+    private bool _isCapturingShortcut;
 
     public MainWindow()
     {
         InitializeComponent();
+        _indicator = new IndicatorWindow();
         if (Bootstrapper.IsModelReady())
         {
             TitleText.Text = "アプリを起動しています…";
@@ -50,7 +53,7 @@ public partial class MainWindow : System.Windows.Window
         base.OnSourceInitialized(e);
         _source = (HwndSource?)System.Windows.PresentationSource.FromVisual(this);
         _source?.AddHook(WindowMessageHook);
-        _hotkeyRegistered = _hotkey.Register(new WindowInteropHelper(this).Handle);
+        _hotkeyRegistered = _hotkey.Register(new WindowInteropHelper(this).Handle, GetConfiguredHotkey());
     }
 
     private async void MainWindow_Loaded(object sender, System.Windows.RoutedEventArgs e)
@@ -76,7 +79,7 @@ public partial class MainWindow : System.Windows.Window
             await LoadRecognizerAsync(_lifetime.Token);
             SetupStatus.Text = string.Empty;
         }
-        catch (OperationCanceledException) when (_closing) { }
+        catch (OperationCanceledException) when (_closing) { _indicator.HideStatus(); }
         catch (Exception ex)
         {
             TitleText.Text = "起動できませんでした。";
@@ -169,7 +172,10 @@ public partial class MainWindow : System.Windows.Window
         _asr = recognizer;
         TitleText.Text = "セットアップが完了しました。";
         BodyText.Text = "入力欄にカーソルを置き、ショートカットを押して話してください。\nもう一度押すと変換して貼り付けます。";
-        CapacityText.Text = "Ctrl + Shift + Space";
+        CapacityText.Visibility = System.Windows.Visibility.Collapsed;
+        ShortcutSettingsPanel.Visibility = System.Windows.Visibility.Visible;
+        ShortcutCaptureStatus.Text = string.Empty;
+        UpdateShortcutDisplay();
         PrivacyNotice.Visibility = System.Windows.Visibility.Visible;
         ActionButton.Content = "録音を開始";
         RuntimeStatus.Text = _hotkeyRegistered ? "準備完了" : "ショートカットを登録できません。ボタンから録音できます。";
@@ -191,6 +197,7 @@ public partial class MainWindow : System.Windows.Window
                 _recorder.Start();
                 ActionButton.Content = "録音を停止して変換";
                 RuntimeStatus.Text = "録音中 · もう一度ショートカットで停止";
+                _indicator.ShowStatus("録音中");
             }
             catch (Exception ex) { RuntimeStatus.Text = ex.Message; }
             return;
@@ -205,6 +212,7 @@ public partial class MainWindow : System.Windows.Window
         ActionButton.IsEnabled = false;
         ActionButton.Content = "音声を文字起こししています…";
         RuntimeStatus.Text = "音声をPC内で文字起こししています…";
+        _indicator.ShowStatus("認識中");
         float[]? samples = null;
         try
         {
@@ -217,6 +225,7 @@ public partial class MainWindow : System.Windows.Window
 
             string prompt;
             string resultStatus;
+            _indicator.HideStatus();
             if (!EnsureContributorConsent())
             {
                 prompt = PromptFormatter.PlainFallback(transcript);
@@ -225,6 +234,7 @@ public partial class MainWindow : System.Windows.Window
             else if (_openCode.IsRunning)
             {
                 RuntimeStatus.Text = "OpenCode Zenで10行以下に整えています…";
+                _indicator.ShowStatus("整形中");
                 try
                 {
                     var response = await _openCode.RewriteAsync(transcript, _lifetime.Token);
@@ -246,9 +256,14 @@ public partial class MainWindow : System.Windows.Window
             ResultBox.Text = prompt;
             ResultPanel.Visibility = System.Windows.Visibility.Visible;
             PasteAndShow(prompt, resultStatus);
+            _indicator.ShowStatus("完了");
         }
-        catch (OperationCanceledException) when (_closing) { }
-        catch (Exception ex) { RuntimeStatus.Text = ex.Message; }
+        catch (OperationCanceledException) when (_closing) { _indicator.HideStatus(); }
+        catch (Exception ex)
+        {
+            RuntimeStatus.Text = ex.Message;
+            _indicator.ShowStatus("処理に失敗しました", TimeSpan.FromSeconds(2));
+        }
         finally
         {
             if (samples is not null) Array.Clear(samples);
@@ -296,6 +311,152 @@ public partial class MainWindow : System.Windows.Window
             RuntimeStatus.Text = "プロンプトをクリップボードにコピーしました。";
         }
         catch (Exception ex) { RuntimeStatus.Text = ex.Message; }
+    }
+
+    private void ShortcutChangeButton_Click(object sender, System.Windows.RoutedEventArgs e)
+    {
+        if (_asr is null || _isBusy || _isCapturingShortcut) return;
+
+        _isCapturingShortcut = true;
+        _hotkey.Unregister();
+        _hotkeyRegistered = false;
+        ShortcutChangeButton.Content = "入力中…";
+        ShortcutCaptureStatus.Text = "右Alt単独、またはCtrl / Shift / Altなどとの組み合わせを押してください。Escでキャンセルできます。";
+        ShortcutChangeButton.Focus();
+    }
+
+    private void MainWindow_PreviewKeyDown(object sender, System.Windows.Input.KeyEventArgs e)
+    {
+        if (!_isCapturingShortcut) return;
+
+        var key = e.Key == Key.System ? e.SystemKey : e.Key;
+        if (key == Key.Escape)
+        {
+            CancelShortcutCapture();
+            e.Handled = true;
+            return;
+        }
+
+        var modifiers = Keyboard.Modifiers;
+        var otherModifiers = ModifierKeys.Control | ModifierKeys.Shift | ModifierKeys.Windows;
+        if (key == Key.RightAlt
+            && (modifiers & otherModifiers) == ModifierKeys.None
+            && !Keyboard.IsKeyDown(Key.LeftAlt))
+        {
+            ApplyShortcut(new HotkeyBinding(0, HotkeyBinding.RightAltVirtualKey));
+            e.Handled = true;
+            return;
+        }
+
+        if (IsModifierKey(key))
+        {
+            ShortcutCaptureStatus.Text = $"{FormatPressedModifiers(modifiers)}を押しています。続けて組み合わせるキーを押してください。";
+            e.Handled = true;
+            return;
+        }
+
+        var nativeModifiers = ToNativeModifiers(modifiers);
+        var virtualKey = KeyInterop.VirtualKeyFromKey(key);
+        if (nativeModifiers == 0)
+        {
+            ShortcutCaptureStatus.Text = "単独キーは登録できません。右Alt単独、または修飾キーとの組み合わせを使ってください。";
+        }
+        else if (virtualKey > 0)
+        {
+            ApplyShortcut(new HotkeyBinding(nativeModifiers, (uint)virtualKey));
+        }
+
+        e.Handled = true;
+    }
+
+    private void ApplyShortcut(HotkeyBinding binding)
+    {
+        var current = GetConfiguredHotkey();
+        var handle = new WindowInteropHelper(this).Handle;
+        if (!_hotkey.Register(handle, binding))
+        {
+            var restored = _hotkey.Register(handle, current);
+            if (restored)
+            {
+                _hotkey.Unregister();
+            }
+            _hotkeyRegistered = false;
+            ShortcutCaptureStatus.Text = "このショートカットは登録できませんでした。別のキーを試してください。";
+            return;
+        }
+
+        var oldModifiers = _settings.ShortcutModifiers;
+        var oldVirtualKey = _settings.ShortcutVirtualKey;
+        _settings.ShortcutModifiers = binding.Modifiers;
+        _settings.ShortcutVirtualKey = binding.VirtualKey;
+        try
+        {
+            _settingsStore.Save(_settings);
+        }
+        catch (Exception ex)
+        {
+            _settings.ShortcutModifiers = oldModifiers;
+            _settings.ShortcutVirtualKey = oldVirtualKey;
+            _hotkeyRegistered = _hotkey.Register(handle, current);
+            _isCapturingShortcut = false;
+            ShortcutChangeButton.Content = "変更";
+            UpdateShortcutDisplay();
+            ShortcutCaptureStatus.Text = "設定を保存できませんでした。以前のショートカットに戻しました。";
+            RuntimeStatus.Text = ex.Message;
+            return;
+        }
+
+        _hotkeyRegistered = true;
+        _isCapturingShortcut = false;
+        ShortcutChangeButton.Content = "変更";
+        UpdateShortcutDisplay();
+        ShortcutCaptureStatus.Text = "ショートカットを保存しました。";
+        RuntimeStatus.Text = "準備完了";
+    }
+
+    private void CancelShortcutCapture()
+    {
+        _isCapturingShortcut = false;
+        _hotkeyRegistered = _hotkey.Register(new WindowInteropHelper(this).Handle, GetConfiguredHotkey());
+        ShortcutChangeButton.Content = "変更";
+        ShortcutCaptureStatus.Text = "変更をキャンセルしました。";
+    }
+
+    private HotkeyBinding GetConfiguredHotkey()
+    {
+        var binding = new HotkeyBinding(_settings.ShortcutModifiers, _settings.ShortcutVirtualKey);
+        return binding.IsUsable ? binding : new HotkeyBinding(0, HotkeyBinding.RightAltVirtualKey);
+    }
+
+    private void UpdateShortcutDisplay()
+    {
+        var shortcut = GlobalHotkey.Format(GetConfiguredHotkey());
+        ShortcutCurrentText.Text = shortcut;
+        System.Windows.Automation.AutomationProperties.SetName(
+            ShortcutChangeButton, $"ショートカットキーを変更。現在: {shortcut}");
+    }
+
+    private static bool IsModifierKey(Key key) => key is Key.LeftCtrl or Key.RightCtrl
+        or Key.LeftShift or Key.RightShift or Key.LeftAlt or Key.RightAlt or Key.LWin or Key.RWin;
+
+    private static uint ToNativeModifiers(ModifierKeys modifiers)
+    {
+        uint native = 0;
+        if ((modifiers & ModifierKeys.Alt) != 0) native |= 0x0001;
+        if ((modifiers & ModifierKeys.Control) != 0) native |= 0x0002;
+        if ((modifiers & ModifierKeys.Shift) != 0) native |= 0x0004;
+        if ((modifiers & ModifierKeys.Windows) != 0) native |= 0x0008;
+        return native;
+    }
+
+    private static string FormatPressedModifiers(ModifierKeys modifiers)
+    {
+        var names = new List<string>(4);
+        if ((modifiers & ModifierKeys.Control) != 0) names.Add("Ctrl");
+        if ((modifiers & ModifierKeys.Shift) != 0) names.Add("Shift");
+        if ((modifiers & ModifierKeys.Alt) != 0) names.Add("Alt");
+        if ((modifiers & ModifierKeys.Windows) != 0) names.Add("Windows");
+        return names.Count == 0 ? "修飾キー" : string.Join(" + ", names);
     }
 
     private void DragRegion_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
@@ -374,6 +535,8 @@ public partial class MainWindow : System.Windows.Window
 
     private void HideToTray()
     {
+        if (_isCapturingShortcut)
+            CancelShortcutCapture();
         ShowInTaskbar = false;
         Hide();
     }
@@ -420,6 +583,7 @@ public partial class MainWindow : System.Windows.Window
         SystemEvents.SessionEnding -= SystemEvents_SessionEnding;
         _hotkey.Dispose();
         _source?.RemoveHook(WindowMessageHook);
+        _indicator.Close();
         _recorder.Dispose();
         _asr?.Dispose();
         _openCode.Dispose();

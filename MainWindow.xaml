@@ -5,7 +5,8 @@
         Icon="pack://application:,,,/AutoPrompt;component/Assets/AutoPrompt.ico"
         Width="640" Height="640" MinWidth="640" MinHeight="640" MaxWidth="640" MaxHeight="640"
         WindowStartupLocation="CenterScreen" WindowStyle="None" AllowsTransparency="True"
-        Background="Transparent" ResizeMode="NoResize" UseLayoutRounding="True" SnapsToDevicePixels="True">
+        Background="Transparent" ResizeMode="NoResize" UseLayoutRounding="True" SnapsToDevicePixels="True"
+        PreviewKeyDown="MainWindow_PreviewKeyDown">
     <Grid Background="Transparent">
         <Border Background="{StaticResource OuterPanelBrush}"
                 CornerRadius="34" Padding="20" HorizontalAlignment="Stretch" VerticalAlignment="Stretch">
@@ -34,6 +35,21 @@
                                    FontSize="16" LineHeight="22" Margin="0,20,0,0" />
                         <TextBlock x:Name="CapacityText" Text="必要な空き容量: 約1.2 GB"
                                    FontSize="15" Margin="0,18,0,0" />
+                        <StackPanel x:Name="ShortcutSettingsPanel" Margin="0,18,0,0" Visibility="Collapsed">
+                            <TextBlock Text="ショートカットキー" FontSize="13" Foreground="{StaticResource MutedBrush}" />
+                            <DockPanel Margin="0,4,0,0" LastChildFill="True">
+                                <Button x:Name="ShortcutChangeButton" DockPanel.Dock="Right" Content="変更"
+                                        MinWidth="88" Height="40" Padding="14,0" Margin="12,0,0,0"
+                                        Background="#383838" Foreground="#F4F4F4" BorderBrush="#686868"
+                                        BorderThickness="1" FontFamily="Yu Gothic UI" FontSize="14"
+                                        Cursor="Hand" Click="ShortcutChangeButton_Click"
+                                        AutomationProperties.Name="ショートカットキーを変更" />
+                                <TextBlock x:Name="ShortcutCurrentText" FontSize="17" VerticalAlignment="Center" />
+                            </DockPanel>
+                            <TextBlock x:Name="ShortcutCaptureStatus" Text="" FontSize="12"
+                                       Foreground="{StaticResource MutedBrush}" LineHeight="18"
+                                       Margin="0,5,0,0" AutomationProperties.LiveSetting="Polite" />
+                        </StackPanel>
                         <TextBlock x:Name="PrivacyNotice"
                                    Text="音声はPC内で処理し、文字起こしテキストをOpenCode Zenへ送信します。"
                                    FontSize="12" LineHeight="18" Foreground="{StaticResource MutedBrush}"
