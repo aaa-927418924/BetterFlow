@@ -132,14 +132,14 @@ public partial class MainWindow : System.Windows.Window
 
     private async void ActionButton_Click(object sender, System.Windows.RoutedEventArgs e)
     {
-        if (_isBusy)
+        if (_selectionEditSessionActive)
         {
             await CancelAudioProcessingAsync();
             return;
         }
-        if (_selectionEditSessionActive)
+        if (_isBusy)
         {
-            await RecordButton_Click();
+            await CancelAudioProcessingAsync();
             return;
         }
         if (_asr is null)
@@ -725,12 +725,11 @@ public partial class MainWindow : System.Windows.Window
 
     private async Task CancelAudioProcessingAsync()
     {
-        if (_selectionEditSessionActive && _isBusy &&
-            _selectionEditCancellation is { IsCancellationRequested: false } selectionCancellation)
+        if (_selectionEditSessionActive)
         {
             _selectionEditSessionStopping = true;
             _indicator.ShowStatus("キャンセル中");
-            selectionCancellation.Cancel();
+            _selectionEditCancellation?.Cancel();
             try { await _continuousRecorder.StopAsync(CancellationToken.None); }
             catch { }
             _continuousRecorder.DiscardPendingUtterances();

@@ -157,3 +157,8 @@
 - 通常の文字起こし/AI整形中にショートカットを再度押すと、処理用CancellationTokenをキャンセルし、貼り付け前にもキャンセルを確認する。選択文編集の処理中はセッションをキャンセルし、連続録音を止め、未処理の発話を破棄する。OpenCode起動/生成へキャンセルトークンを伝える。
 - 設定ウィンドウ下部のRuntimeStatusログ表示を折りたたみ、セットアップ進捗表示は残す。設定画面の実表示と実処理中のキャンセル操作は未確認。
 - Release buildは警告0・エラー0、win-x64単体EXE発行に成功。`artifacts/publish-cancel-and-compact-settings/BetterFlow.exe`と`dist/Better Flow.exe`は81,819,309 bytes、SHA-256 `9F644027E6939557FD8078719B9BA35F62420C38DFB819BD3D5651284D844972`で一致。差し替え前EXEを`artifacts/BetterFlow-before-cancel-and-compact-settings.exe`へ保管。テストスイートは未実施。
+
+## 選択文編集モード中のショートカット即時キャンセル（2026-10-14）
+
+- 編集セッションが有効な間は、次のショートカットを「録音停止して未処理発話を処理する」経路に渡さず、即座にセッションキャンセルへ分岐する。キャンセルトークンで処理中のASR/OpenCode編集を止め、連続マイクを停止し、待機中の発話を破棄する。
+- Release buildは警告0・エラー0、win-x64単体EXE発行と`dist/Better Flow.exe`の差し替えに成功。`artifacts/publish-edit-session-hotkey-cancel/BetterFlow.exe`と配布先は81,819,276 bytes、SHA-256 `605A9C1DDE7D8EDFD425FF64A9640F06C056B7A05B80214A971FCEE46BB1C474`で一致。差し替え前EXEは`artifacts/BetterFlow-before-edit-session-hotkey-cancel.exe`へ保存。テストスイートは未実施で、実アプリ上のショートカットキャンセル動作は未確認。
