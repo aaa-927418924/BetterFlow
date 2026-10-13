@@ -12,22 +12,25 @@ internal sealed class ContinuousMicrophoneRecorder : IDisposable
 {
     private const int SampleRate = 16000;
     private const int BytesPerSample = sizeof(short);
-    private const int PreRollChunkCount = 3;
+    private const int VadFrameBytes = SileroVoiceActivityDetector.WindowBytes;
+    private const int PreRollFrameCount = 16;
+    private const int MinimumConsecutiveSpeechFrames = 8;
     private const int MinimumUtteranceSamples = 2400;
     private const int MaximumQueuedUtterances = 8;
-    private const float MinimumVoiceRms = 0.0055f;
-    private const float NoiseMultiplier = 2.5f;
-    private static readonly TimeSpan EndOfUtteranceSilence = TimeSpan.FromMilliseconds(850);
+    private static readonly TimeSpan EndOfUtteranceSilence = TimeSpan.FromMilliseconds(700);
 
     private readonly object _sync = new();
     private readonly Queue<byte[]> _preRoll = new();
+    private readonly byte[] _vadFrameBuffer = new byte[VadFrameBytes];
     private WaveInEvent? _waveIn;
+    private SileroVoiceActivityDetector? _vad;
     private MemoryStream? _speechAudio;
     private Channel<float[]>? _utterances;
     private TaskCompletionSource? _stopped;
     private Task? _stopTask;
     private bool _isSpeaking;
-    private float _noiseFloor = 0.0015f;
+    private int _vadFrameBufferedBytes;
+    private int _consecutiveSpeechFrames;
     private long _lastVoiceTimestamp;
     private Exception? _recordingError;
 
@@ -42,10 +45,12 @@ internal sealed class ContinuousMicrophoneRecorder : IDisposable
         if (deviceNumber < -1 || deviceNumber >= WaveInEvent.DeviceCount)
             throw new InvalidOperationException("選択したマイクが見つかりません。一覧を更新するか、システム設定のマイクを選んでください。");
 
+        var vad = new SileroVoiceActivityDetector();
         lock (_sync)
         {
             ClearQueuedSamplesLocked();
             ClearBuffersLocked();
+            _vad = vad;
             _utterances = Channel.CreateBounded<float[]>(new BoundedChannelOptions(MaximumQueuedUtterances)
             {
                 SingleReader = true,
@@ -54,7 +59,7 @@ internal sealed class ContinuousMicrophoneRecorder : IDisposable
             });
             _speechAudio = new MemoryStream();
             _isSpeaking = false;
-            _noiseFloor = 0.0015f;
+            _consecutiveSpeechFrames = 0;
             _lastVoiceTimestamp = 0;
             _recordingError = null;
             _stopped = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -85,6 +90,8 @@ internal sealed class ContinuousMicrophoneRecorder : IDisposable
                 _utterances?.Writer.TryComplete();
                 _utterances = null;
                 ClearBuffersLocked();
+                _vad?.Dispose();
+                _vad = null;
             }
             throw;
         }
@@ -127,6 +134,8 @@ internal sealed class ContinuousMicrophoneRecorder : IDisposable
                 ClearQueuedSamplesLocked();
                 _utterances?.Writer.TryComplete();
                 ClearBuffersLocked();
+                _vad?.Dispose();
+                _vad = null;
             }
             throw;
         }
@@ -135,15 +144,20 @@ internal sealed class ContinuousMicrophoneRecorder : IDisposable
         recorder.RecordingStopped -= OnRecordingStopped;
         recorder.Dispose();
 
+        SileroVoiceActivityDetector? vad;
         lock (_sync)
         {
             _waveIn = null;
             if (_isSpeaking)
                 FinalizeUtteranceLocked();
             _isSpeaking = false;
+            _consecutiveSpeechFrames = 0;
             ClearPreRollLocked();
             _utterances?.Writer.TryComplete(_recordingError);
+            vad = _vad;
+            _vad = null;
         }
+        vad?.Dispose();
     }
 
     public void DiscardPendingUtterances()
@@ -170,6 +184,8 @@ internal sealed class ContinuousMicrophoneRecorder : IDisposable
             ClearQueuedSamplesLocked();
             _utterances = null;
             ClearBuffersLocked();
+            _vad?.Dispose();
+            _vad = null;
         }
     }
 
@@ -195,36 +211,58 @@ internal sealed class ContinuousMicrophoneRecorder : IDisposable
 
     private void ProcessChunkLocked(byte[] chunk)
     {
-        if (_speechAudio is null || _utterances is null)
+        try
         {
-            CryptographicOperations.ZeroMemory(chunk);
-            return;
-        }
+            if (_speechAudio is null || _utterances is null || _vad is null || _recordingError is not null)
+                return;
 
-        var rms = CalculateRms(chunk);
-        var threshold = Math.Max(MinimumVoiceRms, _noiseFloor * NoiseMultiplier);
-        var hasVoice = rms >= threshold;
-        if (!_isSpeaking && !hasVoice)
-        {
-            // Track ordinary room noise slowly so the threshold follows the mic without
-            // adapting to brief speech or loud transients.
-            if (rms < 0.04f)
-                _noiseFloor = Math.Clamp(_noiseFloor * 0.96f + rms * 0.04f, 0.0005f, 0.02f);
-            AddPreRollLocked(chunk);
-            return;
-        }
-
-        if (!_isSpeaking)
-        {
-            _isSpeaking = true;
-            while (_preRoll.TryDequeue(out var priorChunk))
+            var sourceOffset = 0;
+            while (sourceOffset < chunk.Length)
             {
-                _speechAudio.Write(priorChunk, 0, priorChunk.Length);
-                CryptographicOperations.ZeroMemory(priorChunk);
+                var bytesToCopy = Math.Min(VadFrameBytes - _vadFrameBufferedBytes, chunk.Length - sourceOffset);
+                Buffer.BlockCopy(chunk, sourceOffset, _vadFrameBuffer, _vadFrameBufferedBytes, bytesToCopy);
+                sourceOffset += bytesToCopy;
+                _vadFrameBufferedBytes += bytesToCopy;
+
+                if (_vadFrameBufferedBytes == VadFrameBytes)
+                {
+                    try { ProcessVadFrameLocked(_vadFrameBuffer); }
+                    finally
+                    {
+                        CryptographicOperations.ZeroMemory(_vadFrameBuffer);
+                        _vadFrameBufferedBytes = 0;
+                    }
+                }
             }
         }
+        finally { CryptographicOperations.ZeroMemory(chunk); }
+    }
 
-        _speechAudio.Write(chunk, 0, chunk.Length);
+    private void ProcessVadFrameLocked(byte[] frame)
+    {
+        if (_speechAudio is null || _utterances is null || _vad is null)
+            return;
+
+        var hasVoice = _vad.AcceptPcm16Frame(frame);
+        if (!_isSpeaking)
+        {
+            AddPreRollLocked(frame);
+            _consecutiveSpeechFrames = hasVoice ? _consecutiveSpeechFrames + 1 : 0;
+            if (_consecutiveSpeechFrames >= MinimumConsecutiveSpeechFrames)
+            {
+                _isSpeaking = true;
+                while (_preRoll.TryDequeue(out var priorFrame))
+                {
+                    _speechAudio.Write(priorFrame, 0, priorFrame.Length);
+                    CryptographicOperations.ZeroMemory(priorFrame);
+                }
+                _lastVoiceTimestamp = Stopwatch.GetTimestamp();
+                _consecutiveSpeechFrames = 0;
+            }
+            return;
+        }
+
+        _speechAudio.Write(frame, 0, frame.Length);
         if (hasVoice)
         {
             _lastVoiceTimestamp = Stopwatch.GetTimestamp();
@@ -234,8 +272,6 @@ internal sealed class ContinuousMicrophoneRecorder : IDisposable
         {
             FinalizeUtteranceLocked();
         }
-
-        CryptographicOperations.ZeroMemory(chunk);
     }
 
     private void FinalizeUtteranceLocked()
@@ -247,7 +283,9 @@ internal sealed class ContinuousMicrophoneRecorder : IDisposable
             CryptographicOperations.ZeroMemory(audioSegment.Array.AsSpan(audioSegment.Offset, audioSegment.Count));
         _speechAudio.SetLength(0);
         _isSpeaking = false;
+        _consecutiveSpeechFrames = 0;
         _lastVoiceTimestamp = 0;
+        _vad?.Reset();
         var sampleCount = bytes.Length / BytesPerSample;
         if (sampleCount < MinimumUtteranceSamples)
         {
@@ -271,26 +309,13 @@ internal sealed class ContinuousMicrophoneRecorder : IDisposable
         }
     }
 
-    private static float CalculateRms(ReadOnlySpan<byte> bytes)
+    private void AddPreRollLocked(ReadOnlySpan<byte> frame)
     {
-        var sampleCount = bytes.Length / BytesPerSample;
-        if (sampleCount == 0) return 0;
-        double sumSquares = 0;
-        for (var i = 0; i < sampleCount; i++)
+        _preRoll.Enqueue(frame.ToArray());
+        while (_preRoll.Count > PreRollFrameCount)
         {
-            var sample = BinaryPrimitives.ReadInt16LittleEndian(bytes.Slice(i * BytesPerSample, BytesPerSample)) / 32768.0;
-            sumSquares += sample * sample;
-        }
-        return (float)Math.Sqrt(sumSquares / sampleCount);
-    }
-
-    private void AddPreRollLocked(byte[] chunk)
-    {
-        _preRoll.Enqueue(chunk);
-        while (_preRoll.Count > PreRollChunkCount)
-        {
-            var old = _preRoll.Dequeue();
-            CryptographicOperations.ZeroMemory(old);
+            var oldFrame = _preRoll.Dequeue();
+            CryptographicOperations.ZeroMemory(oldFrame);
         }
     }
 
@@ -310,6 +335,9 @@ internal sealed class ContinuousMicrophoneRecorder : IDisposable
     private void ClearBuffersLocked()
     {
         ClearPreRollLocked();
+        CryptographicOperations.ZeroMemory(_vadFrameBuffer);
+        _vadFrameBufferedBytes = 0;
+        _consecutiveSpeechFrames = 0;
         if (_speechAudio is not null)
         {
             if (_speechAudio.TryGetBuffer(out var segment) && segment.Array is not null)

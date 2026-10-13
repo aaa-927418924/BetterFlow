@@ -19,7 +19,7 @@
 - 音声入力デバイスは設定画面で選択可能にする。初期値はWindowsの既定マイク（WaveIn mapper）で、個別デバイスの指定も保存する。
 - OpenCodeのheadless serverはAIモードを使う時だけloopbackの空きポートで起動し、そのサーバープロセスだけに一時的なHTTP Basic認証を設定する。モードを文字起こしのみに戻す時とアプリ終了時に、自分で起動したサーバーと空の一時作業フォルダーを閉じる。
 - OpenCodeの変換要求では一覧から選んだprovider IDとmodel IDを指定し、既定のPlanエージェントへ文章のみを返す指示を渡す。個別リクエストから全ツールを無効化する設定は送らない。OpenCode Zenの無料枠は、Read等を含まないツール一覧を拒否する既知の挙動があるため、Planの標準制限を使う。一時セッションは変換後に削除する。音声は端末外へ送らず、AIモード時だけ文字起こし、または選択文と音声指示を選択モデルへ送信する。OpenCode Desktopで選択した接続先の利用規約とデータ利用条件が適用され、アプリ独自の初回送信確認は表示しない。[OpenCode Zen](https://docs.opencode.ai/docs/zen/)
-- 選択文編集はショートカットで連続録音を開始し、ローカルVADで発話終端を検出してから文字起こし・OpenCode編集・安全な選択範囲の置換を行う。処理後は新しい文を再選択し、同じ入力先で追加の音声指示を受け付ける。前面ウィンドウ、対象UI Automation provider、選択範囲が一致しない場合は貼り付けを中止する。
+- 選択文編集はショートカットで連続録音を開始し、Silero VADで発話区間を検出してから文字起こし・OpenCode編集・安全な選択範囲の置換を行う。16 kHzの512サンプル窓、speech threshold 0.60、8窓（約256 ms）連続判定、512 ms pre-rollを使い、短い雑音による開始を抑える。Sileroモデルは単一EXEに同梱し、起動時にSHA-256を検証してローカルアプリデータへ展開する。処理後は新しい文を再選択し、UI Automationの更新遅延には最大300 msの再試行で対応し、同じ入力先で追加の音声指示を受け付ける。前面ウィンドウ、対象UI Automation provider、選択範囲が一致しない場合は貼り付けを中止する。
 - グローバルショートカットの既定値は右Alt。セットアップ完了後の画面で右Alt単独または修飾キーとの組み合わせへ変更でき、設定は再起動後も保持する。録音ボタンやセットアップ完了見出しは表示せず、右Alt単独は低レベルキーボードフックで検知する。
 - 録音・認識・整形中は画像参照に合わせた背景透過の状態ピルを画面下中央に表示し、画面下端から約12px（フルHD・倍率100%）の位置に置く。クリックとフォーカスを受け取らない。
 
@@ -86,3 +86,5 @@
 - 2026-10-13: 実装前チェックポイント`0c84b66 chore: checkpoint before voice selection editing`を作成。その後、選択中の文章をUI Automation TextPatternで取得し、音声指示をローカルで文字起こししてOpenCodeの選択モデルへ送り、対象アプリ・入力欄・選択文を再検証して置き換える連続編集機能を実装。音声は単語間の約850ms無音で区切り、各編集後に置換文を再選択して、再度ショートカットを押さずに追加指示を受ける。異なる前面アプリや選択範囲の変化を検出した場合は安全のためセッションを終了する。
 - 同日、製品名・ウィンドウ名・トレイ名・OpenCode一時セッション名・アイコン資産・保存先をBetter Flowへ変更。既存`%LOCALAPPDATA%\AutoPrompt`は移動可能なら新しい`%LOCALAPPDATA%\Better Flow`へ同一ボリューム上で移動し、旧アプリが使用中なら旧保存先を使ってデータを保持する。Windows起動時登録も新しい値名へ移行する。
 - `dotnet publish AutoPrompt.csproj -c Release -o artifacts/publish-betterflow-final --no-restore`成功。内部名前空間もBetterFlowへ変更した最終単一EXEを`artifacts/publish-betterflow-final/Better Flow.exe`と`dist/Better Flow.exe`へ発行し、両者は81,292,262 bytes、SHA-256 `DEFDAF24EF6F01CA340FE6C5F34816D2A30D4B9E23AFE3A4CB73079338ADF609`で一致。`dist`には新EXEだけを置いた。NuGet脆弱性フィード取得失敗のNU1900警告あり。アプリ実起動、マイク入力、UI Automationが使える個別アプリでの置換、OpenCodeモデルへの実生成は未確認。
+- 2026-10-13: 選択文編集で短い雑音だけでもAI処理が始まる問題を修正。連続録音のRMSしきい値を廃止し、Sherpa-ONNX内蔵APIからSilero VADを利用する。16 kHz・512サンプル窓、0.60 threshold、連続8窓（約256 ms）の発話判定を開始条件とし、約512 msの先行音声を保持。Silero VADモデルはSherpa-ONNXが公開する互換ONNX（643,854 bytes、SHA-256 `9E2449E1087496D8D4CABA907F23E0BD3F78D91FA552479BB9C23AC09CBB1FD6`）で、単一EXEへ埋め込み、初回使用時に検証してアプリデータへ展開する。AI編集後はUI Automationで挿入文の再選択を最大300 ms再試行し、連続編集を続けられるようにした。
+- `dotnet publish AutoPrompt.csproj -c Release -r win-x64 --self-contained true -o artifacts/publish-betterflow-check --no-restore`成功。発行元と`dist/Better Flow.exe`は81,809,177 bytes、SHA-256 `7938500F38560B673969ABAD3EF7106655676891104BED8879CF02D1B97F1F21`で一致。`dist`には`Better Flow.exe`だけを配置。NuGet脆弱性フィードへ接続できずNU1900警告あり。実マイクでの雑音誤検出率、各対象アプリでの再選択、およびOpenCode生成は未確認。

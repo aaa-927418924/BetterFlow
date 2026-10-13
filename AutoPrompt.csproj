@@ -33,4 +33,9 @@
     <Resource Include="Assets\BetterFlow.png" />
     <Resource Include="Assets\BetterFlow.ico" />
   </ItemGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="Assets\silero_vad.onnx" LogicalName="BetterFlow.Assets.silero_vad.onnx" />
+    <EmbeddedResource Include="Assets\SileroVAD-LICENSE.txt" LogicalName="BetterFlow.Assets.SileroVAD-LICENSE.txt" />
+  </ItemGroup>
 </Project>

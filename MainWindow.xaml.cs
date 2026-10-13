@@ -739,7 +739,8 @@ public partial class MainWindow : System.Windows.Window
                         _settings.OpenCodeModelId,
                         cancellationToken);
 
-                    var result = SelectionEditService.ReplaceCurrentSelection(context, replacement);
+                    var result = await SelectionEditService.ReplaceCurrentSelectionAsync(
+                        context, replacement, cancellationToken);
                     RuntimeStatus.Text = result.Message;
                     _indicator.ShowStatus(result.CanContinue ? "選択文編集中" : "編集を中止",
                         result.CanContinue ? null : TimeSpan.FromSeconds(1));

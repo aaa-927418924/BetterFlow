@@ -68,7 +68,10 @@ internal static class SelectionEditService
         }
     }
 
-    public static SelectionEditResult ReplaceCurrentSelection(SelectionEditContext context, string replacement)
+    public static async Task<SelectionEditResult> ReplaceCurrentSelectionAsync(
+        SelectionEditContext context,
+        string replacement,
+        CancellationToken cancellationToken)
     {
         var replacementApplied = false;
         if (string.IsNullOrWhiteSpace(replacement))
@@ -102,11 +105,15 @@ internal static class SelectionEditService
             context.CurrentText = replacement;
             if (PasteService.GetForegroundWindowHandle() != context.TargetWindow)
                 return new SelectionEditResult(true, false, "編集を適用しました。対象アプリが切り替わったため、連続編集を終了しました。");
-            var refreshedProvider = FindFocusedTextProvider(context.ProviderRuntimeId, out var refreshedPattern);
-            if (refreshedProvider is null || refreshedPattern is null || !TryReselectInsertedText(refreshedPattern, replacement))
+            if (!await TryReselectInsertedTextAsync(
+                    context.ProviderRuntimeId, replacement, context.TargetWindow, cancellationToken))
                 return new SelectionEditResult(true, false, "編集を適用しました。入力欄が選択状態を維持できないため、連続編集を終了しました。");
 
             return new SelectionEditResult(true, true, "選択文を編集しました。続けて話してください。");
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
         }
         catch (Exception ex)
         {
@@ -187,6 +194,37 @@ internal static class SelectionEditService
         var verified = textPattern.GetSelection();
         return verified is { Length: 1 } &&
                string.Equals(NormalizeText(verified[0].GetText(-1)), NormalizeText(insertedText), StringComparison.Ordinal);
+    }
+
+    private static async Task<bool> TryReselectInsertedTextAsync(
+        int[] providerRuntimeId,
+        string insertedText,
+        IntPtr targetWindow,
+        CancellationToken cancellationToken)
+    {
+        const int MaximumAttempts = 10;
+        for (var attempt = 0; attempt < MaximumAttempts; attempt++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (PasteService.GetForegroundWindowHandle() != targetWindow)
+                return false;
+
+            try
+            {
+                var provider = FindFocusedTextProvider(providerRuntimeId, out var textPattern);
+                if (provider is not null && textPattern is not null && TryReselectInsertedText(textPattern, insertedText))
+                    return true;
+            }
+            catch (Exception ex) when (IsAutomationFailure(ex))
+            {
+                // Some text providers update their selection asynchronously after Ctrl+V.
+            }
+
+            if (attempt + 1 < MaximumAttempts)
+                await Task.Delay(TimeSpan.FromMilliseconds(30), cancellationToken);
+        }
+
+        return false;
     }
 
     private static string NormalizeText(string? text) => (text ?? string.Empty)
