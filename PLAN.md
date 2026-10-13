@@ -113,3 +113,9 @@
 - Sherpa-ONNXはhotwordsをtransducerモデルに限定していると説明し、NeMoはCTC向けGPU Phrase Boostingを別方式として説明している。
 - 日本語固有名詞の公開評価ではCER順位と固有名詞F1順位が一致しない例が報告されている。ただし紹介されているParakeetは別モデル版で、評価は15発話の小規模IT領域データのため、現在の日本語Parakeetへ数値をそのまま当てはめない。
 - 参考資料：[Sherpa-ONNX hotwords](https://k2-fsa.github.io/sherpa/onnx/hotwords/index.html)、[NeMo word boosting](https://docs.nvidia.com/nemo-framework/user-guide/latest/nemotoolkit/asr/asr_customization/word_boosting.html)、[日本語FLEURS比較](https://github.com/cm-nakamura-shogo/japanese-asr-l40s-benchmark)、[J-PACF-YOMIのモデルカード](https://huggingface.co/saeeew/J-PACF-YOMI-tdt)、[JP-HomophoneBench](https://huggingface.co/datasets/saeeew/JP-HomophoneBench)、[固有名詞F1評価](https://neosophie.com/en/blog/20260421-asr-evaluation)。
+
+## AI編集の1段階取り消し
+
+- 2026-10-13: AI編集が文章を置換した後、画面下部の状態インジケーターの上に小さな「元に戻す」ボタンを3秒間表示する。クリックまたは編集中の音声指示（「元に戻して」「文章がバグっているから戻して」など）で、直前の置換だけを元の選択文へ戻す。
+- 誤操作防止として、対象アプリのウィンドウ・UI Automation入力欄・現在選択中の編集結果を確認してから置換する。テキストが未選択・変更済み、または別アプリが前面の場合は復元しない。音声コマンドはOpenCodeへ送らずローカルで判定する。
+- `dotnet build AutoPrompt.csproj -c Release --no-restore` とwin-x64自己完結型の単一EXE発行に成功。`artifacts/publish-undo/BetterFlow.exe` と `dist/Better Flow.exe` は81,814,089 bytes、SHA-256 `A88FDCB7152868887E6F9094DB170A69D4A00F2825816BE9FBE2F7AD45C4C74E`で一致。NuGet脆弱性フィードへ接続できずNU1900警告。Windows上のボタン表示・クリック、マイクからの取り消し発話、対象アプリごとの復元は未確認。

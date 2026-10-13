@@ -123,6 +123,50 @@ internal static class SelectionEditService
         }
     }
 
+    public static async Task<bool> TryReselectCurrentSelectionAsync(
+        SelectionEditContext context,
+        string expectedText,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(expectedText) ||
+            !string.Equals(NormalizeText(context.CurrentText), NormalizeText(expectedText), StringComparison.Ordinal))
+            return false;
+
+        const int MaximumAttempts = 8;
+        for (var attempt = 0; attempt < MaximumAttempts; attempt++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (PasteService.GetForegroundWindowHandle() != context.TargetWindow)
+                return false;
+
+            try
+            {
+                var provider = FindFocusedTextProvider(context.ProviderRuntimeId, out var textPattern);
+                if (provider is not null && textPattern is not null)
+                {
+                    var selections = textPattern.GetSelection();
+                    if (selections is { Length: 1 } &&
+                        string.Equals(NormalizeText(selections[0].GetText(-1)), NormalizeText(expectedText),
+                            StringComparison.Ordinal))
+                    {
+                        selections[0].Select();
+                        if (IsReplacementSelected(textPattern, expectedText))
+                            return true;
+                    }
+                }
+            }
+            catch (Exception ex) when (IsAutomationFailure(ex))
+            {
+                // Some providers briefly expose a stale selection after text replacement.
+            }
+
+            if (attempt + 1 < MaximumAttempts)
+                await Task.Delay(TimeSpan.FromMilliseconds(25), cancellationToken);
+        }
+
+        return false;
+    }
+
     private static AutomationElement? FindFocusedTextProvider(int[]? requiredRuntimeId, out TextPattern? pattern)
     {
         pattern = null;

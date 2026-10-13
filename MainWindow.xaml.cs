@@ -17,6 +17,7 @@ public partial class MainWindow : System.Windows.Window
     private readonly CancellationTokenSource _lifetime = new();
     private readonly OpenCodeService _openCode = new();
     private readonly IndicatorWindow _indicator;
+    private readonly UndoWindow _undoWindow;
     private readonly bool _startHiddenInTray;
     private System.Windows.Forms.NotifyIcon? _trayIcon;
     private System.Windows.Forms.ContextMenuStrip? _trayMenu;
@@ -40,8 +41,14 @@ public partial class MainWindow : System.Windows.Window
     private bool _selectionEditSessionActive;
     private bool _selectionEditSessionStopping;
     private CancellationTokenSource? _selectionEditCancellation;
+    private SelectionEditUndoRecord? _lastSelectionEditUndo;
     private IReadOnlyList<OpenCodeModelOption> _openCodeModels = Array.Empty<OpenCodeModelOption>();
     private IReadOnlyList<AudioInputDeviceOption> _audioInputDevices = Array.Empty<AudioInputDeviceOption>();
+
+    private sealed record SelectionEditUndoRecord(
+        SelectionEditContext Context,
+        string PreviousText,
+        string AppliedText);
 
     private bool IsAnyRecording => _recorder.IsRecording || _continuousRecorder.IsRecording || _selectionEditSessionActive;
 
@@ -49,6 +56,9 @@ public partial class MainWindow : System.Windows.Window
     {
         InitializeComponent();
         _indicator = new IndicatorWindow();
+        _undoWindow = new UndoWindow();
+        _undoWindow.UndoRequested += UndoWindow_UndoRequested;
+        _undoWindow.UndoExpired += UndoWindow_UndoExpired;
         _startHiddenInTray = Bootstrapper.IsModelReady();
         if (_startHiddenInTray)
         {
@@ -680,7 +690,7 @@ public partial class MainWindow : System.Windows.Window
                         return;
                     }
 
-                    BeginSelectionEditSession(selection!);
+                    BeginSelectionEditSession(GetReusableUndoContext(selection!));
                     return;
                 }
                 if (!string.IsNullOrWhiteSpace(selectionError))
@@ -774,6 +784,7 @@ public partial class MainWindow : System.Windows.Window
         {
             await foreach (var samples in _continuousRecorder.ReadUtterancesAsync(cancellationToken))
             {
+                _undoWindow.HideUndo(stopTimer: false);
                 _isBusy = true;
                 ActionButton.Content = "選択文を編集しています…";
                 RuntimeStatus.Text = "発話を文字起こししています…";
@@ -789,6 +800,17 @@ public partial class MainWindow : System.Windows.Window
                         continue;
                     }
 
+                    if (IsUndoSelectionEditCommand(transcript))
+                    {
+                        _indicator.ShowStatus("元に戻しています");
+                        var wasUndone = await UndoLastSelectionEditAsync(context, cancellationToken);
+                        RuntimeStatus.Text = wasUndone
+                            ? "直前のAI編集を元に戻しました。続けて話してください。"
+                            : "直前に戻せるAI編集がありません。選択文は変更していません。";
+                        _indicator.ShowStatus("選択文編集中");
+                        continue;
+                    }
+
                     _indicator.ShowStatus("AI編集中");
                     RuntimeStatus.Text = "選択文へ音声指示を適用しています…";
                     if (!_openCode.IsRunning) await EnsureOpenCodeReadyAsync();
@@ -799,8 +821,15 @@ public partial class MainWindow : System.Windows.Window
                         _settings.OpenCodeModelId,
                         cancellationToken);
 
+                    var previousText = context.CurrentText;
                     var result = await SelectionEditService.ReplaceCurrentSelectionAsync(
                         context, replacement, cancellationToken);
+                    if (result.Applied && !string.Equals(previousText, context.CurrentText, StringComparison.Ordinal))
+                    {
+                        _lastSelectionEditUndo = new SelectionEditUndoRecord(
+                            context, previousText, context.CurrentText);
+                        _undoWindow.ShowUndo();
+                    }
                     RuntimeStatus.Text = result.Message;
                     _indicator.ShowStatus(result.CanContinue ? "選択文編集中" : "編集を中止",
                         result.CanContinue ? null : TimeSpan.FromSeconds(1));
@@ -850,6 +879,11 @@ public partial class MainWindow : System.Windows.Window
             _selectionEditSessionActive = false;
             _selectionEditSessionStopping = false;
             _isBusy = false;
+            if (!_undoWindow.IsUndoVisible)
+            {
+                _undoWindow.HideUndo();
+                _lastSelectionEditUndo = null;
+            }
             _selectionEditCancellation?.Dispose();
             _selectionEditCancellation = null;
             ActionButton.Content = _asr is null ? "Setup" : "録音を開始";
@@ -857,6 +891,126 @@ public partial class MainWindow : System.Windows.Window
             else _indicator.ShowStatus("編集終了", TimeSpan.FromSeconds(1));
             UpdateAiModeDisplay();
         }
+    }
+
+    private SelectionEditContext GetReusableUndoContext(SelectionEditContext captured)
+    {
+        var undo = _lastSelectionEditUndo;
+        if (undo is null || !_undoWindow.IsUndoVisible)
+            return captured;
+
+        var previousContext = undo.Context;
+        return previousContext.TargetWindow == captured.TargetWindow &&
+               previousContext.ProviderRuntimeId.AsSpan().SequenceEqual(captured.ProviderRuntimeId) &&
+               string.Equals(previousContext.CurrentText, captured.CurrentText, StringComparison.Ordinal)
+            ? previousContext
+            : captured;
+    }
+
+    private async void UndoWindow_UndoRequested(object? sender, EventArgs e)
+    {
+        if (_closing) return;
+
+        var context = _lastSelectionEditUndo?.Context;
+        if (context is null)
+        {
+            RuntimeStatus.Text = "元に戻せるAI編集がありません。";
+            _indicator.ShowStatus(_selectionEditSessionActive ? "選択文編集中" : "取り消せません",
+                _selectionEditSessionActive ? null : TimeSpan.FromSeconds(1));
+            return;
+        }
+
+        try
+        {
+            var wasUndone = await UndoLastSelectionEditAsync(context, _lifetime.Token);
+            RuntimeStatus.Text = wasUndone
+                ? "直前のAI編集を元に戻しました。"
+                : "元に戻せませんでした。対象の文章が変更されたか、選択状態を確認できません。";
+            _indicator.ShowStatus(_selectionEditSessionActive ? "選択文編集中" :
+                wasUndone ? "元に戻しました" : "取り消せません",
+                _selectionEditSessionActive ? null : TimeSpan.FromSeconds(1));
+        }
+        catch (OperationCanceledException) when (_closing) { }
+        catch (Exception ex)
+        {
+            RuntimeStatus.Text = "AI編集を元に戻せませんでした。 " + ex.GetBaseException().Message;
+            _indicator.ShowStatus(_selectionEditSessionActive ? "選択文編集中" : "取り消せません",
+                _selectionEditSessionActive ? null : TimeSpan.FromSeconds(1));
+        }
+    }
+
+    private void UndoWindow_UndoExpired(object? sender, EventArgs e)
+    {
+        if (!_selectionEditSessionActive)
+            _lastSelectionEditUndo = null;
+    }
+
+    private async Task<bool> UndoLastSelectionEditAsync(
+        SelectionEditContext context,
+        CancellationToken cancellationToken)
+    {
+        var undo = _lastSelectionEditUndo;
+        if (undo is null)
+            return false;
+
+        if (!ReferenceEquals(undo.Context, context) ||
+            !string.Equals(context.CurrentText, undo.AppliedText, StringComparison.Ordinal))
+        {
+            if (ReferenceEquals(_lastSelectionEditUndo, undo))
+                _lastSelectionEditUndo = null;
+            _undoWindow.HideUndo();
+            return false;
+        }
+
+        if (!await SelectionEditService.TryReselectCurrentSelectionAsync(context, undo.AppliedText, cancellationToken))
+        {
+            if (ReferenceEquals(_lastSelectionEditUndo, undo))
+                _lastSelectionEditUndo = null;
+            _undoWindow.HideUndo();
+            return false;
+        }
+
+        var result = await SelectionEditService.ReplaceCurrentSelectionAsync(
+            context, undo.PreviousText, cancellationToken);
+        if (!result.Applied)
+        {
+            if (ReferenceEquals(_lastSelectionEditUndo, undo))
+                _lastSelectionEditUndo = null;
+            _undoWindow.HideUndo();
+            return false;
+        }
+
+        if (ReferenceEquals(_lastSelectionEditUndo, undo))
+            _lastSelectionEditUndo = null;
+        _undoWindow.HideUndo();
+        return true;
+    }
+
+    private static bool IsUndoSelectionEditCommand(string transcript)
+    {
+        var compact = string.Concat(transcript.Where(character =>
+            !char.IsWhiteSpace(character) && !char.IsPunctuation(character) && !char.IsSymbol(character)));
+        if (compact.Length == 0)
+            return false;
+
+        return compact.EndsWith("戻してください", StringComparison.Ordinal) ||
+               compact.EndsWith("戻してほしい", StringComparison.Ordinal) ||
+               compact.EndsWith("戻してくれ", StringComparison.Ordinal) ||
+               compact.EndsWith("戻して", StringComparison.Ordinal) ||
+               compact.EndsWith("前の文章に戻す", StringComparison.Ordinal) ||
+               compact.EndsWith("前の状態に戻す", StringComparison.Ordinal) ||
+               compact.EndsWith("一つ前に戻す", StringComparison.Ordinal) ||
+               compact.EndsWith("直前に戻す", StringComparison.Ordinal) ||
+               compact.EndsWith("元の文章に戻す", StringComparison.Ordinal) ||
+               compact.EndsWith("元に戻す", StringComparison.Ordinal) ||
+               compact.EndsWith("取り消してください", StringComparison.Ordinal) ||
+               compact.EndsWith("取り消してほしい", StringComparison.Ordinal) ||
+               compact.EndsWith("取り消して", StringComparison.Ordinal) ||
+               compact.EndsWith("編集を取り消す", StringComparison.Ordinal) ||
+               compact.EndsWith("ロールバックしてください", StringComparison.Ordinal) ||
+               compact.EndsWith("ロールバックして", StringComparison.Ordinal) ||
+               compact.EndsWith("アンドゥ", StringComparison.Ordinal) ||
+               string.Equals(compact, "undo", StringComparison.OrdinalIgnoreCase);
     }
 
     private async Task StopAndProcessAsync()
@@ -1261,6 +1415,7 @@ public partial class MainWindow : System.Windows.Window
         _hotkey.Dispose();
         _source?.RemoveHook(WindowMessageHook);
         _indicator.Close();
+        _undoWindow.Close();
         _recorder.Dispose();
         _continuousRecorder.Dispose();
         _asr?.Dispose();
