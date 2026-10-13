@@ -151,3 +151,9 @@
 - Release buildは警告0・エラー0、win-x64自己完結型単一EXE発行に成功。`artifacts/publish-opencode-only/BetterFlow.exe`と`dist/Better Flow.exe`は81,818,617 bytes、SHA-256 `A09312A24D5F97FD9510D4F90B4811D2EB83912323E34AF53B3E7AEAE17CF022`で一致。WebView2へのパッケージ参照は削除済み。置換前EXEは`artifacts/BetterFlow-before-opencode-only.exe`および直前配布版`artifacts/BetterFlow-before-icon-color-adjustment.exe`へ保管。テストスイートは未実施。実マイクの波形表示とOpenCode生成・選択文編集は未確認。
 - `dotnet restore AutoPrompt.csproj --ignore-failed-sources -p:NuGetAudit=false`、Release build、publishを実行。build成功・警告0・エラー0。テストスイートは未実施。Windows上のマイクレベル表示、OpenCode生成、選択文編集など実動作は未確認。
 - 2026-10-14: 設定画面からモデルの「保存済みの選択」およびマイクの「選択中」表示を削除。AI設定内の「選択文の編集」セクションと説明文も削除し、モデル・マイクの保存と選択動作は維持。Release buildとwin-x64単体EXE発行に成功。`artifacts/publish-settings-copy-cleanup/BetterFlow.exe`と`dist/Better Flow.exe`は81,818,444 bytes、SHA-256 `259EEEC5D3476E1132DF2F6206390CC51570C998254504BCE5F10B155078D97A`で一致。差し替え前EXEを`artifacts/BetterFlow-before-settings-copy-cleanup.exe`へ保管。設定画面の実表示は未確認。テストスイートは未実施。
+
+## 音声処理キャンセルと設定画面の省スペース化（2026-10-14）
+
+- 通常の文字起こし/AI整形中にショートカットを再度押すと、処理用CancellationTokenをキャンセルし、貼り付け前にもキャンセルを確認する。選択文編集の処理中はセッションをキャンセルし、連続録音を止め、未処理の発話を破棄する。OpenCode起動/生成へキャンセルトークンを伝える。
+- 設定ウィンドウ下部のRuntimeStatusログ表示を折りたたみ、セットアップ進捗表示は残す。設定画面の実表示と実処理中のキャンセル操作は未確認。
+- Release buildは警告0・エラー0、win-x64単体EXE発行に成功。`artifacts/publish-cancel-and-compact-settings/BetterFlow.exe`と`dist/Better Flow.exe`は81,819,309 bytes、SHA-256 `9F644027E6939557FD8078719B9BA35F62420C38DFB819BD3D5651284D844972`で一致。差し替え前EXEを`artifacts/BetterFlow-before-cancel-and-compact-settings.exe`へ保管。テストスイートは未実施。

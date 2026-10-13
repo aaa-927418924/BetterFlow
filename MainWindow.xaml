@@ -111,7 +111,8 @@
                         <TextBlock x:Name="SetupStatus" Text="" FontSize="12" Foreground="{StaticResource MutedBrush}"
                                    LineHeight="18" Margin="0,10,0,0" AutomationProperties.LiveSetting="Polite" />
                         <TextBlock x:Name="RuntimeStatus" Text="" FontSize="12" Foreground="{StaticResource MutedBrush}"
-                                   LineHeight="18" TextWrapping="Wrap" Margin="0,10,0,0" AutomationProperties.LiveSetting="Polite" />
+                                   LineHeight="18" TextWrapping="Wrap" Margin="0,10,0,0"
+                                   Visibility="Collapsed" AutomationProperties.LiveSetting="Polite" />
 
                     </StackPanel>
                     </ScrollViewer>

@@ -38,6 +38,7 @@ public partial class MainWindow : System.Windows.Window
     private bool _loadingOpenCodeModelUi;
     private bool _loadingMicrophoneDeviceUi;
     private bool _openCodeReady;
+    private CancellationTokenSource? _audioProcessingCancellation;
     private bool _selectionEditSessionActive;
     private bool _selectionEditSessionStopping;
     private CancellationTokenSource? _selectionEditCancellation;
@@ -131,12 +132,16 @@ public partial class MainWindow : System.Windows.Window
 
     private async void ActionButton_Click(object sender, System.Windows.RoutedEventArgs e)
     {
+        if (_isBusy)
+        {
+            await CancelAudioProcessingAsync();
+            return;
+        }
         if (_selectionEditSessionActive)
         {
             await RecordButton_Click();
             return;
         }
-        if (_isBusy) return;
         if (_asr is null)
         {
             await SetupAsync();
@@ -211,12 +216,13 @@ public partial class MainWindow : System.Windows.Window
         return root.Message;
     }
 
-    private async Task EnsureOpenCodeReadyAsync()
+    private async Task EnsureOpenCodeReadyAsync(CancellationToken cancellationToken = default)
     {
+        var effectiveToken = cancellationToken.CanBeCanceled ? cancellationToken : _lifetime.Token;
         var progress = new Progress<SetupProgress>(update => RuntimeStatus.Text = update.Message);
-        await new OpenCodeInstaller().EnsureInstalledAsync(progress, _lifetime.Token);
+        await new OpenCodeInstaller().EnsureInstalledAsync(progress, effectiveToken);
         RuntimeStatus.Text = "OpenCodeを起動しています…";
-        await Task.Run(() => _openCode.StartAsync(_lifetime.Token), _lifetime.Token);
+        await Task.Run(() => _openCode.StartAsync(effectiveToken), effectiveToken);
     }
 
     private void ScheduleOpenCodeWarmupIfNeeded()
@@ -717,6 +723,27 @@ public partial class MainWindow : System.Windows.Window
         await StopAndProcessAsync();
     }
 
+    private async Task CancelAudioProcessingAsync()
+    {
+        if (_selectionEditSessionActive && _isBusy &&
+            _selectionEditCancellation is { IsCancellationRequested: false } selectionCancellation)
+        {
+            _selectionEditSessionStopping = true;
+            _indicator.ShowStatus("キャンセル中");
+            selectionCancellation.Cancel();
+            try { await _continuousRecorder.StopAsync(CancellationToken.None); }
+            catch { }
+            _continuousRecorder.DiscardPendingUtterances();
+            return;
+        }
+
+        if (_audioProcessingCancellation is not { IsCancellationRequested: false } audioCancellation)
+            return;
+
+        _indicator.ShowStatus("キャンセル中");
+        audioCancellation.Cancel();
+    }
+
     private void BeginSelectionEditSession(SelectionEditContext context)
     {
         var selectedInput = MicrophoneDeviceCombo.SelectedItem as AudioInputDeviceOption;
@@ -798,6 +825,7 @@ public partial class MainWindow : System.Windows.Window
                 try
                 {
                     var transcript = await Task.Run(() => _asr!.Transcribe(samples), cancellationToken);
+                    cancellationToken.ThrowIfCancellationRequested();
                     transcript = TranscriptFormatter.NormalizeTranscript(transcript);
                     if (!TranscriptFormatter.HasMeaningfulText(transcript))
                     {
@@ -819,7 +847,8 @@ public partial class MainWindow : System.Windows.Window
 
                     _indicator.ShowStatus("AI編集中");
                     RuntimeStatus.Text = "選択文へ音声指示を適用しています…";
-                    if (!_openCode.IsRunning) await EnsureOpenCodeReadyAsync();
+                    if (!_openCode.IsRunning) await EnsureOpenCodeReadyAsync(cancellationToken);
+                    cancellationToken.ThrowIfCancellationRequested();
                     var replacement = await _openCode.EditSelectedTextAsync(
                         context.CurrentText,
                         transcript,
@@ -828,6 +857,7 @@ public partial class MainWindow : System.Windows.Window
                         cancellationToken);
 
                     var previousText = context.CurrentText;
+                    cancellationToken.ThrowIfCancellationRequested();
                     var result = await SelectionEditService.ReplaceCurrentSelectionAsync(
                         context, replacement, cancellationToken);
                     if (result.Applied && !string.Equals(previousText, context.CurrentText, StringComparison.Ordinal))
@@ -847,7 +877,7 @@ public partial class MainWindow : System.Windows.Window
                         break;
                     }
                 }
-                catch (OperationCanceledException) when (_closing)
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
                 {
                     break;
                 }
@@ -866,7 +896,7 @@ public partial class MainWindow : System.Windows.Window
                 }
             }
         }
-        catch (OperationCanceledException) when (_closing) { }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { }
         catch (Exception ex)
         {
             RuntimeStatus.Text = "連続音声の処理を終了しました。 " + ex.GetBaseException().Message;
@@ -881,7 +911,8 @@ public partial class MainWindow : System.Windows.Window
             }
             _continuousRecorder.DiscardPendingUtterances();
 
-            var endedDuringShutdown = _closing || cancellationToken.IsCancellationRequested;
+            var endedDuringShutdown = _closing;
+            var wasCanceled = !endedDuringShutdown && cancellationToken.IsCancellationRequested;
             _selectionEditSessionActive = false;
             _selectionEditSessionStopping = false;
             _isBusy = false;
@@ -894,6 +925,7 @@ public partial class MainWindow : System.Windows.Window
             _selectionEditCancellation = null;
             ActionButton.Content = _asr is null ? "Setup" : "録音を開始";
             if (endedDuringShutdown) _indicator.HideStatus();
+            else if (wasCanceled) _indicator.ShowStatus("キャンセルしました", TimeSpan.FromSeconds(1));
             else _indicator.ShowStatus("編集終了", TimeSpan.FromSeconds(1));
             UpdateAiModeDisplay();
         }
@@ -1021,6 +1053,9 @@ public partial class MainWindow : System.Windows.Window
 
     private async Task StopAndProcessAsync()
     {
+        var processingCancellation = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token);
+        _audioProcessingCancellation = processingCancellation;
+        var cancellationToken = processingCancellation.Token;
         _isBusy = true;
         UpdateAiModeDisplay();
         ActionButton.IsEnabled = false;
@@ -1030,8 +1065,9 @@ public partial class MainWindow : System.Windows.Window
         float[]? samples = null;
         try
         {
-            samples = await _recorder.StopAsync(_lifetime.Token);
-            var transcript = await Task.Run(() => _asr!.Transcribe(samples), _lifetime.Token);
+            samples = await _recorder.StopAsync(cancellationToken);
+            var transcript = await Task.Run(() => _asr!.Transcribe(samples), cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
             Array.Clear(samples);
             samples = null;
             transcript = TranscriptFormatter.NormalizeTranscript(transcript);
@@ -1053,15 +1089,16 @@ public partial class MainWindow : System.Windows.Window
                 try
                 {
                     RuntimeStatus.Text = "OpenCodeの選択モデルで文章を整えています…";
-                    if (!_openCode.IsRunning) await EnsureOpenCodeReadyAsync();
+                    if (!_openCode.IsRunning) await EnsureOpenCodeReadyAsync(cancellationToken);
                     var response = await _openCode.RewriteAsync(
-                        transcript, _settings.OpenCodeModelProviderId, _settings.OpenCodeModelId, _lifetime.Token);
+                        transcript, _settings.OpenCodeModelProviderId, _settings.OpenCodeModelId, cancellationToken);
+                    cancellationToken.ThrowIfCancellationRequested();
                     text = response.Trim();
                     if (!TranscriptFormatter.HasMeaningfulText(text))
                         throw new InvalidDataException("モデルから文字として使える回答が返りませんでした。入力欄は変更していません。");
                     resultStatus = "整えた文章を入力欄へ貼り付けました。";
                 }
-                catch (OperationCanceledException) when (_closing) { throw; }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
                 catch (Exception ex)
                 {
                     _openCode.Stop();
@@ -1071,10 +1108,15 @@ public partial class MainWindow : System.Windows.Window
                 }
             }
 
+            cancellationToken.ThrowIfCancellationRequested();
             PasteAndShow(text, resultStatus);
             _indicator.ShowStatus("完了", TimeSpan.FromSeconds(1));
         }
-        catch (OperationCanceledException) when (_closing) { _indicator.HideStatus(); }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            if (_closing) _indicator.HideStatus();
+            else _indicator.ShowStatus("キャンセルしました", TimeSpan.FromSeconds(1));
+        }
         catch (Exception ex)
         {
             RuntimeStatus.Text = ex.Message;
@@ -1085,6 +1127,9 @@ public partial class MainWindow : System.Windows.Window
         finally
         {
             if (samples is not null) Array.Clear(samples);
+            if (ReferenceEquals(_audioProcessingCancellation, processingCancellation))
+                _audioProcessingCancellation = null;
+            processingCancellation.Dispose();
             _isBusy = false;
             ActionButton.IsEnabled = true;
             ActionButton.Content = "録音を開始";
