@@ -730,7 +730,7 @@ public partial class MainWindow : System.Windows.Window
         if (_selectionEditSessionActive)
         {
             _selectionEditSessionStopping = true;
-            _indicator.ShowStatus("キャンセル中");
+            _indicator.HideStatus();
             _selectionEditCancellation?.Cancel();
             try { await _continuousRecorder.StopAsync(CancellationToken.None); }
             catch { }
@@ -926,8 +926,7 @@ public partial class MainWindow : System.Windows.Window
             _selectionEditCancellation?.Dispose();
             _selectionEditCancellation = null;
             ActionButton.Content = _asr is null ? "Setup" : "録音を開始";
-            if (endedDuringShutdown) _indicator.HideStatus();
-            else if (wasCanceled) _indicator.ShowStatus("キャンセルしました", TimeSpan.FromSeconds(1));
+            if (endedDuringShutdown || wasCanceled) _indicator.HideStatus();
             else _indicator.ShowStatus("編集終了", TimeSpan.FromSeconds(1));
             UpdateAiModeDisplay();
         }

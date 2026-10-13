@@ -197,3 +197,9 @@
 - Release build/publish成功（警告0・エラー0）。`artifacts/publish-opencode-async/BetterFlow.exe`と`dist/Better Flow.exe`は81,871,385 bytes、SHA-256 `A82D27F775ADD21EE2AB1B99E85DD7DF538CD7BB41F8C8E1C0B067A58F951E6A`で一致。更新前は`artifacts/BetterFlow-before-opencode-async.exe`へ保存。dist内はBetter Flow.exeのみ。配布先を使っていた完全一致プロセスだけを停止して更新した。
 - Gemini要求はこの追加計測で計3回、各要求の間隔を1分以上空け、再試行やバックグラウンド要求は行わなかった。テストスイートは実行していない。新EXEの実UI/実音声経路と`opencode-timing.jsonl`への初回記録は未確認。
 - 根拠: [OpenCode Server API](https://dev.opencode.ai/docs/server/)は同期`/message`、非同期`/prompt_async`、server-sent event streamを掲載。[OpenCode Models](https://docs.opencode.ai/docs/models/)はmodel variants/optionsで推論effort等を設定でき、agent設定がglobal optionsを上書きし得ると説明する。
+
+## 選択文編集キャンセル時の表示（2026-10-14）
+
+- 選択文編集セッション中にショートカットでキャンセルした場合は、終了処理でインジケーターを即時非表示にする。通常の音声入力のキャンセル表示「キャンセルしました」は維持する。
+- `MainWindow.xaml.cs`の選択文編集キャンセル開始時とセッション終了分岐だけを変更。Release build/publish成功（警告0・エラー0）。`artifacts/publish-selection-edit-cancel-status/BetterFlow.exe`と`dist/Better Flow.exe`は81,871,381 bytes、SHA-256 `B636B3467414D1D98F638CB52324E92B01D3CC53056811AE90E900293B317503`で一致。更新前EXEは`artifacts/BetterFlow-before-selection-edit-cancel-status.exe`へ保存。既存配布先EXEと完全一致したPID 39320だけを停止して置き換えた。
+- `git diff --check`成功。テストスイートは未実行。実際の編集キャンセル操作と画面表示は未確認。
