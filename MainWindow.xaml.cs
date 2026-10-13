@@ -245,7 +245,7 @@ public partial class MainWindow : System.Windows.Window
             SaveOpenCodeModelSelection(selectedModel);
             _settingsStore.Save(_settings);
             _openCodeReady = true;
-            RuntimeStatus.Text = "準備完了";
+            RuntimeStatus.Text = string.Empty;
         }
         catch (OperationCanceledException) when (_closing) { }
         catch (Exception ex)
@@ -341,9 +341,6 @@ public partial class MainWindow : System.Windows.Window
         AiModeDescription.Text = _settings.AiModeEnabled
             ? "オン: OpenCodeの選択モデルで文章を整えます。"
             : "オフ: 文字起こしをそのまま貼り付けます。";
-        PrivacyNotice.Text = _settings.AiModeEnabled
-            ? "音声はPC内で文字起こしします。AIモードでは文字起こしと、選択文の編集時に選択中の文章・音声指示をOpenCode経由でモデルへ送信します。"
-            : "音声と文字起こしはPC内で処理します。AIモードを使うときだけ文字起こしテキストをOpenCode経由で送信します。";
         AiModeToggle.IsEnabled = _asr is not null && !_isBusy && !IsAnyRecording && !_isRefreshingOpenCodeModels;
         var canChooseModel = !_settings.AiModeEnabled && !_isBusy && !IsAnyRecording;
         OpenCodeModelCombo.IsEnabled = canChooseModel;
@@ -650,9 +647,8 @@ public partial class MainWindow : System.Windows.Window
         ShortcutCaptureStatus.Text = string.Empty;
         UpdateShortcutDisplay();
         UpdateAiModeDisplay();
-        PrivacyNotice.Visibility = System.Windows.Visibility.Visible;
         ActionButton.Visibility = System.Windows.Visibility.Collapsed;
-        RuntimeStatus.Text = _hotkeyRegistered ? "準備完了" : "ショートカットが登録されていません。別のキーを設定してください。";
+        RuntimeStatus.Text = _hotkeyRegistered ? string.Empty : "ショートカットが登録されていません。別のキーを設定してください。";
     }
 
     private async Task RecordButton_Click()
@@ -1210,8 +1206,8 @@ public partial class MainWindow : System.Windows.Window
         _isCapturingShortcut = false;
         ShortcutChangeButton.Content = "変更";
         UpdateShortcutDisplay();
-        ShortcutCaptureStatus.Text = "ショートカットを保存しました。";
-        RuntimeStatus.Text = "準備完了";
+        ShortcutCaptureStatus.Text = string.Empty;
+        RuntimeStatus.Text = string.Empty;
     }
 
     private void CancelShortcutCapture()

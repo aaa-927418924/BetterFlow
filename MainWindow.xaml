@@ -42,8 +42,7 @@
                             <DockPanel Margin="0,4,0,0" LastChildFill="True">
                                 <Button x:Name="ShortcutChangeButton" DockPanel.Dock="Right" Content="変更"
                                         MinWidth="88" Height="40" Padding="14,0" Margin="12,0,0,0"
-                                        Background="#383838" Foreground="#F4F4F4" BorderBrush="#686868"
-                                        BorderThickness="1" FontFamily="Yu Gothic UI" FontSize="14"
+                                        Style="{StaticResource SecondaryButtonStyle}" FontSize="14"
                                         Cursor="Hand" Click="ShortcutChangeButton_Click"
                                         AutomationProperties.Name="ショートカットキーを変更" />
                                 <TextBlock x:Name="ShortcutCurrentText" FontSize="17" VerticalAlignment="Center" />
@@ -67,18 +66,15 @@
                         </StackPanel>
                         <StackPanel x:Name="MicrophoneSettingsPanel" Margin="0,16,0,0" Visibility="Collapsed">
                             <TextBlock Text="音声入力デバイス" FontSize="14" FontWeight="SemiBold" />
-                            <TextBlock Text="既定ではWindowsのシステム設定で選ばれているマイクを使います。必要に応じて入力デバイスを指定できます。"
-                                       FontSize="12" Foreground="{StaticResource MutedBrush}" LineHeight="17" Margin="0,4,0,0" />
                             <DockPanel Margin="0,8,0,0" LastChildFill="True">
                                 <Button x:Name="RefreshMicrophoneDevicesButton" DockPanel.Dock="Right" Content="再読み込み"
                                         MinWidth="92" Height="40" Padding="8,0" Margin="8,0,0,0"
-                                        Background="#383838" Foreground="#F4F4F4" BorderBrush="#686868"
-                                        BorderThickness="1" FontFamily="Yu Gothic UI" FontSize="12" Cursor="Hand"
+                                        Style="{StaticResource SecondaryButtonStyle}"
                                         Click="RefreshMicrophoneDevices_Click" AutomationProperties.Name="音声入力デバイス一覧を再読み込み" />
                                 <ComboBox x:Name="MicrophoneDeviceCombo" IsEditable="False" MinHeight="40"
                                           Background="#333333" Foreground="#F4F4F4" BorderBrush="#686868"
                                           FontFamily="Yu Gothic UI" FontSize="13"
-                                          ItemTemplate="{StaticResource DropdownDisplayNameTemplate}"
+                                          ItemTemplate="{StaticResource AudioInputDisplayNameTemplate}"
                                           Style="{StaticResource DarkComboBoxStyle}"
                                           SelectionChanged="MicrophoneDeviceCombo_SelectionChanged"
                                           AutomationProperties.Name="音声入力デバイス" />
@@ -88,14 +84,11 @@
                         </StackPanel>
                         <StackPanel x:Name="OpenCodeModelSettingsPanel" Margin="0,16,0,0" Visibility="Collapsed">
                             <TextBlock Text="OpenCodeモデル" FontSize="14" FontWeight="SemiBold" />
-                            <TextBlock Text="OpenCode Desktopのユーザープロファイルで利用できるモデルを選べます。Desktopでモデルを追加したら一覧を更新してください。接続設定と認証はOpenCodeの設定を使います。"
-                                       FontSize="12" Foreground="{StaticResource MutedBrush}" LineHeight="17" Margin="0,4,0,0" />
                             <TextBlock Text="モデル" FontSize="12" Foreground="{StaticResource MutedBrush}" Margin="0,12,0,4" />
                             <DockPanel LastChildFill="True">
                                 <Button x:Name="RefreshOpenCodeModelsButton" DockPanel.Dock="Right" Content="一覧を更新"
                                         MinWidth="92" Height="40" Padding="8,0" Margin="8,0,0,0"
-                                        Background="#383838" Foreground="#F4F4F4" BorderBrush="#686868"
-                                        BorderThickness="1" FontFamily="Yu Gothic UI" FontSize="12" Cursor="Hand"
+                                        Style="{StaticResource SecondaryButtonStyle}"
                                         Click="RefreshOpenCodeModels_Click" AutomationProperties.Name="OpenCodeモデル一覧を更新" />
                                 <ComboBox x:Name="OpenCodeModelCombo" IsEditable="False" MinHeight="40"
                                           Background="#333333" Foreground="#F4F4F4" BorderBrush="#686868"
@@ -112,10 +105,6 @@
                             <TextBlock x:Name="OpenCodeModelStatus" FontSize="11" Foreground="{StaticResource MutedBrush}"
                                        Margin="0,5,0,0" AutomationProperties.LiveSetting="Polite" />
                         </StackPanel>
-                        <TextBlock x:Name="PrivacyNotice"
-                                   Text="音声はPC内で文字起こしします。AIモードでは文字起こしと、選択文の編集時に選択中の文章・音声指示をOpenCode経由でモデルへ送信します。"
-                                   FontSize="12" LineHeight="18" Foreground="{StaticResource MutedBrush}"
-                                   Margin="0,18,0,0" Visibility="Collapsed" />
                         <ProgressBar x:Name="SetupProgress" Height="5" Minimum="0" Maximum="100" Value="0"
                                      Visibility="Collapsed" Foreground="#EAEAEA" Background="#555555"
                                      BorderThickness="0" Margin="0,20,0,0" />

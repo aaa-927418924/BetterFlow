@@ -119,3 +119,8 @@
 - 2026-10-13: AI編集が文章を置換した後、画面下部の状態インジケーターの上に小さな「元に戻す」ボタンを3秒間表示する。クリックまたは編集中の音声指示（「元に戻して」「文章がバグっているから戻して」など）で、直前の置換だけを元の選択文へ戻す。
 - 誤操作防止として、対象アプリのウィンドウ・UI Automation入力欄・現在選択中の編集結果を確認してから置換する。テキストが未選択・変更済み、または別アプリが前面の場合は復元しない。音声コマンドはOpenCodeへ送らずローカルで判定する。
 - `dotnet build AutoPrompt.csproj -c Release --no-restore` とwin-x64自己完結型の単一EXE発行に成功。`artifacts/publish-undo/BetterFlow.exe` と `dist/Better Flow.exe` は81,814,089 bytes、SHA-256 `A88FDCB7152868887E6F9094DB170A69D4A00F2825816BE9FBE2F7AD45C4C74E`で一致。NuGet脆弱性フィードへ接続できずNU1900警告。Windows上のボタン表示・クリック、マイクからの取り消し発話、対象アプリごとの復元は未確認。
+
+## 設定画面のコンパクト化
+
+- 2026-10-13: 設定画面から指定された補足・完了テキストを削除。マイク名は専用テンプレートで省略せず折り返して表示する。ショートカット変更と音声/OpenCode一覧更新ボタンを共通の角丸スタイルへ揃え、AIモード中に無効なOpenCode更新ボタンはAIモードオフ時と同じ配色を維持する。
+- Releaseビルドとwin-x64自己完結型の単一EXE発行に成功。発行元`artifacts/publish-settings-compact/BetterFlow.exe`と`dist/Better Flow.exe`は81,813,982 bytes、SHA-256 `3855AFE38AAE615C85F0AB8AC612C01530158E78216ED5016ADBFF06DA47F2DC`で一致。NuGet脆弱性フィードに接続できずNU1900警告。実画面での表示・クリック確認は未実施。

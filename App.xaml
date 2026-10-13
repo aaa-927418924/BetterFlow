@@ -25,6 +25,13 @@
                        TextTrimming="CharacterEllipsis" />
         </DataTemplate>
 
+        <DataTemplate x:Key="AudioInputDisplayNameTemplate">
+            <TextBlock Text="{Binding DisplayName}"
+                       Foreground="{Binding Foreground, RelativeSource={RelativeSource AncestorType={x:Type ComboBoxItem}}, FallbackValue={StaticResource TextBrush}}"
+                       TextWrapping="Wrap"
+                       TextTrimming="None" />
+        </DataTemplate>
+
         <Style x:Key="DarkDropdownItemStyle" TargetType="ComboBoxItem">
             <Setter Property="Background" Value="#333333" />
             <Setter Property="Foreground" Value="#F4F4F4" />
@@ -257,6 +264,52 @@
                             </Trigger>
                             <Trigger Property="IsEnabled" Value="False">
                                 <Setter TargetName="ButtonBorder" Property="Background" Value="#D8D8D8" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="SecondaryButtonStyle" TargetType="Button">
+            <Setter Property="Background" Value="#383838" />
+            <Setter Property="Foreground" Value="#F4F4F4" />
+            <Setter Property="BorderBrush" Value="#686868" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="FontFamily" Value="Yu Gothic UI" />
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="ButtonSurface"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="20">
+                            <ContentPresenter Margin="{TemplateBinding Padding}"
+                                              HorizontalAlignment="Center"
+                                              VerticalAlignment="Center"
+                                              RecognizesAccessKey="True"
+                                              TextElement.Foreground="{TemplateBinding Foreground}" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="ButtonSurface" Property="Background" Value="#484848" />
+                                <Setter TargetName="ButtonSurface" Property="BorderBrush" Value="#858585" />
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="ButtonSurface" Property="Background" Value="#292929" />
+                            </Trigger>
+                            <Trigger Property="IsKeyboardFocused" Value="True">
+                                <Setter TargetName="ButtonSurface" Property="BorderBrush" Value="#EAEAEA" />
+                                <Setter TargetName="ButtonSurface" Property="BorderThickness" Value="2" />
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter TargetName="ButtonSurface" Property="Background" Value="#383838" />
+                                <Setter TargetName="ButtonSurface" Property="BorderBrush" Value="#686868" />
+                                <Setter Property="Foreground" Value="#F4F4F4" />
+                                <Setter Property="Opacity" Value="1" />
                             </Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
