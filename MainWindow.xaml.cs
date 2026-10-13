@@ -36,6 +36,7 @@ public partial class MainWindow : System.Windows.Window
     private bool _isRefreshingOpenCodeModels;
     private bool _loadingOpenCodeModelUi;
     private bool _loadingMicrophoneDeviceUi;
+    private bool _openCodeReady;
     private bool _selectionEditSessionActive;
     private bool _selectionEditSessionStopping;
     private CancellationTokenSource? _selectionEditCancellation;
@@ -112,6 +113,8 @@ public partial class MainWindow : System.Windows.Window
             SetupProgress.Visibility = System.Windows.Visibility.Collapsed;
             ActionButton.IsEnabled = true;
         }
+
+        ScheduleOpenCodeWarmupIfNeeded();
     }
 
     private async void ActionButton_Click(object sender, System.Windows.RoutedEventArgs e)
@@ -184,6 +187,8 @@ public partial class MainWindow : System.Windows.Window
             ActionButton.IsEnabled = true;
             if (_asr is null) ActionButton.Content = "Setup";
         }
+
+        ScheduleOpenCodeWarmupIfNeeded();
     }
 
     private static string DescribeSetupError(Exception exception)
@@ -200,6 +205,50 @@ public partial class MainWindow : System.Windows.Window
         await new OpenCodeInstaller().EnsureInstalledAsync(progress, _lifetime.Token);
         RuntimeStatus.Text = "OpenCodeを起動しています…";
         await Task.Run(() => _openCode.StartAsync(_lifetime.Token), _lifetime.Token);
+    }
+
+    private void ScheduleOpenCodeWarmupIfNeeded()
+    {
+        if (_closing || !_settings.AiModeEnabled || _asr is null || _openCodeReady || _isBusy)
+            return;
+
+        // Starting OpenCode on the first spoken request made that request absorb
+        // server startup and provider discovery. Do that work while the app loads.
+        _isBusy = true;
+        UpdateAiModeDisplay();
+        RuntimeStatus.Text = "OpenCodeモデルを起動しています…";
+        _ = WarmOpenCodeForStartupAsync();
+    }
+
+    private async Task WarmOpenCodeForStartupAsync()
+    {
+        try
+        {
+            await EnsureOpenCodeReadyAsync();
+            await LoadOpenCodeModelsAsync();
+            var selectedModel = GetSelectedOpenCodeModel();
+            if (selectedModel is null)
+                throw new InvalidOperationException("OpenCodeのモデル一覧から使うモデルを選択してください。");
+
+            await _openCode.EnsureModelAvailableAsync(
+                selectedModel.ProviderId, selectedModel.ModelId, _lifetime.Token);
+            SaveOpenCodeModelSelection(selectedModel);
+            _settingsStore.Save(_settings);
+            _openCodeReady = true;
+            RuntimeStatus.Text = "準備完了";
+        }
+        catch (OperationCanceledException) when (_closing) { }
+        catch (Exception ex)
+        {
+            _openCodeReady = false;
+            _openCode.Stop();
+            RuntimeStatus.Text = "OpenCodeモデルを準備できませんでした。設定を確認し、AIモードを一度オフにしてからオンにしてください。 " + ex.GetBaseException().Message;
+        }
+        finally
+        {
+            _isBusy = false;
+            UpdateAiModeDisplay();
+        }
     }
 
     private async void AiModeToggle_Click(object sender, System.Windows.RoutedEventArgs e)
@@ -222,6 +271,7 @@ public partial class MainWindow : System.Windows.Window
             try
             {
                 _settingsStore.Save(_settings);
+                _openCodeReady = false;
                 _openCode.Stop();
                 UpdateAiModeDisplay();
                 RuntimeStatus.Text = "文字起こしのみモードに切り替えました。";
@@ -237,6 +287,7 @@ public partial class MainWindow : System.Windows.Window
         }
 
         _isBusy = true;
+        _openCodeReady = false;
         UpdateAiModeDisplay();
         AiModeToggle.IsEnabled = false;
         ActionButton.IsEnabled = false;
@@ -252,12 +303,14 @@ public partial class MainWindow : System.Windows.Window
             SaveOpenCodeModelSelection(selectedModel);
             _settings.AiModeEnabled = true;
             _settingsStore.Save(_settings);
+            _openCodeReady = true;
             UpdateAiModeDisplay();
             RuntimeStatus.Text = "AIモードに切り替えました。";
         }
         catch (Exception ex)
         {
             _settings.AiModeEnabled = false;
+            _openCodeReady = false;
             AiModeToggle.IsChecked = false;
             _openCode.Stop();
             UpdateAiModeDisplay();
@@ -603,6 +656,13 @@ public partial class MainWindow : System.Windows.Window
         if (_isBusy || _asr is null)
         {
             RuntimeStatus.Text = _asr is null ? "先にSetupを完了してください。" : "処理が終わるまでお待ちください。";
+            return;
+        }
+
+        if (_settings.AiModeEnabled && !_openCodeReady)
+        {
+            RuntimeStatus.Text = "OpenCodeモデルの準備が完了していません。AIモードを一度オフにしてからオンにしてください。";
+            _indicator.ShowStatus("AI準備未完了", TimeSpan.FromSeconds(1));
             return;
         }
 

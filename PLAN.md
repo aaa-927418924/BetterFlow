@@ -89,3 +89,27 @@
 - 2026-10-13: 選択文編集で短い雑音だけでもAI処理が始まる問題を修正。連続録音のRMSしきい値を廃止し、Sherpa-ONNX内蔵APIからSilero VADを利用する。16 kHz・512サンプル窓、0.60 threshold、連続8窓（約256 ms）の発話判定を開始条件とし、約512 msの先行音声を保持。Silero VADモデルはSherpa-ONNXが公開する互換ONNX（643,854 bytes、SHA-256 `9E2449E1087496D8D4CABA907F23E0BD3F78D91FA552479BB9C23AC09CBB1FD6`）で、単一EXEへ埋め込み、初回使用時に検証してアプリデータへ展開する。AI編集後はUI Automationで挿入文の再選択を最大300 ms再試行し、連続編集を続けられるようにした。
 - 2026-10-13: AI編集後に置換文の選択が実際の入力欄へ反映されない問題を修正。UI Automationが挿入範囲を特定し、キャレットを置換文末尾に配置したあと、SendInputでShift+左をテキスト要素数だけ送り、入力欄から選択文字列を読み返して確認する。挿入位置は貼り付け後のキャレットまたは元選択範囲の端点で照合し、重複する文章の誤選択を避ける。Releaseビルド後、実アプリでの選択ハイライトと次の音声指示による連続置換は未確認。
 - `dotnet publish AutoPrompt.csproj -c Release -r win-x64 --self-contained true -o artifacts/publish-betterflow-check --no-restore`成功。発行元と`dist/Better Flow.exe`は81,809,177 bytes、SHA-256 `7938500F38560B673969ABAD3EF7106655676891104BED8879CF02D1B97F1F21`で一致。`dist`には`Better Flow.exe`だけを配置。NuGet脆弱性フィードへ接続できずNU1900警告あり。実マイクでの雑音誤検出率、各対象アプリでの再選択、およびOpenCode生成は未確認。
+
+## 固有名詞の文字起こし精度改善案（未実装）
+
+2026-10-13調査。ユーザーの発話録音を収集・評価に使わず、公開ベンチマークを中心に改善案を選ぶ。
+
+### 現状と制約
+
+- `Services/AsrService.cs` はSherpa-ONNXの`NeMoCtc.Model`へモデルを読み込み、`greedy_search`で復号する。アプリ側から固有名詞や読みをデコーダーへ渡す語彙・hotword機能はない。
+- 配布モデルはTDT/CTCハイブリッドの日本語Parakeetだが、Sherpa-ONNX配布スクリプトはCTCブランチだけをONNXへ書き出す。現在はそのCTC経路を使っている。
+- Sherpa-ONNXのhotwords機能はtransducerモデル向けで、CTCモデルには直接使えない。NeMoにはCTC向けGPU Phrase Boostingがあるが、現在のCPU向けSherpa-ONNX経路へ設定を足すだけでは利用できない。
+- 一般CERだけでは固有名詞の聞き取りを評価しきれない。既存のFLEURS比較（Parakeet 5.94%、Whisper large-v3-turbo 4.81%）は別の推論構成であり、Better FlowのINT8 CTC経路の精度を保証しない。
+
+### 実施順
+
+1. **公開評価の選定基準を固有名詞向けにする。** CERに加え、固有名詞F1または用語ヒット率、誤った候補を出す率を確認する。モデルID・推論経路・量子化・データセットが一致しない比較は直接の採用根拠にしない。公開結果が見つからない項目は未確認とする。
+2. **ローカル用語辞書を追加する。** 設定から正式表記、読み、誤認識されやすい候補表記を登録・編集・削除できるようにする。AIモードがオフのときは明示登録された候補だけをローカルで置換する。自動学習や曖昧な一括置換は行わない。
+3. **AIモードでは辞書候補を補正の文脈に使う。** 文字起こしと一致する可能性のある項目だけを抽出し、「発音と文脈が合う場合だけ正式表記を使う。確信がなければ勝手に補わない」と指示する。個人名などの辞書項目はOpenCodeへ送る追加情報になるため、送信は利用者が明示的に有効化した場合に限る。
+4. **デコーダー／モデル変更は公開根拠が揃った場合に進める。** NeMoのCTC向け文脈バイアスや、同じ日本語Parakeetを基盤にしたJ-PACF-YOMI研究を調査対象にする。ただし同研究は調査時点で実験用の足場であり、配布可能な置換チェックポイントは公開されていない。Windows CPU実行、単一EXE配布、追加ダウンロード容量、ライセンスと、固有名詞評価の公開結果が確認できるまでは標準モデルを置き換えない。
+
+### 根拠と注意点
+
+- Sherpa-ONNXはhotwordsをtransducerモデルに限定していると説明し、NeMoはCTC向けGPU Phrase Boostingを別方式として説明している。
+- 日本語固有名詞の公開評価ではCER順位と固有名詞F1順位が一致しない例が報告されている。ただし紹介されているParakeetは別モデル版で、評価は15発話の小規模IT領域データのため、現在の日本語Parakeetへ数値をそのまま当てはめない。
+- 参考資料：[Sherpa-ONNX hotwords](https://k2-fsa.github.io/sherpa/onnx/hotwords/index.html)、[NeMo word boosting](https://docs.nvidia.com/nemo-framework/user-guide/latest/nemotoolkit/asr/asr_customization/word_boosting.html)、[日本語FLEURS比較](https://github.com/cm-nakamura-shogo/japanese-asr-l40s-benchmark)、[J-PACF-YOMIのモデルカード](https://huggingface.co/saeeew/J-PACF-YOMI-tdt)、[JP-HomophoneBench](https://huggingface.co/datasets/saeeew/JP-HomophoneBench)、[固有名詞F1評価](https://neosophie.com/en/blog/20260421-asr-evaluation)。

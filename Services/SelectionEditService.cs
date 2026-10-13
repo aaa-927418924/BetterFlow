@@ -154,49 +154,24 @@ internal static class SelectionEditService
         return actual is not null && actual.AsSpan().SequenceEqual(expected);
     }
 
-    private static async Task<bool> TryReselectInsertedTextAsync(
+    private static bool TryGetInsertedTextRange(
         TextPattern textPattern,
         string insertedText,
-        IntPtr targetWindow,
-        CancellationToken cancellationToken)
+        out TextPatternRange? insertedRange)
     {
+        insertedRange = null;
         var currentSelections = textPattern.GetSelection();
         if (currentSelections is null || currentSelections.Length != 1)
             return false;
 
         var currentSelection = currentSelections[0];
-        var insertedRange = string.Equals(
+        insertedRange = string.Equals(
             NormalizeText(currentSelection.GetText(-1)),
             NormalizeText(insertedText),
             StringComparison.Ordinal)
             ? currentSelection.Clone()
             : FindInsertedTextRange(textPattern.DocumentRange, currentSelection, insertedText);
-        if (insertedRange is null) return false;
-
-        // UIA providers can report a selected range without applying a visible input selection.
-        // Put the real caret at the inserted text's end, then select it with native keyboard input.
-        var caretRange = insertedRange.Clone();
-        caretRange.MoveEndpointByRange(
-            TextPatternRangeEndpoint.Start,
-            insertedRange,
-            TextPatternRangeEndpoint.End);
-        caretRange.Select();
-        await Task.Delay(TimeSpan.FromMilliseconds(20), cancellationToken);
-        if (PasteService.GetForegroundWindowHandle() != targetWindow ||
-            !PasteService.SelectTextBeforeCaret(insertedText, targetWindow))
-            return false;
-
-        for (var attempt = 0; attempt < 5; attempt++)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            await Task.Delay(TimeSpan.FromMilliseconds(20), cancellationToken);
-            var verified = textPattern.GetSelection();
-            if (verified is { Length: 1 } &&
-                string.Equals(NormalizeText(verified[0].GetText(-1)), NormalizeText(insertedText), StringComparison.Ordinal))
-                return true;
-        }
-
-        return false;
+        return insertedRange is not null;
     }
 
     private static TextPatternRange? FindInsertedTextRange(
@@ -304,9 +279,31 @@ internal static class SelectionEditService
             try
             {
                 var provider = FindFocusedTextProvider(providerRuntimeId, out var textPattern);
-                if (provider is not null && textPattern is not null && await TryReselectInsertedTextAsync(
-                        textPattern, insertedText, targetWindow, cancellationToken))
-                    return true;
+                if (provider is not null && textPattern is not null &&
+                    TryGetInsertedTextRange(textPattern, insertedText, out var insertedRange))
+                {
+                    if (PasteService.GetForegroundWindowHandle() != targetWindow)
+                        return false;
+
+                    // Select the whole replacement in one UI Automation operation.
+                    // Polling below only verifies that the target app kept this selection.
+                    insertedRange!.Select();
+                    if (IsReplacementSelected(textPattern, insertedText))
+                        return true;
+
+                    for (var verifyAttempt = 0; verifyAttempt < 5; verifyAttempt++)
+                    {
+                        cancellationToken.ThrowIfCancellationRequested();
+                        await Task.Delay(TimeSpan.FromMilliseconds(20), cancellationToken);
+                        if (PasteService.GetForegroundWindowHandle() != targetWindow)
+                            return false;
+
+                        if (IsReplacementSelected(textPattern, insertedText))
+                            return true;
+                    }
+
+                    return false;
+                }
             }
             catch (Exception ex) when (IsAutomationFailure(ex))
             {
@@ -318,6 +315,14 @@ internal static class SelectionEditService
         }
 
         return false;
+    }
+
+    private static bool IsReplacementSelected(TextPattern textPattern, string insertedText)
+    {
+        var selections = textPattern.GetSelection();
+        return selections is { Length: 1 } &&
+               string.Equals(NormalizeText(selections[0].GetText(-1)),
+                   NormalizeText(insertedText), StringComparison.Ordinal);
     }
 
     private static string NormalizeText(string? text) => (text ?? string.Empty)

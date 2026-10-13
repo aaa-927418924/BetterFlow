@@ -18,6 +18,8 @@ internal sealed class OpenCodeService : IDisposable
     {
         Timeout = TimeSpan.FromMinutes(3)
     };
+    private readonly object _modelCacheLock = new();
+    private HashSet<string>? _connectedModelKeys;
     private Process? _process;
     private Uri? _baseUri;
     private string? _workspace;
@@ -250,22 +252,35 @@ internal sealed class OpenCodeService : IDisposable
             }
         }
 
-        return options.OrderByDescending(option => option.ProviderId == "opencode" &&
-                                                    option.ModelId == "muse-spark-1.3-contributor-free")
+        var result = options.OrderByDescending(option => option.ProviderId == "opencode" &&
+                                                         option.ModelId == "muse-spark-1.3-contributor-free")
             .ThenBy(option => option.ProviderName, StringComparer.CurrentCultureIgnoreCase)
             .ThenBy(option => option.DisplayName, StringComparer.CurrentCultureIgnoreCase)
             .ToArray();
+        lock (_modelCacheLock)
+            _connectedModelKeys = result.Select(option => GetModelKey(option.ProviderId, option.ModelId))
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        return result;
     }
 
     public async Task EnsureModelAvailableAsync(string providerId, string modelId, CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrWhiteSpace(providerId) || string.IsNullOrWhiteSpace(modelId))
             throw new InvalidOperationException("OpenCodeのモデル一覧からモデルを選択してください。");
+        var modelKey = GetModelKey(providerId, modelId);
+        lock (_modelCacheLock)
+        {
+            if (IsRunning && _connectedModelKeys?.Contains(modelKey) == true)
+                return;
+        }
+
         var available = await GetModelsAsync(cancellationToken);
         if (!available.Any(option => string.Equals(option.ProviderId, providerId, StringComparison.OrdinalIgnoreCase) &&
                                      string.Equals(option.ModelId, modelId, StringComparison.OrdinalIgnoreCase)))
             throw new InvalidOperationException("選択中のモデルはOpenCodeで接続されていません。OpenCode Desktopで接続してから一覧を更新してください。");
     }
+
+    private static string GetModelKey(string providerId, string modelId) => providerId + "\0" + modelId;
 
     private static string GetModelDisplayName(string modelId, JsonElement model) =>
         model.TryGetProperty("name", out var name) && name.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(name.GetString())
@@ -498,6 +513,9 @@ internal sealed class OpenCodeService : IDisposable
 
     private void StopProcess()
     {
+        lock (_modelCacheLock)
+            _connectedModelKeys = null;
+
         var process = _process;
         _process = null;
         _baseUri = null;
