@@ -16,7 +16,6 @@ public partial class MainWindow : System.Windows.Window
     private readonly ContinuousMicrophoneRecorder _continuousRecorder = new();
     private readonly CancellationTokenSource _lifetime = new();
     private readonly OpenCodeService _openCode = new();
-    private readonly GptLiveAuthService _gptLiveAuth = new();
     private readonly IndicatorWindow _indicator;
     private readonly UndoWindow _undoWindow;
     private readonly bool _startHiddenInTray;
@@ -38,12 +37,10 @@ public partial class MainWindow : System.Windows.Window
     private bool _isRefreshingOpenCodeModels;
     private bool _loadingOpenCodeModelUi;
     private bool _loadingMicrophoneDeviceUi;
-    private bool _loadingSelectionEditEngineUi;
     private bool _openCodeReady;
     private bool _selectionEditSessionActive;
     private bool _selectionEditSessionStopping;
     private CancellationTokenSource? _selectionEditCancellation;
-    private GptLiveWebRtcSession? _gptLiveSession;
     private SelectionEditUndoRecord? _lastSelectionEditUndo;
     private IReadOnlyList<OpenCodeModelOption> _openCodeModels = Array.Empty<OpenCodeModelOption>();
     private IReadOnlyList<AudioInputDeviceOption> _audioInputDevices = Array.Empty<AudioInputDeviceOption>();
@@ -59,6 +56,8 @@ public partial class MainWindow : System.Windows.Window
     {
         InitializeComponent();
         _indicator = new IndicatorWindow();
+        _recorder.AudioLevelChanged += _indicator.SetAudioLevel;
+        _continuousRecorder.AudioLevelChanged += _indicator.SetAudioLevel;
         _undoWindow = new UndoWindow();
         _undoWindow.UndoRequested += UndoWindow_UndoRequested;
         _undoWindow.UndoExpired += UndoWindow_UndoExpired;
@@ -72,7 +71,6 @@ public partial class MainWindow : System.Windows.Window
         _settings = _settingsStore.Load();
         NormalizeAiSettings();
         InitializeOpenCodeModelUi();
-        InitializeSelectionEditEngineUi();
         InitializeMicrophoneDeviceUi();
         InitializeTrayIcon();
         Closing += MainWindow_Closing;
@@ -342,26 +340,13 @@ public partial class MainWindow : System.Windows.Window
     private void UpdateAiModeDisplay()
     {
         AiModeToggle.IsChecked = _settings.AiModeEnabled;
-        var selectionEditUsesGptLive = string.Equals(
-            _settings.SelectionEditEngine, "gpt-live", StringComparison.Ordinal);
         AiModeDescription.Text = !_settings.AiModeEnabled
             ? "オフ: 文字起こしをそのまま貼り付けます。"
-            : selectionEditUsesGptLive
-                ? "オン: OpenCodeで文章を整え、選択文編集はGPT Liveで会話します。"
-                : "オン: OpenCodeの選択モデルで文章を整えます。";
+            : "オン: OpenCodeの選択モデルで文章を整えます。";
         AiModeToggle.IsEnabled = _asr is not null && !_isBusy && !IsAnyRecording && !_isRefreshingOpenCodeModels;
         var canChooseModel = !_settings.AiModeEnabled && !_isBusy && !IsAnyRecording;
         OpenCodeModelCombo.IsEnabled = canChooseModel;
         RefreshOpenCodeModelsButton.IsEnabled = canChooseModel && !_isRefreshingOpenCodeModels;
-        var selectedEngine = SelectionEditEngineCombo.SelectedItem as System.Windows.Controls.ComboBoxItem;
-        var isGptLiveSelected = string.Equals(selectedEngine?.Tag as string, "gpt-live", StringComparison.Ordinal);
-        var canChooseEngine = _settings.AiModeEnabled && !_isBusy && !IsAnyRecording;
-        SelectionEditEngineCombo.IsEnabled = canChooseEngine;
-        GptLiveAuthButton.Visibility = isGptLiveSelected ? System.Windows.Visibility.Visible : System.Windows.Visibility.Collapsed;
-        GptLiveAuthButton.IsEnabled = canChooseEngine;
-        GptLiveAuthButton.Content = _gptLiveAuth.IsSignedIn ? "サインアウト" : "ChatGPTにサインイン";
-        GptLiveAuthStatus.Visibility = isGptLiveSelected ? System.Windows.Visibility.Visible : System.Windows.Visibility.Collapsed;
-        GptLiveAuthStatus.Text = _gptLiveAuth.IsSignedIn ? "ChatGPTにサインイン済み" : "ChatGPTにサインインしていません。";
         OpenCodeModelModeHint.Visibility = _settings.AiModeEnabled
             ? System.Windows.Visibility.Visible
             : System.Windows.Visibility.Collapsed;
@@ -416,7 +401,7 @@ public partial class MainWindow : System.Windows.Window
             _settings.OpenCodeModelId = "muse-spark-1.3-contributor-free";
             shouldSaveSettings = true;
         }
-        if (_settings.SelectionEditEngine is not ("opencode" or "gpt-live"))
+        if (!string.Equals(_settings.SelectionEditEngine, "opencode", StringComparison.Ordinal))
         {
             _settings.SelectionEditEngine = "opencode";
             shouldSaveSettings = true;
@@ -442,71 +427,6 @@ public partial class MainWindow : System.Windows.Window
             ? "OpenCode Desktopで現在接続中のproviderのモデルだけを一覧更新して読み込みます。"
             : $"保存済みの選択: {selected.DisplayName}。接続状態は一覧更新後に確認します。";
         _loadingOpenCodeModelUi = false;
-    }
-
-    private void InitializeSelectionEditEngineUi()
-    {
-        _loadingSelectionEditEngineUi = true;
-        SelectionEditEngineCombo.SelectedItem = SelectionEditEngineCombo.Items
-            .OfType<System.Windows.Controls.ComboBoxItem>()
-            .FirstOrDefault(item => string.Equals(item.Tag as string, _settings.SelectionEditEngine, StringComparison.Ordinal))
-            ?? SelectionEditEngineCombo.Items.OfType<System.Windows.Controls.ComboBoxItem>().FirstOrDefault();
-        _loadingSelectionEditEngineUi = false;
-    }
-
-    private void SelectionEditEngineCombo_SelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
-    {
-        if (_loadingSelectionEditEngineUi) return;
-        var selected = SelectionEditEngineCombo.SelectedItem as System.Windows.Controls.ComboBoxItem;
-        var engine = selected?.Tag as string;
-        if (engine is not ("opencode" or "gpt-live")) return;
-        if (!_settings.AiModeEnabled || _isBusy || IsAnyRecording)
-        {
-            _loadingSelectionEditEngineUi = true;
-            SelectionEditEngineCombo.SelectedItem = SelectionEditEngineCombo.Items
-                .OfType<System.Windows.Controls.ComboBoxItem>()
-                .FirstOrDefault(item => string.Equals(item.Tag as string, _settings.SelectionEditEngine, StringComparison.Ordinal));
-            _loadingSelectionEditEngineUi = false;
-            return;
-        }
-
-        _settings.SelectionEditEngine = engine;
-        _settingsStore.Save(_settings);
-        RuntimeStatus.Text = engine == "gpt-live" ? "GPT Liveを選択しました。" : "OpenCodeを選択しました。";
-        UpdateAiModeDisplay();
-    }
-
-    private async void GptLiveAuthButton_Click(object sender, System.Windows.RoutedEventArgs e)
-    {
-        if (_isBusy || IsAnyRecording || !_settings.AiModeEnabled) return;
-        if (_gptLiveAuth.IsSignedIn)
-        {
-            try
-            {
-                _gptLiveAuth.SignOut();
-                RuntimeStatus.Text = "ChatGPTからサインアウトしました。";
-            }
-            catch (Exception ex) { RuntimeStatus.Text = "サインアウトできませんでした。 " + ex.Message; }
-            UpdateAiModeDisplay();
-            return;
-        }
-
-        _isBusy = true;
-        UpdateAiModeDisplay();
-        GptLiveAuthStatus.Text = "ブラウザーでサインインしています…";
-        RuntimeStatus.Text = "ブラウザーでChatGPTにサインインしてください。";
-        try
-        {
-            await _gptLiveAuth.SignInAsync(_lifetime.Token);
-            RuntimeStatus.Text = "ChatGPTにサインインしました。";
-        }
-        catch (OperationCanceledException) when (_closing) { }
-        catch (Exception ex) { RuntimeStatus.Text = "ChatGPTにサインインできませんでした。 " + ex.GetBaseException().Message; }
-        finally
-        {
-            _isBusy = false;
-            UpdateAiModeDisplay();
-        }
     }
 
     private void InitializeMicrophoneDeviceUi() => RefreshMicrophoneDeviceList(updateStatus: false);
@@ -800,37 +720,18 @@ public partial class MainWindow : System.Windows.Window
     private void BeginSelectionEditSession(SelectionEditContext context)
     {
         var selectedInput = MicrophoneDeviceCombo.SelectedItem as AudioInputDeviceOption;
-        var isGptLive = string.Equals(_settings.SelectionEditEngine, "gpt-live", StringComparison.Ordinal);
-        if (isGptLive && !_gptLiveAuth.IsSignedIn)
-        {
-            RuntimeStatus.Text = "GPT Liveを使うには、設定画面からChatGPTにサインインしてください。";
-            _indicator.ShowStatus("サインインが必要", TimeSpan.FromSeconds(1));
-            return;
-        }
-
         var cancellation = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token);
         try
         {
-            if (!isGptLive)
-                StartRecorderWithFallback(_continuousRecorder.Start, selectedInput);
+            StartRecorderWithFallback(_continuousRecorder.Start, selectedInput);
             _selectionEditCancellation = cancellation;
             _selectionEditSessionActive = true;
             _selectionEditSessionStopping = false;
-            RuntimeStatus.Text = isGptLive
-                ? "GPT Liveへ接続しています。会話しながら選択文を編集できます。ショートカットで終了します。"
-                : "選択文を編集します。続けて話してください。ショートカットで終了できます。";
+            RuntimeStatus.Text = "選択文を編集します。続けて話してください。ショートカットで終了できます。";
             ActionButton.Content = "編集セッションを終了";
-            _indicator.ShowStatus(isGptLive ? "GPT Live起動中" : "選択文編集中");
+            _indicator.ShowStatus("選択文編集中");
             UpdateAiModeDisplay();
-            if (isGptLive)
-            {
-                _gptLiveSession = new GptLiveWebRtcSession(_gptLiveAuth);
-                _ = ProcessGptLiveSelectionSessionAsync(context, selectedInput, cancellation.Token);
-            }
-            else
-            {
-                _ = ProcessSelectionEditSessionAsync(context, cancellation.Token);
-            }
+            _ = ProcessSelectionEditSessionAsync(context, cancellation.Token);
         }
         catch
         {
@@ -872,11 +773,6 @@ public partial class MainWindow : System.Windows.Window
         RuntimeStatus.Text = "録音を終了しています。未処理の発話を順番に編集します…";
         ActionButton.Content = "編集を終了しています…";
         _indicator.ShowStatus("終了処理中");
-        if (_gptLiveSession is not null)
-        {
-            await _gptLiveSession.StopAsync();
-            return;
-        }
         try
         {
             await _continuousRecorder.StopAsync(_lifetime.Token);
@@ -999,155 +895,6 @@ public partial class MainWindow : System.Windows.Window
             ActionButton.Content = _asr is null ? "Setup" : "録音を開始";
             if (endedDuringShutdown) _indicator.HideStatus();
             else _indicator.ShowStatus("編集終了", TimeSpan.FromSeconds(1));
-            UpdateAiModeDisplay();
-        }
-    }
-
-    private async Task ProcessGptLiveSelectionSessionAsync(
-        SelectionEditContext context,
-        AudioInputDeviceOption? selectedInput,
-        CancellationToken cancellationToken)
-    {
-        var sessionFailed = false;
-        try
-        {
-            var microphoneLabel = selectedInput is null || selectedInput.Id == AudioInputDeviceOption.SystemDefaultId
-                ? AudioInputDeviceOption.SystemDefaultId
-                : selectedInput.DisplayName;
-            await (_gptLiveSession ?? throw new InvalidOperationException("GPT Liveセッションを開始できませんでした。"))
-                .RunAsync(context.CurrentText, microphoneLabel,
-                    (delegationId, transcript, token) => HandleGptLiveDelegationAsync(
-                        context, delegationId, transcript, token), status =>
-                {
-                    if (_closing) return;
-                    RuntimeStatus.Text = status;
-                    _indicator.ShowStatus(GetGptLiveIndicatorStatus(status));
-                }, cancellationToken);
-        }
-        catch (OperationCanceledException) when (_closing || _selectionEditSessionStopping) { }
-        catch (Exception ex)
-        {
-            sessionFailed = true;
-            RuntimeStatus.Text = "GPT Live音声編集を終了しました。 " + ex.GetBaseException().Message;
-            _indicator.ShowStatus("GPT Live接続失敗", TimeSpan.FromSeconds(1));
-        }
-        finally
-        {
-            if (_gptLiveSession is not null)
-            {
-                await _gptLiveSession.DisposeAsync();
-                _gptLiveSession = null;
-            }
-            var endedDuringShutdown = _closing || cancellationToken.IsCancellationRequested;
-            _selectionEditSessionActive = false;
-            _selectionEditSessionStopping = false;
-            _isBusy = false;
-            if (!_undoWindow.IsUndoVisible)
-            {
-                _undoWindow.HideUndo();
-                _lastSelectionEditUndo = null;
-            }
-            _selectionEditCancellation?.Dispose();
-            _selectionEditCancellation = null;
-            ActionButton.Content = _asr is null ? "Setup" : "録音を開始";
-            if (endedDuringShutdown) _indicator.HideStatus();
-            else if (!sessionFailed) _indicator.ShowStatus("編集終了", TimeSpan.FromSeconds(1));
-            UpdateAiModeDisplay();
-        }
-    }
-
-    private static string GetGptLiveIndicatorStatus(string status)
-    {
-        if (status.Contains("失敗", StringComparison.Ordinal) ||
-            status.Contains("できませんでした", StringComparison.Ordinal) ||
-            status.Contains("返せませんでした", StringComparison.Ordinal))
-            return "処理失敗";
-        if (status.Contains("開始しています", StringComparison.Ordinal) ||
-            status.Contains("接続しています", StringComparison.Ordinal) ||
-            status.Contains("準備しています", StringComparison.Ordinal))
-            return "GPT Live起動中";
-        if (status.Contains("認識", StringComparison.Ordinal) ||
-            status.Contains("発話", StringComparison.Ordinal))
-            return "音声認識中";
-        if (status.Contains("OpenCode", StringComparison.OrdinalIgnoreCase) ||
-            status.Contains("編集指示", StringComparison.Ordinal))
-            return "AI編集中";
-        if (status.Contains("返答", StringComparison.Ordinal))
-            return "応答中";
-        if (status.Contains("話しかけてください", StringComparison.Ordinal))
-            return "話してください";
-        if (status.Contains("会話中", StringComparison.Ordinal))
-            return "会話できます";
-        return "GPT Live起動中";
-    }
-
-    private async Task<GptLiveDelegationResult> HandleGptLiveDelegationAsync(
-        SelectionEditContext context,
-        string delegationId,
-        string spokenInstruction,
-        CancellationToken cancellationToken)
-    {
-        _undoWindow.HideUndo(stopTimer: false);
-        _isBusy = true;
-        ActionButton.Content = "選択文を編集しています…";
-        RuntimeStatus.Text = "OpenCodeで音声指示を処理しています…";
-        _indicator.ShowStatus("AI編集中");
-        UpdateAiModeDisplay();
-        try
-        {
-            var transcript = TranscriptFormatter.NormalizeTranscript(spokenInstruction);
-            if (!TranscriptFormatter.HasMeaningfulText(transcript))
-                return new GptLiveDelegationResult(false, "もう一度");
-
-            if (IsUndoSelectionEditCommand(transcript))
-            {
-                var wasUndone = await UndoLastSelectionEditAsync(context, cancellationToken);
-                RuntimeStatus.Text = wasUndone ? "直前の編集を元に戻しました。" : "元に戻せる編集がありません。";
-                return new GptLiveDelegationResult(wasUndone, wasUndone ? "戻しました" : "戻せません");
-            }
-
-            if (!_openCode.IsRunning) await EnsureOpenCodeReadyAsync();
-            var response = await _openCode.ProcessLiveSelectionInstructionAsync(
-                context.CurrentText,
-                transcript,
-                _settings.OpenCodeModelProviderId,
-                _settings.OpenCodeModelId,
-                cancellationToken);
-
-            if (!response.ShouldEdit)
-            {
-                RuntimeStatus.Text = "選択文は変更していません。";
-                return new GptLiveDelegationResult(false, response.SpokenResponse);
-            }
-
-            if (string.Equals(context.CurrentText, response.ReplacementText, StringComparison.Ordinal))
-            {
-                RuntimeStatus.Text = "選択文に変更はありませんでした。";
-                return new GptLiveDelegationResult(false, "変更なし");
-            }
-
-            var previousText = context.CurrentText;
-            var result = await SelectionEditService.ReplaceCurrentSelectionAsync(
-                context, response.ReplacementText, cancellationToken);
-            if (result.Applied && !string.Equals(previousText, context.CurrentText, StringComparison.Ordinal))
-            {
-                _lastSelectionEditUndo = new SelectionEditUndoRecord(context, previousText, context.CurrentText);
-                _undoWindow.ShowUndo();
-            }
-            RuntimeStatus.Text = result.Message;
-            if (!result.CanContinue)
-            {
-                _selectionEditSessionStopping = true;
-                _ = _gptLiveSession?.StopAsync();
-                return new GptLiveDelegationResult(result.Applied, result.Applied ? "完了" : "失敗");
-            }
-            return new GptLiveDelegationResult(result.Applied,
-                result.Applied ? "完了" : "失敗");
-        }
-        finally
-        {
-            _isBusy = false;
-            ActionButton.Content = _selectionEditSessionStopping ? "編集を終了しています…" : "編集セッションを終了";
             UpdateAiModeDisplay();
         }
     }

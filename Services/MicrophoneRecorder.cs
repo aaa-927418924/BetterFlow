@@ -12,6 +12,8 @@ internal sealed class MicrophoneRecorder : IDisposable
     private TaskCompletionSource? _stopped;
     private Exception? _recordingError;
 
+    public event Action<float?>? AudioLevelChanged;
+
     public static IReadOnlyList<AudioInputDeviceOption> GetInputDevices()
     {
         var devices = new List<AudioInputDeviceOption>
@@ -55,6 +57,7 @@ internal sealed class MicrophoneRecorder : IDisposable
         _audio = new MemoryStream();
         _recordingError = null;
         _stopped = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        PublishAudioLevel(0);
 
         var recorder = new WaveInEvent
         {
@@ -95,6 +98,7 @@ internal sealed class MicrophoneRecorder : IDisposable
             recorder.Dispose();
             _waveIn = null;
             ClearAudioBuffer();
+            PublishAudioLevel(null);
             throw;
         }
 
@@ -102,6 +106,7 @@ internal sealed class MicrophoneRecorder : IDisposable
         recorder.RecordingStopped -= OnRecordingStopped;
         recorder.Dispose();
         _waveIn = null;
+        PublishAudioLevel(null);
 
         if (_recordingError is not null)
         {
@@ -142,6 +147,7 @@ internal sealed class MicrophoneRecorder : IDisposable
             recorder.RecordingStopped -= OnRecordingStopped;
             recorder.Dispose();
         }
+        PublishAudioLevel(null);
         ClearAudioBuffer();
     }
 
@@ -151,11 +157,18 @@ internal sealed class MicrophoneRecorder : IDisposable
         {
             lock (_sync)
                 _audio?.Write(e.Buffer, 0, e.BytesRecorded);
+            PublishAudioLevel(AudioInputLevel.GetNormalizedLevel(e.Buffer.AsSpan(0, e.BytesRecorded)));
         }
         catch (Exception ex)
         {
             _recordingError = ex;
         }
+    }
+
+    private void PublishAudioLevel(float? level)
+    {
+        try { AudioLevelChanged?.Invoke(level); }
+        catch { }
     }
 
     private void OnRecordingStopped(object? sender, StoppedEventArgs e)

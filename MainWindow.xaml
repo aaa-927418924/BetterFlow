@@ -64,24 +64,8 @@
                                 </StackPanel>
                             </DockPanel>
                             <StackPanel x:Name="SelectionEditEnginePanel" Margin="0,14,0,0">
-                                <TextBlock Text="選択文の編集方式" FontSize="13" Foreground="{StaticResource MutedBrush}" />
-                                <DockPanel Margin="0,5,0,0" LastChildFill="True">
-                                    <Button x:Name="GptLiveAuthButton" DockPanel.Dock="Right" Content="ChatGPTにサインイン"
-                                            MinWidth="150" Height="40" Padding="10,0" Margin="8,0,0,0"
-                                            Style="{StaticResource SecondaryButtonStyle}"
-                                            Click="GptLiveAuthButton_Click" AutomationProperties.Name="ChatGPT音声モードのサインイン" />
-                                    <ComboBox x:Name="SelectionEditEngineCombo" IsEditable="False" MinHeight="40"
-                                              Background="#333333" Foreground="#F4F4F4" BorderBrush="#686868"
-                                              FontFamily="Yu Gothic UI" FontSize="13"
-                                              Style="{StaticResource DarkComboBoxStyle}"
-                                              SelectionChanged="SelectionEditEngineCombo_SelectionChanged"
-                                              AutomationProperties.Name="選択文の編集方式">
-                                        <ComboBoxItem Content="OpenCode" Tag="opencode" />
-                                        <ComboBoxItem Content="GPT Live" Tag="gpt-live" />
-                                    </ComboBox>
-                                </DockPanel>
-                                <TextBlock x:Name="GptLiveAuthStatus" FontSize="11" Foreground="{StaticResource MutedBrush}"
-                                           Margin="0,5,0,0" AutomationProperties.LiveSetting="Polite" />
+                                <TextBlock Text="選択文の編集" FontSize="13" Foreground="{StaticResource MutedBrush}" />
+                                <TextBlock Text="選択中のOpenCodeモデルを使用します。" FontSize="13" Margin="0,5,0,0" />
                             </StackPanel>
                         </StackPanel>
                         <StackPanel x:Name="MicrophoneSettingsPanel" Margin="0,16,0,0" Visibility="Collapsed">

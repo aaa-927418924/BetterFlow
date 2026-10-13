@@ -34,6 +34,8 @@ internal sealed class ContinuousMicrophoneRecorder : IDisposable
     private long _lastVoiceTimestamp;
     private Exception? _recordingError;
 
+    public event Action<float?>? AudioLevelChanged;
+
     public bool IsRecording => _waveIn is not null;
 
     public void Start(int deviceNumber = -1)
@@ -65,6 +67,7 @@ internal sealed class ContinuousMicrophoneRecorder : IDisposable
             _stopped = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             _stopTask = null;
         }
+        PublishAudioLevel(0);
 
         var recorder = new WaveInEvent
         {
@@ -93,6 +96,7 @@ internal sealed class ContinuousMicrophoneRecorder : IDisposable
                 _vad?.Dispose();
                 _vad = null;
             }
+            PublishAudioLevel(null);
             throw;
         }
     }
@@ -137,6 +141,7 @@ internal sealed class ContinuousMicrophoneRecorder : IDisposable
                 _vad?.Dispose();
                 _vad = null;
             }
+            PublishAudioLevel(null);
             throw;
         }
 
@@ -158,6 +163,7 @@ internal sealed class ContinuousMicrophoneRecorder : IDisposable
             _vad = null;
         }
         vad?.Dispose();
+        PublishAudioLevel(null);
     }
 
     public void DiscardPendingUtterances()
@@ -187,6 +193,7 @@ internal sealed class ContinuousMicrophoneRecorder : IDisposable
             _vad?.Dispose();
             _vad = null;
         }
+        PublishAudioLevel(null);
     }
 
     private void OnDataAvailable(object? sender, WaveInEventArgs e)
@@ -198,6 +205,7 @@ internal sealed class ContinuousMicrophoneRecorder : IDisposable
             var chunk = e.Buffer.AsSpan(0, bytesRecorded).ToArray();
             lock (_sync)
                 ProcessChunkLocked(chunk);
+            PublishAudioLevel(AudioInputLevel.GetNormalizedLevel(e.Buffer.AsSpan(0, bytesRecorded)));
         }
         catch (Exception ex)
         {
@@ -207,6 +215,12 @@ internal sealed class ContinuousMicrophoneRecorder : IDisposable
                 _utterances?.Writer.TryComplete(ex);
             }
         }
+    }
+
+    private void PublishAudioLevel(float? level)
+    {
+        try { AudioLevelChanged?.Invoke(level); }
+        catch { }
     }
 
     private void ProcessChunkLocked(byte[] chunk)

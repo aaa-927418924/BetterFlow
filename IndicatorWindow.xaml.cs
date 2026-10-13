@@ -1,5 +1,6 @@
 using System.Runtime.InteropServices;
 using System.Windows;
+using System.Windows.Controls;
 using System.Windows.Interop;
 using System.Windows.Threading;
 
@@ -11,6 +12,10 @@ public partial class IndicatorWindow : System.Windows.Window
     private const long WsExTransparent = 0x00000020L;
     private const long WsExToolWindow = 0x00000080L;
     private const long WsExNoActivate = 0x08000000L;
+    private const double IconCanvasHeight = 24.4;
+    private const double LeftBarIdleHeight = IconCanvasHeight * 41 / 77;
+    private const double CenterBarIdleHeight = IconCanvasHeight * 46 / 77;
+    private const double RightBarIdleHeight = IconCanvasHeight * 29 / 77;
     private readonly DispatcherTimer _hideTimer;
 
     public IndicatorWindow()
@@ -50,6 +55,38 @@ public partial class IndicatorWindow : System.Windows.Window
     {
         _hideTimer.Stop();
         Hide();
+    }
+
+    public void SetAudioLevel(float? normalizedLevel)
+    {
+        if (!Dispatcher.CheckAccess())
+        {
+            if (!Dispatcher.HasShutdownStarted && !Dispatcher.HasShutdownFinished)
+                Dispatcher.BeginInvoke(DispatcherPriority.Render, new Action(() => SetAudioLevel(normalizedLevel)));
+            return;
+        }
+
+        if (normalizedLevel is null)
+        {
+            LeftWaveBar.Height = LeftBarIdleHeight;
+            CenterWaveBar.Height = CenterBarIdleHeight;
+            RightWaveBar.Height = RightBarIdleHeight;
+            CenterBarsVertically();
+            return;
+        }
+
+        var level = Math.Clamp(normalizedLevel.Value, 0f, 1f);
+        LeftWaveBar.Height = 4.5 + (LeftBarIdleHeight - 4.5) * level;
+        CenterWaveBar.Height = 5.5 + (CenterBarIdleHeight - 5.5) * level;
+        RightWaveBar.Height = 4.0 + (RightBarIdleHeight - 4.0) * level;
+        CenterBarsVertically();
+    }
+
+    private void CenterBarsVertically()
+    {
+        Canvas.SetTop(LeftWaveBar, (IconCanvasHeight - LeftWaveBar.Height) / 2);
+        Canvas.SetTop(CenterWaveBar, (IconCanvasHeight - CenterWaveBar.Height) / 2);
+        Canvas.SetTop(RightWaveBar, (IconCanvasHeight - RightWaveBar.Height) / 2);
     }
 
     private void MakeClickThrough()

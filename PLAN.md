@@ -125,9 +125,9 @@
 - 2026-10-13: 設定画面から指定された補足・完了テキストを削除。マイク名は専用テンプレートで省略せず折り返して表示する。ショートカット変更と音声/OpenCode一覧更新ボタンを共通の角丸スタイルへ揃え、AIモード中に無効なOpenCode更新ボタンはAIモードオフ時と同じ配色を維持する。
 - Releaseビルドとwin-x64自己完結型の単一EXE発行に成功。発行元`artifacts/publish-settings-compact/BetterFlow.exe`と`dist/Better Flow.exe`は81,813,982 bytes、SHA-256 `3855AFE38AAE615C85F0AB8AC612C01530158E78216ED5016ADBFF06DA47F2DC`で一致。NuGet脆弱性フィードに接続できずNU1900警告。実画面での表示・クリック確認は未実施。
 
-## 選択文のGPT Live音声編集
+## 選択文のGPT Live音声編集（旧機能・削除済み）
 
-- 設定から選択文の編集方式を切り替えられるようにする。既定は現在のOpenCode方式を維持し、GPT Liveは任意選択とする。
+- 以下は過去の計画・実装履歴。2026-10-14にユーザー判断でGPT Live機能を削除し、現在のアプリはOpenCodeのみを使用する。
 - GPT LiveではChatGPTサブスクリプションのOAuth認証とWebRTCの双方向音声を使用する。Platform APIキー、API課金経路へのフォールバックは設けない。
 - 選択文を会話の初期文脈として渡し、モデルが文章変更を求められた時だけアプリ内の限定ツールで現在の選択範囲を置換する。文法確認など変更を求めない発話には音声で返答し、文章は変更しない。置換後は選択範囲を保持し、同じライブセッションで連続編集を続ける。
 - OAuthトークンはWindowsユーザーのDPAPIで保護し、WebView側へ渡さない。OpenCode方式は従来どおりローカルOpenCode serverを使う。設定画面には注意書き・規約案内の文章を追加しない。
@@ -143,3 +143,10 @@
 - 2026-10-14: GPT Liveの初期発話・編集判定・応答の長さ・待ち状態表示を修正。選択文はJSONエスケープしてセッション指示内の文脈として渡し、起動時は新しい発話を待つ。明示的な編集指示を質問扱いした場合は専用の置換処理で再試行し、編集完了時は「完了」など1語、質問応答は1～2語に制限。インジケーターにGPT Live起動中・会話可能・認識・編集中・応答中を表示。Release buildと単体EXE発行に成功し、artifacts/publish-gpt-live-fix3/BetterFlow.exeとdist/Better Flow.exeは82,346,435 bytes、SHA-256 7537E4FDD028D20A32D0B15B59261E8C5F0E78D78F4AE950FEECC386584EC11Bで一致。配布先への更新を完了し、更新前版はartifacts/BetterFlow-before-gpt-live-edit-fix3.exeへ保存。NuGet脆弱性フィードに接続できずNU1900警告あり。ChatGPT OAuth・実マイク・GPT Live会話の実動作は未確認。テストスイートは実行していない。
 
 - 2026-10-14: GPT Liveの応答言語と発話単位の対応付けを修正。セッション指示とOpenCodeの編集プロンプトで、指定翻訳言語はreplacementTextだけに適用し、音声応答は常に日本語と明示。編集完了時の余分なcommentaryをやめ、クライアントから返したspeakable文だけを読み上げる。文字起こしを共有バッファからFIFOの発話スナップショットへ変更し、input_transcript.added/turn.doneを同じ発話に統合、別発話は順番に処理。委譲IDの重複も抑止。Release build成功（NU1900はNuGet脆弱性フィード取得不可の警告）。単体EXEをartifacts/publish-gpt-live-fix4/BetterFlow.exeとdist/Better Flow.exeへ発行・反映し、両者は82,347,052 bytes、SHA-256 8E3DCA07D2A7909DF0518DE78F2120C7CB15761C1DC6530279CDC413CAF13018で一致。旧配布版をartifacts/BetterFlow-before-transcript-correlation-adjustment.exeへ保存。GPT Liveの実OAuth・マイク・文章編集は未確認。テストスイートは実行していない。
+
+## GPT Liveの削除とマイク音量インジケーター（2026-10-14）
+
+- ユーザー判断によりGPT Liveを機能ごと無効化。設定のエンジン選択・ChatGPT OAuth・WebRTCセッション・専用WebView2セットアップ・HTML資産と依存を削除。選択文編集は常にOpenCodeの連続音声編集経路を使う。旧settings.jsonにGPT Liveが保存されている場合も起動時にOpenCodeへ補正して保存する。
+- 下部インジケーターのアイコンをSVGの形状に合わせた3本線へ置き換え、現在選択中のマイクから受け取るPCM16のRMSレベルに応じて線の高さを変える。26px幅表示時のSVG元寸法を上限にし、左13.0px、中央14.6px、右9.2pxを超えない。録音終了時は元のロゴ寸法へ戻す。
+- Release buildは警告0・エラー0、win-x64自己完結型単一EXE発行に成功。`artifacts/publish-opencode-only/BetterFlow.exe`と`dist/Better Flow.exe`は81,818,617 bytes、SHA-256 `A09312A24D5F97FD9510D4F90B4811D2EB83912323E34AF53B3E7AEAE17CF022`で一致。WebView2へのパッケージ参照は削除済み。置換前EXEは`artifacts/BetterFlow-before-opencode-only.exe`および直前配布版`artifacts/BetterFlow-before-icon-color-adjustment.exe`へ保管。テストスイートは未実施。実マイクの波形表示とOpenCode生成・選択文編集は未確認。
+- `dotnet restore AutoPrompt.csproj --ignore-failed-sources -p:NuGetAudit=false`、Release build、publishを実行。build成功・警告0・エラー0。テストスイートは未実施。Windows上のマイクレベル表示、OpenCode生成、選択文編集など実動作は未確認。
