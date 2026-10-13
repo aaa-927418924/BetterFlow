@@ -2,7 +2,7 @@ using System.Buffers.Binary;
 using System.IO;
 using NAudio.Wave;
 
-namespace AutoPrompt.Services;
+namespace BetterFlow.Services;
 
 internal sealed class MicrophoneRecorder : IDisposable
 {

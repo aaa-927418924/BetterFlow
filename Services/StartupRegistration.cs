@@ -1,11 +1,12 @@
 using Microsoft.Win32;
 
-namespace AutoPrompt.Services;
+namespace BetterFlow.Services;
 
 internal static class StartupRegistration
 {
     private const string RunKeyPath = @"Software\Microsoft\Windows\CurrentVersion\Run";
-    private const string ValueName = "AutoPrompt";
+    private const string ValueName = "Better Flow";
+    private const string LegacyValueName = "AutoPrompt";
     private const string TrayArgument = "--tray";
 
     public static bool IsTrayLaunchRequested => Environment.GetCommandLineArgs()
@@ -18,10 +19,25 @@ internal static class StartupRegistration
         {
             try
             {
-                using var key = Registry.CurrentUser.OpenSubKey(RunKeyPath, writable: false);
-                var registeredCommand = key?.GetValue(ValueName) as string;
-                return !string.IsNullOrWhiteSpace(registeredCommand) &&
-                       string.Equals(registeredCommand, BuildCommand(), StringComparison.OrdinalIgnoreCase);
+                using var key = Registry.CurrentUser.OpenSubKey(RunKeyPath, writable: true);
+                if (key is null) return false;
+
+                var currentCommand = BuildCommand();
+                var registeredCommand = key.GetValue(ValueName) as string;
+                if (string.Equals(registeredCommand, currentCommand, StringComparison.OrdinalIgnoreCase))
+                {
+                    key.DeleteValue(LegacyValueName, throwOnMissingValue: false);
+                    return true;
+                }
+
+                var legacyCommand = key.GetValue(LegacyValueName) as string;
+                if (string.IsNullOrWhiteSpace(legacyCommand)) return false;
+
+                // The old Run value belongs to this app. Move it to the renamed
+                // entry and point it at the Better Flow executable now in use.
+                key.SetValue(ValueName, currentCommand, RegistryValueKind.String);
+                key.DeleteValue(LegacyValueName, throwOnMissingValue: false);
+                return true;
             }
             catch
             {
@@ -38,10 +54,12 @@ internal static class StartupRegistration
         if (enabled)
         {
             key.SetValue(ValueName, BuildCommand(), RegistryValueKind.String);
+            key.DeleteValue(LegacyValueName, throwOnMissingValue: false);
             return;
         }
 
         key.DeleteValue(ValueName, throwOnMissingValue: false);
+        key.DeleteValue(LegacyValueName, throwOnMissingValue: false);
     }
 
     private static string BuildCommand()

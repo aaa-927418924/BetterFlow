@@ -1,4 +1,4 @@
-namespace AutoPrompt.Services;
+namespace BetterFlow.Services;
 
 internal sealed record OpenCodeModelOption(
     string ProviderId,

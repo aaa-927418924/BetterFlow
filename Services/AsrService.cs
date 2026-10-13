@@ -1,6 +1,6 @@
 using SherpaOnnx;
 
-namespace AutoPrompt.Services;
+namespace BetterFlow.Services;
 
 internal sealed class AsrService : IDisposable
 {

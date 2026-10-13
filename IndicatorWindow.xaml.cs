@@ -3,7 +3,7 @@ using System.Windows;
 using System.Windows.Interop;
 using System.Windows.Threading;
 
-namespace AutoPrompt;
+namespace BetterFlow;
 
 public partial class IndicatorWindow : System.Windows.Window
 {

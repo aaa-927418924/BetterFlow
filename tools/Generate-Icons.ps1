@@ -65,11 +65,11 @@ function Get-IconPng([int]$width, [int]$height) {
 }
 
 $png = Get-IconPng ([int]$viewWidth) ([int]$viewHeight)
-[System.IO.File]::WriteAllBytes((Join-Path $assetsPath 'AutoPrompt.png'), $png)
+[System.IO.File]::WriteAllBytes((Join-Path $assetsPath 'BetterFlow.png'), $png)
 
 $sizes = @(16, 32, 48, 256)
 $images = foreach ($size in $sizes) { Get-IconPng $size $size }
-$iconPath = Join-Path $assetsPath 'AutoPrompt.ico'
+$iconPath = Join-Path $assetsPath 'BetterFlow.ico'
 $iconStream = [System.IO.File]::Create($iconPath)
 $writer = [System.IO.BinaryWriter]::new($iconStream)
 try {
@@ -96,4 +96,4 @@ try {
     $iconStream.Dispose()
 }
 
-Write-Output "Generated Assets/AutoPrompt.png and Assets/AutoPrompt.ico from icon.svg"
+Write-Output "Generated Assets/BetterFlow.png and Assets/BetterFlow.ico from icon.svg"

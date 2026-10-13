@@ -1,7 +1,7 @@
 using System.IO;
 using System.Text.Json.Serialization;
 
-namespace AutoPrompt.Services;
+namespace BetterFlow.Services;
 
 internal sealed class AppSettings
 {

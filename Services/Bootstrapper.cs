@@ -4,7 +4,7 @@ using System.Net.Http;
 using System.Security.Cryptography;
 using SharpCompress.Readers;
 
-namespace AutoPrompt.Services;
+namespace BetterFlow.Services;
 
 internal sealed class Bootstrapper
 {
@@ -62,7 +62,7 @@ internal sealed class Bootstrapper
             catch (IOException ex) when (IsSharingViolation(ex))
             {
                 if (elapsed.Elapsed >= SetupLockTimeout)
-                    throw new IOException("別のAuto Promptが音声モデルをセットアップ中です。起動中のセットアップが終わるまで待ってから再試行してください。", ex);
+                    throw new IOException("別のBetter Flowが音声モデルをセットアップ中です。起動中のセットアップが終わるまで待ってから再試行してください。", ex);
                 await Task.Delay(300, cancellationToken);
             }
         }

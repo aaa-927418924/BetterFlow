@@ -2,17 +2,18 @@ using System.IO;
 using Microsoft.Win32;
 using System.Windows.Interop;
 using System.Windows.Input;
-using AutoPrompt.Services;
+using BetterFlow.Services;
 using ToolStripMenuItem = System.Windows.Forms.ToolStripMenuItem;
 using ToolStripSeparator = System.Windows.Forms.ToolStripSeparator;
 
-namespace AutoPrompt;
+namespace BetterFlow;
 
 public partial class MainWindow : System.Windows.Window
 {
     private readonly SettingsStore _settingsStore = new();
     private readonly GlobalHotkey _hotkey = new();
     private readonly MicrophoneRecorder _recorder = new();
+    private readonly ContinuousMicrophoneRecorder _continuousRecorder = new();
     private readonly CancellationTokenSource _lifetime = new();
     private readonly OpenCodeService _openCode = new();
     private readonly IndicatorWindow _indicator;
@@ -35,8 +36,13 @@ public partial class MainWindow : System.Windows.Window
     private bool _isRefreshingOpenCodeModels;
     private bool _loadingOpenCodeModelUi;
     private bool _loadingMicrophoneDeviceUi;
+    private bool _selectionEditSessionActive;
+    private bool _selectionEditSessionStopping;
+    private CancellationTokenSource? _selectionEditCancellation;
     private IReadOnlyList<OpenCodeModelOption> _openCodeModels = Array.Empty<OpenCodeModelOption>();
     private IReadOnlyList<AudioInputDeviceOption> _audioInputDevices = Array.Empty<AudioInputDeviceOption>();
+
+    private bool IsAnyRecording => _recorder.IsRecording || _continuousRecorder.IsRecording || _selectionEditSessionActive;
 
     public MainWindow()
     {
@@ -110,6 +116,11 @@ public partial class MainWindow : System.Windows.Window
 
     private async void ActionButton_Click(object sender, System.Windows.RoutedEventArgs e)
     {
+        if (_selectionEditSessionActive)
+        {
+            await RecordButton_Click();
+            return;
+        }
         if (_isBusy) return;
         if (_asr is null)
         {
@@ -194,10 +205,10 @@ public partial class MainWindow : System.Windows.Window
     private async void AiModeToggle_Click(object sender, System.Windows.RoutedEventArgs e)
     {
         var enableAiMode = AiModeToggle.IsChecked == true;
-        if (_asr is null || _isBusy || _recorder.IsRecording)
+        if (_asr is null || _isBusy || IsAnyRecording)
         {
             AiModeToggle.IsChecked = _settings.AiModeEnabled;
-            RuntimeStatus.Text = _recorder.IsRecording
+            RuntimeStatus.Text = IsAnyRecording
                 ? "録音中はモードを切り替えられません。"
                 : "処理中はモードを切り替えられません。";
             return;
@@ -268,10 +279,10 @@ public partial class MainWindow : System.Windows.Window
             ? "オン: OpenCodeの選択モデルで文章を整えます。"
             : "オフ: 文字起こしをそのまま貼り付けます。";
         PrivacyNotice.Text = _settings.AiModeEnabled
-            ? "AIモードでは文字起こしテキストをOpenCode経由で選択中のモデルへ送信します。音声はPC内で処理します。"
+            ? "音声はPC内で文字起こしします。AIモードでは文字起こしと、選択文の編集時に選択中の文章・音声指示をOpenCode経由でモデルへ送信します。"
             : "音声と文字起こしはPC内で処理します。AIモードを使うときだけ文字起こしテキストをOpenCode経由で送信します。";
-        AiModeToggle.IsEnabled = _asr is not null && !_isBusy && !_recorder.IsRecording && !_isRefreshingOpenCodeModels;
-        var canChooseModel = !_settings.AiModeEnabled && !_isBusy && !_recorder.IsRecording;
+        AiModeToggle.IsEnabled = _asr is not null && !_isBusy && !IsAnyRecording && !_isRefreshingOpenCodeModels;
+        var canChooseModel = !_settings.AiModeEnabled && !_isBusy && !IsAnyRecording;
         OpenCodeModelCombo.IsEnabled = canChooseModel;
         RefreshOpenCodeModelsButton.IsEnabled = canChooseModel && !_isRefreshingOpenCodeModels;
         OpenCodeModelModeHint.Visibility = _settings.AiModeEnabled
@@ -495,7 +506,7 @@ public partial class MainWindow : System.Windows.Window
     private void OpenCodeModelCombo_SelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
     {
         if (_loadingOpenCodeModelUi) return;
-        if (_settings.AiModeEnabled || _isBusy || _recorder.IsRecording)
+        if (_settings.AiModeEnabled || _isBusy || IsAnyRecording)
         {
             _loadingOpenCodeModelUi = true;
             OpenCodeModelCombo.SelectedItem = FindSelectedOpenCodeModel();
@@ -527,7 +538,7 @@ public partial class MainWindow : System.Windows.Window
 
     private async void RefreshOpenCodeModels_Click(object sender, System.Windows.RoutedEventArgs e)
     {
-        if (_settings.AiModeEnabled || _isBusy || _recorder.IsRecording)
+        if (_settings.AiModeEnabled || _isBusy || IsAnyRecording)
         {
             OpenCodeModelStatus.Text = "モデル一覧を更新するには、AIモードをオフにしてください。";
             return;
@@ -568,7 +579,7 @@ public partial class MainWindow : System.Windows.Window
         _asr = recognizer;
         RegisterConfiguredHotkey();
         TitleText.Visibility = System.Windows.Visibility.Collapsed;
-        BodyText.Text = "入力欄にカーソルを置き、ショートカットを押して話してください。\nもう一度押すと変換して貼り付けます。";
+        BodyText.Text = "入力欄にカーソルを置いてショートカットを押すと音声入力を始めます。選択文がある状態で押すと、その文章を音声指示で編集します。編集セッション中は話すだけで続けて適用され、同じショートカットで終了します。";
         CapacityText.Visibility = System.Windows.Visibility.Collapsed;
         ShortcutSettingsPanel.Visibility = System.Windows.Visibility.Visible;
         MicrophoneSettingsPanel.Visibility = System.Windows.Visibility.Visible;
@@ -583,6 +594,12 @@ public partial class MainWindow : System.Windows.Window
 
     private async Task RecordButton_Click()
     {
+        if (_selectionEditSessionActive)
+        {
+            await StopSelectionEditSessionAsync();
+            return;
+        }
+
         if (_isBusy || _asr is null)
         {
             RuntimeStatus.Text = _asr is null ? "先にSetupを完了してください。" : "処理が終わるまでお待ちください。";
@@ -594,25 +611,27 @@ public partial class MainWindow : System.Windows.Window
             try
             {
                 _pasteTarget = PasteService.GetForegroundWindowHandle();
+                if (SelectionEditService.TryCapture(out var selection, out var selectionError))
+                {
+                    if (!_settings.AiModeEnabled)
+                    {
+                        RuntimeStatus.Text = "選択文の音声編集にはAIモードをオンにしてください。";
+                        _indicator.ShowStatus("AIモードをオン", TimeSpan.FromSeconds(1));
+                        return;
+                    }
+
+                    BeginSelectionEditSession(selection!);
+                    return;
+                }
+                if (!string.IsNullOrWhiteSpace(selectionError))
+                {
+                    RuntimeStatus.Text = selectionError;
+                    _indicator.ShowStatus("選択を確認", TimeSpan.FromSeconds(1));
+                    return;
+                }
+
                 var selectedInput = MicrophoneDeviceCombo.SelectedItem as AudioInputDeviceOption;
-                try
-                {
-                    _recorder.Start(selectedInput?.DeviceNumber ?? -1);
-                }
-                catch (Exception selectedDeviceError) when (selectedInput is { DeviceNumber: >= 0 })
-                {
-                    try
-                    {
-                        _recorder.Start(-1);
-                        MicrophoneDeviceStatus.Text = "選択したマイクを使えないため、システム設定の既定マイクで録音します。";
-                    }
-                    catch (Exception fallbackError)
-                    {
-                        throw new InvalidOperationException(
-                            "選択したマイクとシステム設定の既定マイクを開始できませんでした。入力デバイスを確認してください。",
-                            new AggregateException(selectedDeviceError, fallbackError));
-                    }
-                }
+                StartRecorderWithFallback(_recorder.Start, selectedInput);
                 ActionButton.Content = "録音を停止して変換";
                 RuntimeStatus.Text = "録音中 · もう一度ショートカットで停止";
                 _indicator.ShowStatus("録音中");
@@ -623,6 +642,160 @@ public partial class MainWindow : System.Windows.Window
         }
 
         await StopAndProcessAsync();
+    }
+
+    private void BeginSelectionEditSession(SelectionEditContext context)
+    {
+        var selectedInput = MicrophoneDeviceCombo.SelectedItem as AudioInputDeviceOption;
+        var cancellation = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token);
+        try
+        {
+            StartRecorderWithFallback(_continuousRecorder.Start, selectedInput);
+            _selectionEditCancellation = cancellation;
+            _selectionEditSessionActive = true;
+            _selectionEditSessionStopping = false;
+            RuntimeStatus.Text = "選択文を編集します。続けて話してください。ショートカットで終了できます。";
+            ActionButton.Content = "編集セッションを終了";
+            _indicator.ShowStatus("選択文編集中");
+            UpdateAiModeDisplay();
+            _ = ProcessSelectionEditSessionAsync(context, cancellation.Token);
+        }
+        catch
+        {
+            cancellation.Dispose();
+            throw;
+        }
+    }
+
+    private void StartRecorderWithFallback(Action<int> start, AudioInputDeviceOption? selectedInput)
+    {
+        try
+        {
+            start(selectedInput?.DeviceNumber ?? -1);
+        }
+        catch (Exception selectedDeviceError) when (selectedInput is { DeviceNumber: >= 0 })
+        {
+            try
+            {
+                start(-1);
+                MicrophoneDeviceStatus.Text = "選択したマイクを使えないため、システム設定の既定マイクで録音します。";
+            }
+            catch (Exception fallbackError)
+            {
+                throw new InvalidOperationException(
+                    "選択したマイクとシステム設定の既定マイクを開始できませんでした。入力デバイスを確認してください。",
+                    new AggregateException(selectedDeviceError, fallbackError));
+            }
+        }
+    }
+
+    private async Task StopSelectionEditSessionAsync()
+    {
+        if (!_selectionEditSessionActive || _selectionEditSessionStopping) return;
+
+        _selectionEditSessionStopping = true;
+        RuntimeStatus.Text = "録音を終了しています。未処理の発話を順番に編集します…";
+        ActionButton.Content = "編集を終了しています…";
+        _indicator.ShowStatus("終了処理中");
+        try
+        {
+            await _continuousRecorder.StopAsync(_lifetime.Token);
+        }
+        catch (OperationCanceledException) when (_closing) { }
+        catch (Exception ex)
+        {
+            RuntimeStatus.Text = "連続録音を終了できませんでした。 " + ex.Message;
+        }
+    }
+
+    private async Task ProcessSelectionEditSessionAsync(SelectionEditContext context, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await foreach (var samples in _continuousRecorder.ReadUtterancesAsync(cancellationToken))
+            {
+                _isBusy = true;
+                ActionButton.Content = "選択文を編集しています…";
+                RuntimeStatus.Text = "発話を文字起こししています…";
+                _indicator.ShowStatus("音声認識中");
+                try
+                {
+                    var transcript = await Task.Run(() => _asr!.Transcribe(samples), cancellationToken);
+                    transcript = TranscriptFormatter.NormalizeTranscript(transcript);
+                    if (!TranscriptFormatter.HasMeaningfulText(transcript))
+                    {
+                        RuntimeStatus.Text = "音声を認識できませんでした。続けて話してください。";
+                        _indicator.ShowStatus("選択文編集中");
+                        continue;
+                    }
+
+                    _indicator.ShowStatus("AI編集中");
+                    RuntimeStatus.Text = "選択文へ音声指示を適用しています…";
+                    if (!_openCode.IsRunning) await EnsureOpenCodeReadyAsync();
+                    var replacement = await _openCode.EditSelectedTextAsync(
+                        context.CurrentText,
+                        transcript,
+                        _settings.OpenCodeModelProviderId,
+                        _settings.OpenCodeModelId,
+                        cancellationToken);
+
+                    var result = SelectionEditService.ReplaceCurrentSelection(context, replacement);
+                    RuntimeStatus.Text = result.Message;
+                    _indicator.ShowStatus(result.CanContinue ? "選択文編集中" : "編集を中止",
+                        result.CanContinue ? null : TimeSpan.FromSeconds(1));
+
+                    if (!result.CanContinue)
+                    {
+                        _selectionEditSessionStopping = true;
+                        await _continuousRecorder.StopAsync(_lifetime.Token);
+                        break;
+                    }
+                }
+                catch (OperationCanceledException) when (_closing)
+                {
+                    break;
+                }
+                catch (Exception ex)
+                {
+                    _openCode.Stop();
+                    RuntimeStatus.Text = "AI編集に失敗しました。選択文は変更していません。 " + ex.GetBaseException().Message;
+                    _indicator.ShowStatus("選択文編集中");
+                }
+                finally
+                {
+                    Array.Clear(samples);
+                    _isBusy = false;
+                    ActionButton.Content = _selectionEditSessionStopping ? "編集を終了しています…" : "編集セッションを終了";
+                    UpdateAiModeDisplay();
+                }
+            }
+        }
+        catch (OperationCanceledException) when (_closing) { }
+        catch (Exception ex)
+        {
+            RuntimeStatus.Text = "連続音声の処理を終了しました。 " + ex.GetBaseException().Message;
+            _indicator.ShowStatus("処理を終了", TimeSpan.FromSeconds(1));
+        }
+        finally
+        {
+            if (_continuousRecorder.IsRecording)
+            {
+                try { await _continuousRecorder.StopAsync(CancellationToken.None); }
+                catch { }
+            }
+            _continuousRecorder.DiscardPendingUtterances();
+
+            var endedDuringShutdown = _closing || cancellationToken.IsCancellationRequested;
+            _selectionEditSessionActive = false;
+            _selectionEditSessionStopping = false;
+            _isBusy = false;
+            _selectionEditCancellation?.Dispose();
+            _selectionEditCancellation = null;
+            ActionButton.Content = _asr is null ? "Setup" : "録音を開始";
+            if (endedDuringShutdown) _indicator.HideStatus();
+            else _indicator.ShowStatus("編集終了", TimeSpan.FromSeconds(1));
+            UpdateAiModeDisplay();
+        }
     }
 
     private async Task StopAndProcessAsync()
@@ -939,7 +1112,7 @@ public partial class MainWindow : System.Windows.Window
         _trayIcon = new System.Windows.Forms.NotifyIcon
         {
             Icon = _ownedTrayIcon ?? System.Drawing.SystemIcons.Application,
-            Text = "Auto Prompt",
+            Text = "Better Flow",
             ContextMenuStrip = _trayMenu,
             Visible = true
         };
@@ -961,7 +1134,7 @@ public partial class MainWindow : System.Windows.Window
             _syncingStartupMenu = false;
             System.Windows.MessageBox.Show(
                 "Windows起動時の自動起動設定を変更できませんでした。\n" + ex.Message,
-                "Auto Prompt",
+                "Better Flow",
                 System.Windows.MessageBoxButton.OK,
                 System.Windows.MessageBoxImage.Error);
         }
@@ -1022,11 +1195,13 @@ public partial class MainWindow : System.Windows.Window
 
         _closing = true;
         _lifetime.Cancel();
+        _selectionEditCancellation?.Cancel();
         SystemEvents.SessionEnding -= SystemEvents_SessionEnding;
         _hotkey.Dispose();
         _source?.RemoveHook(WindowMessageHook);
         _indicator.Close();
         _recorder.Dispose();
+        _continuousRecorder.Dispose();
         _asr?.Dispose();
         _openCode.Dispose();
         if (_trayIcon is not null)

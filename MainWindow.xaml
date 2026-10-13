@@ -1,8 +1,8 @@
-<Window x:Class="AutoPrompt.MainWindow"
+<Window x:Class="BetterFlow.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Auto Prompt"
-        Icon="pack://application:,,,/AutoPrompt;component/Assets/AutoPrompt.ico"
+        Title="Better Flow"
+        Icon="pack://application:,,,/BetterFlow;component/Assets/BetterFlow.ico"
         Width="640" Height="640" MinWidth="640" MinHeight="640" MaxWidth="640" MaxHeight="640"
         WindowStartupLocation="CenterScreen" WindowStyle="None" AllowsTransparency="True"
         Background="Transparent" ResizeMode="NoResize" UseLayoutRounding="True" SnapsToDevicePixels="True"
@@ -19,10 +19,10 @@
                     </Grid.RowDefinitions>
 
                     <Grid Grid.Row="0" Background="Transparent" MouseLeftButtonDown="DragRegion_MouseLeftButtonDown">
-                        <Image Source="pack://application:,,,/AutoPrompt;component/Assets/AutoPrompt.png"
+                        <Image Source="pack://application:,,,/BetterFlow;component/Assets/BetterFlow.png"
                                Width="62" Height="58" HorizontalAlignment="Left" VerticalAlignment="Top"
                                Stretch="Uniform" RenderOptions.BitmapScalingMode="HighQuality"
-                               AutomationProperties.Name="Auto Prompt" />
+                               AutomationProperties.Name="Better Flow" />
                         <Button Content="×" HorizontalAlignment="Right" VerticalAlignment="Top"
                                 Style="{StaticResource WindowControlButtonStyle}" Click="CloseButton_Click"
                                 ToolTip="閉じる" AutomationProperties.Name="閉じる" />
@@ -56,7 +56,7 @@
                                               Style="{StaticResource ModeToggleStyle}" Click="AiModeToggle_Click"
                                               IsChecked="False"
                                               AutomationProperties.Name="AIによる文章整形モード"
-                                              AutomationProperties.HelpText="オフは文字起こしのみです。オンにすると認識した文章をOpenCodeの選択モデルで整えます。" />
+                                              AutomationProperties.HelpText="オフは文字起こしのみです。オンでは通常の認識文を整え、選択文編集時は選択文と音声指示をOpenCodeの選択モデルへ送ります。" />
                                 <StackPanel VerticalAlignment="Center" Margin="0,0,12,0">
                                     <TextBlock x:Name="AiModeLabel" Text="AIによる文章整形" FontSize="14" />
                                     <TextBlock x:Name="AiModeDescription" Text="オフ: 文字起こしのみ"
@@ -113,7 +113,7 @@
                                        Margin="0,5,0,0" AutomationProperties.LiveSetting="Polite" />
                         </StackPanel>
                         <TextBlock x:Name="PrivacyNotice"
-                                   Text="音声と文字起こしはPC内で処理します。AIモードを使うときだけ文字起こしテキストをOpenCode経由で選択中のモデルへ送信します。"
+                                   Text="音声はPC内で文字起こしします。AIモードでは文字起こしと、選択文の編集時に選択中の文章・音声指示をOpenCode経由でモデルへ送信します。"
                                    FontSize="12" LineHeight="18" Foreground="{StaticResource MutedBrush}"
                                    Margin="0,18,0,0" Visibility="Collapsed" />
                         <ProgressBar x:Name="SetupProgress" Height="5" Minimum="0" Maximum="100" Value="0"

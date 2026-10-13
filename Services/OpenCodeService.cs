@@ -8,7 +8,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 
-namespace AutoPrompt.Services;
+namespace BetterFlow.Services;
 
 internal sealed class OpenCodeService : IDisposable
 {
@@ -47,7 +47,7 @@ internal sealed class OpenCodeService : IDisposable
         var info = CreateStartInfo(command, port, _workspace);
         info.Environment["OPENCODE_SERVER_USERNAME"] = ServerUsername;
         info.Environment["OPENCODE_SERVER_PASSWORD"] = serverPassword;
-        // Auto Prompt only needs the model catalog already available to the local
+        // Better Flow only needs the model catalog already available to the local
         // OpenCode profile. A remote models.dev refresh is unrelated to provider
         // connection state and can stall catalog initialization on network or lock waits.
         info.Environment["OPENCODE_DISABLE_MODELS_FETCH"] = "1";
@@ -104,8 +104,18 @@ internal sealed class OpenCodeService : IDisposable
         }
     }
 
-    public async Task<string> RewriteAsync(string transcript, string providerId, string modelId,
-        CancellationToken cancellationToken = default)
+    public Task<string> RewriteAsync(string transcript, string providerId, string modelId,
+        CancellationToken cancellationToken = default) =>
+        GenerateTextAsync(providerId, modelId, TranscriptRewritePrompt.SystemMessage,
+            TranscriptRewritePrompt.CreateUserMessage(transcript), cancellationToken);
+
+    public Task<string> EditSelectedTextAsync(string selectedText, string instruction, string providerId, string modelId,
+        CancellationToken cancellationToken = default) =>
+        GenerateTextAsync(providerId, modelId, SelectionEditPrompt.SystemMessage,
+            SelectionEditPrompt.CreateUserMessage(selectedText, instruction), cancellationToken);
+
+    private async Task<string> GenerateTextAsync(string providerId, string modelId, string systemMessage,
+        string userMessage, CancellationToken cancellationToken)
     {
         await _gate.WaitAsync(cancellationToken);
         string? sessionId = null;
@@ -115,7 +125,7 @@ internal sealed class OpenCodeService : IDisposable
             await EnsureModelAvailableAsync(providerId, modelId, cancellationToken);
 
             using var create = await _http.PostAsync(new Uri(_baseUri!, "session"),
-                JsonBody(new { title = "Auto Prompt" }), cancellationToken);
+        JsonBody(new { title = "Better Flow" }), cancellationToken);
             create.EnsureSuccessStatusCode();
             using var session = JsonDocument.Parse(await create.Content.ReadAsStringAsync(cancellationToken));
             sessionId = session.RootElement.GetProperty("id").GetString();
@@ -125,8 +135,8 @@ internal sealed class OpenCodeService : IDisposable
             {
                 agent = "build",
                 model = new { providerID = providerId, modelID = modelId },
-                system = TranscriptRewritePrompt.SystemMessage,
-                parts = new[] { new { type = "text", text = TranscriptRewritePrompt.CreateUserMessage(transcript) } }
+                system = systemMessage,
+                parts = new[] { new { type = "text", text = userMessage } }
             };
             using var message = await _http.PostAsync(
                 new Uri(_baseUri!, $"session/{Uri.EscapeDataString(sessionId)}/message"), JsonBody(body), cancellationToken);
@@ -365,7 +375,7 @@ internal sealed class OpenCodeService : IDisposable
 
     private static void ConfigureWorkspaceToolPermissions(string workspace)
     {
-        const string safeContextFile = "autoprompt-context.txt";
+        const string safeContextFile = "better-flow-context.txt";
         var safeContextAbsolutePath = Path.GetFullPath(Path.Combine(workspace, safeContextFile))
             .Replace(Path.DirectorySeparatorChar, '/');
         // Zen free-tier requests can be rejected when read/bash are denied. Keep only
@@ -387,7 +397,7 @@ internal sealed class OpenCodeService : IDisposable
         };
         var config = new Dictionary<string, object> { ["permission"] = permissions };
         File.WriteAllText(Path.Combine(workspace, "opencode.json"), JsonSerializer.Serialize(config), new UTF8Encoding(false));
-        File.WriteAllText(Path.Combine(workspace, safeContextFile), "Auto Prompt temporary formatter workspace.", new UTF8Encoding(false));
+        File.WriteAllText(Path.Combine(workspace, safeContextFile), "Better Flow temporary formatter workspace.", new UTF8Encoding(false));
     }
 
     private static StringContent JsonBody(object body) =>
@@ -461,7 +471,7 @@ internal sealed class OpenCodeService : IDisposable
     {
         if (detail.Contains("Token refresh failed", StringComparison.OrdinalIgnoreCase) ||
             detail.Contains("invalid_grant", StringComparison.OrdinalIgnoreCase))
-            return "OpenCodeのOAuth認証を更新できませんでした。OpenCode Desktopで選択モデルのproviderに再ログインし、Auto PromptのAIモードを一度オフにしてからオンにしてください。詳細: " + detail;
+            return "OpenCodeのOAuth認証を更新できませんでした。OpenCode Desktopで選択モデルのproviderに再ログインし、Better FlowのAIモードを一度オフにしてからオンにしてください。詳細: " + detail;
 
         if (detail.Contains("can only be used from within OpenCode", StringComparison.OrdinalIgnoreCase) ||
             detail.Contains("FreeTierError", StringComparison.OrdinalIgnoreCase))

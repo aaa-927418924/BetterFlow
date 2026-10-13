@@ -1,6 +1,6 @@
 using System.Text.RegularExpressions;
 
-namespace AutoPrompt.Services;
+namespace BetterFlow.Services;
 
 internal static partial class TranscriptFormatter
 {

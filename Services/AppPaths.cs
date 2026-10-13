@@ -1,12 +1,14 @@
 using System.IO;
 
-namespace AutoPrompt.Services;
+namespace BetterFlow.Services;
 
 internal static class AppPaths
 {
-    public static string Root { get; } = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-        "AutoPrompt");
+    private static readonly string ApplicationDataRoot = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+    private static readonly string LegacyRootPath = Path.Combine(ApplicationDataRoot, "AutoPrompt");
+    private static readonly string BetterFlowRootPath = Path.Combine(ApplicationDataRoot, "Better Flow");
+
+    public static string Root { get; } = ResolveRoot();
 
     public static string ModelDirectory => Path.Combine(Root, "models", "parakeet-ja-int8");
     public static string ModelFile => Path.Combine(ModelDirectory, "model.int8.onnx");
@@ -25,5 +27,34 @@ internal static class AppPaths
         Directory.CreateDirectory(ModelDirectory);
         Directory.CreateDirectory(DownloadDirectory);
         Directory.CreateDirectory(TemporaryDirectory);
+    }
+
+    private static string ResolveRoot()
+    {
+        if (!Directory.Exists(LegacyRootPath))
+            return BetterFlowRootPath;
+
+        if (!Directory.Exists(BetterFlowRootPath))
+        {
+            try
+            {
+                Directory.Move(LegacyRootPath, BetterFlowRootPath);
+                return BetterFlowRootPath;
+            }
+            catch (IOException)
+            {
+                // A running copy of the old app may still hold a file open. Keep
+                // using its existing data directory; the next launch can retry.
+                return LegacyRootPath;
+            }
+            catch (UnauthorizedAccessException)
+            {
+                return LegacyRootPath;
+            }
+        }
+
+        var currentSettingsExist = File.Exists(Path.Combine(BetterFlowRootPath, "settings.json"));
+        var legacySettingsExist = File.Exists(Path.Combine(LegacyRootPath, "settings.json"));
+        return currentSettingsExist || !legacySettingsExist ? BetterFlowRootPath : LegacyRootPath;
     }
 }

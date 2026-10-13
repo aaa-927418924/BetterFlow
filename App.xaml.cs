@@ -1,6 +1,6 @@
 using System.Windows;
 
-namespace AutoPrompt;
+namespace BetterFlow;
 
 public partial class App : System.Windows.Application
 {

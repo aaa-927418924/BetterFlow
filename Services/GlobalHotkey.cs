@@ -2,7 +2,7 @@ using System.Runtime.InteropServices;
 using System.Windows.Interop;
 using System.Windows.Input;
 
-namespace AutoPrompt.Services;
+namespace BetterFlow.Services;
 
 internal readonly record struct HotkeyBinding(uint Modifiers, uint VirtualKey)
 {

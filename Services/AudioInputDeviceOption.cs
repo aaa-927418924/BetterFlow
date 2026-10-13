@@ -1,4 +1,4 @@
-namespace AutoPrompt.Services;
+namespace BetterFlow.Services;
 
 internal sealed record AudioInputDeviceOption(string Id, int DeviceNumber, string DisplayName)
 {

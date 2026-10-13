@@ -1,4 +1,4 @@
-<Window x:Class="AutoPrompt.IndicatorWindow"
+<Window x:Class="BetterFlow.IndicatorWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Width="140" Height="38" WindowStyle="None" AllowsTransparency="True"
@@ -12,10 +12,10 @@
                 <ColumnDefinition Width="34" />
                 <ColumnDefinition Width="*" />
             </Grid.ColumnDefinitions>
-            <Image Grid.Column="0" Source="pack://application:,,,/AutoPrompt;component/Assets/AutoPrompt.png"
+            <Image Grid.Column="0" Source="pack://application:,,,/BetterFlow;component/Assets/BetterFlow.png"
                    Width="26" Height="26" Stretch="Uniform" HorizontalAlignment="Center"
                    VerticalAlignment="Center" RenderOptions.BitmapScalingMode="HighQuality"
-                   AutomationProperties.Name="Auto Prompt" />
+                   AutomationProperties.Name="Better Flow" />
             <TextBlock x:Name="StatusText" Grid.Column="1" Text="録音中"
                        FontFamily="Yu Gothic UI" FontSize="9.5" FontWeight="Medium"
                        Foreground="#F4F4F4" HorizontalAlignment="Center" VerticalAlignment="Center"

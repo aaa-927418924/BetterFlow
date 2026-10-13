@@ -5,7 +5,7 @@ using System.Net.Http.Headers;
 using System.Security.Cryptography;
 using System.Text.Json;
 
-namespace AutoPrompt.Services;
+namespace BetterFlow.Services;
 
 internal sealed class OpenCodeInstaller
 {
@@ -70,7 +70,7 @@ internal sealed class OpenCodeInstaller
     private static HttpClient CreateClient()
     {
         var client = new HttpClient { Timeout = Timeout.InfiniteTimeSpan };
-        client.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue("AutoPrompt", "0.1"));
+        client.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue("BetterFlow", "0.1"));
         client.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/vnd.github+json"));
         return client;
     }
@@ -218,7 +218,7 @@ internal sealed class OpenCodeInstaller
             catch (IOException exception) when ((exception.HResult & 0xFFFF) is 32 or 33)
             {
                 if (elapsed.Elapsed >= SetupLockTimeout)
-                    throw new IOException("別のAuto PromptがOpenCodeをセットアップ中です。完了後に再試行してください。", exception);
+                    throw new IOException("別のBetter FlowがOpenCodeをセットアップ中です。完了後に再試行してください。", exception);
                 await Task.Delay(300, cancellationToken);
             }
         }

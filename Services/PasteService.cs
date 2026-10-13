@@ -1,6 +1,6 @@
 using System.Runtime.InteropServices;
 
-namespace AutoPrompt.Services;
+namespace BetterFlow.Services;
 
 internal static class PasteService
 {

@@ -7,8 +7,10 @@
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
-    <AssemblyName>AutoPrompt</AssemblyName>
-    <RootNamespace>AutoPrompt</RootNamespace>
+    <AssemblyName>BetterFlow</AssemblyName>
+    <RootNamespace>BetterFlow</RootNamespace>
+    <AssemblyTitle>Better Flow</AssemblyTitle>
+    <Product>Better Flow</Product>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
     <SelfContained>true</SelfContained>
     <PublishSingleFile>true</PublishSingleFile>
@@ -18,7 +20,7 @@
     <DebugType>none</DebugType>
     <DebugSymbols>false</DebugSymbols>
     <Version>0.1.0</Version>
-    <ApplicationIcon>Assets\AutoPrompt.ico</ApplicationIcon>
+    <ApplicationIcon>Assets\BetterFlow.ico</ApplicationIcon>
   </PropertyGroup>
 
   <ItemGroup>
@@ -28,7 +30,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <Resource Include="Assets\AutoPrompt.png" />
-    <Resource Include="Assets\AutoPrompt.ico" />
+    <Resource Include="Assets\BetterFlow.png" />
+    <Resource Include="Assets\BetterFlow.ico" />
   </ItemGroup>
 </Project>
