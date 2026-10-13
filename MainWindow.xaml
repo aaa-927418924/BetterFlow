@@ -63,10 +63,6 @@
                                                AutomationProperties.LiveSetting="Polite" />
                                 </StackPanel>
                             </DockPanel>
-                            <StackPanel x:Name="SelectionEditEnginePanel" Margin="0,14,0,0">
-                                <TextBlock Text="選択文の編集" FontSize="13" Foreground="{StaticResource MutedBrush}" />
-                                <TextBlock Text="選択中のOpenCodeモデルを使用します。" FontSize="13" Margin="0,5,0,0" />
-                            </StackPanel>
                         </StackPanel>
                         <StackPanel x:Name="MicrophoneSettingsPanel" Margin="0,16,0,0" Visibility="Collapsed">
                             <TextBlock Text="音声入力デバイス" FontSize="14" FontWeight="SemiBold" />

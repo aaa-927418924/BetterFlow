@@ -425,7 +425,7 @@ public partial class MainWindow : System.Windows.Window
         OpenCodeModelCombo.SelectedItem = selected;
         OpenCodeModelStatus.Text = selected is null
             ? "OpenCode Desktopで現在接続中のproviderのモデルだけを一覧更新して読み込みます。"
-            : $"保存済みの選択: {selected.DisplayName}。接続状態は一覧更新後に確認します。";
+            : string.Empty;
         _loadingOpenCodeModelUi = false;
     }
 
@@ -490,7 +490,7 @@ public partial class MainWindow : System.Windows.Window
         }
         MicrophoneDeviceStatus.Text = selected.DeviceNumber < 0
             ? "Windowsのシステム設定にある既定のマイクを使用します。"
-            : $"選択中: {selected.DisplayName}";
+            : string.Empty;
     }
 
     private void RefreshMicrophoneDevices_Click(object sender, System.Windows.RoutedEventArgs e)
