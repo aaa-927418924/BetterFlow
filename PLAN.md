@@ -34,6 +34,19 @@
 
 モデルアーカイブは約489 MB。展開中の一時ファイルを含めて約1.2 GBの空き容量を必要とする。OpenCodeは最新安定版のbaseline版を追加取得する。音声モデル・OpenCode CLI・設定は `Environment.SpecialFolder.LocalApplicationData` を基点とするため、保存先は各PCのユーザー環境に合わせて決まる。
 
+## AI整形を速くする計画（提案・未実装）
+
+ユーザー報告では、Muse Spark 1.3の整形精度は高い一方、通常約5秒、長い場合は約15秒かかる。アプリ内の段階別時間はまだ測っていないため、モデルや指示文を先に変えず、まず待ち時間の所在を分ける。
+
+1. `StopAndProcessAsync` と `OpenCodeService.RewriteAsync` に計時を追加し、文字起こし、OpenCode serverの起動/health/provider確認、選択モデル確認、session作成、モデル応答待ち、session削除、貼り付けまでを個別に記録する。通常利用のコールド起動とウォーム起動を分け、入力は文字数帯だけ記録する。音声・文字起こし・生成文・認証値は記録しない。
+2. コールド起動が支配的なら、保存設定がAIモードオンの時に限り、音声モデルの初期化後にOpenCode serverをバックグラウンドで先行起動する。モデルへの要求は送らず、UIとショートカットを待たせず、アプリ終了までserverを再利用する。アプリ起動時にserverを起動しない現状は`MainWindow.xaml.cs`、各変換でモデル一覧確認・新規session作成・完了待ち・session削除を行う現状は`Services/OpenCodeService.cs`で確認した。
+3. モデル確認やsession操作が計測上目立つ場合だけ、成功済みの接続モデル一覧をアプリ実行中にキャッシュし、明示的な一覧更新・モデル変更・失敗時に更新する。発話ごとのsession再利用は過去の文字起こしが次の入力に混ざる恐れがあるため行わず、独立sessionを保つ。
+4. provider応答が主な待ち時間なら、Muse Sparkの選択を維持したままローカル側でできる改善には限界がある。OpenCode公式のモデル一覧ではMuse Spark FreeはZenのResponses endpointを使う。OpenCodeのモデル設定はprovider/modelごとに対応オプションが異なるため、Muse Sparkに公開されていない推論強度等の指定を推測で加えない。速さを優先する選択肢が必要なら、既定モデルは変えず、設定済みの高速モデルをユーザーが手動選択できる形にする。
+5. 指示文の短縮は計測で入力処理が原因と分かった場合のみ候補にする。現在の文体維持、自己訂正、依頼条件の保持、不要な箇条書き防止を残し、短縮案は合成した短い例文で意味の落ち方を確認する。
+6. SSE/非同期APIは生成を早くする手段ではなく、対応している場合に途中経過を早く見せる手段として別扱いにする。OpenCode公式Server docsは同期message応答と`prompt_async`/SSEを公開しているが、最近のOpenCode版でテキストdeltaが出ない報告もあるため、実装する場合は対象バージョンのイベントを先に確認し、完了前の部分回答を入力欄へ貼り付けない。
+
+評価ではコールド/ウォーム別の中央値と90パーセンタイル、失敗率、文章の意味保持を比較し、精度を落とす設定変更は採用しない。出典: [OpenCode Server docs](https://dev.opencode.ai/docs/server/)、[OpenCode Models docs](https://docs.opencode.ai/docs/models/)、[OpenCode Zen model list](https://dev.opencode.ai/docs/ja/zen/)、[OpenCode issue #50285](https://github.com/anomalyco/opencode/issues/50285)。
+
 ## 実装・確認状況
 
 - 初回セットアップ、モデル取得、SHA-256検証、ローカル文字起こし、グローバルショートカット、OpenCode連携、貼り付け、単一EXE発行を実装。
