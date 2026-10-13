@@ -233,19 +233,39 @@ internal sealed class OpenCodeService : IDisposable
     private async Task<string> GenerateTextAsync(string providerId, string modelId, string systemMessage,
         string userMessage, CancellationToken cancellationToken)
     {
+        var totalTimer = Stopwatch.StartNew();
+        var gateTimer = Stopwatch.StartNew();
         await _gate.WaitAsync(cancellationToken);
+        var gateWaitMs = gateTimer.ElapsedMilliseconds;
         string? sessionId = null;
+        long modelCheckMs = 0;
+        long sessionCreateMs = 0;
+        long promptAckMs = 0;
+        long? timeToFirstTextMs = null;
+        long modelRequestMs = 0;
+        long sessionDeleteMs = 0;
+        var promptTiming = new PromptTiming();
+        var responseChars = 0;
+        var outcome = "failed";
+        var failureKind = "none";
         try
         {
             if (!IsRunning) throw new InvalidOperationException("AIモード用のOpenCodeが起動していません。AIモードを再度有効にしてください。");
-            await EnsureModelAvailableAsync(providerId, modelId, cancellationToken);
+            var modelCheckTimer = Stopwatch.StartNew();
+            try { await EnsureModelAvailableAsync(providerId, modelId, cancellationToken); }
+            finally { modelCheckMs = modelCheckTimer.ElapsedMilliseconds; }
 
-            using var create = await _http.PostAsync(new Uri(_baseUri!, "session"),
-        JsonBody(new { title = "Better Flow" }), cancellationToken);
-            create.EnsureSuccessStatusCode();
-            using var session = JsonDocument.Parse(await create.Content.ReadAsStringAsync(cancellationToken));
-            sessionId = session.RootElement.GetProperty("id").GetString();
-            if (string.IsNullOrWhiteSpace(sessionId)) throw new InvalidDataException("OpenCodeからセッションIDが返りませんでした。");
+            var createTimer = Stopwatch.StartNew();
+            try
+            {
+                using var create = await _http.PostAsync(new Uri(_baseUri!, "session"),
+                    JsonBody(new { title = "Better Flow" }), cancellationToken);
+                create.EnsureSuccessStatusCode();
+                using var session = JsonDocument.Parse(await create.Content.ReadAsStringAsync(cancellationToken));
+                sessionId = session.RootElement.GetProperty("id").GetString();
+                if (string.IsNullOrWhiteSpace(sessionId)) throw new InvalidDataException("OpenCodeからセッションIDが返りませんでした。");
+            }
+            finally { sessionCreateMs = createTimer.ElapsedMilliseconds; }
 
             var body = new
             {
@@ -254,46 +274,313 @@ internal sealed class OpenCodeService : IDisposable
                 system = systemMessage,
                 parts = new[] { new { type = "text", text = userMessage } }
             };
-            using var message = await _http.PostAsync(
-                new Uri(_baseUri!, $"session/{Uri.EscapeDataString(sessionId)}/message"), JsonBody(body), cancellationToken);
-            var responseBody = await message.Content.ReadAsStringAsync(cancellationToken);
-            if (!message.IsSuccessStatusCode)
-                throw new HttpRequestException(BuildProviderError(message.StatusCode, responseBody), null, message.StatusCode);
-
-            using var response = JsonDocument.Parse(responseBody);
-            var responseError = ExtractResponseError(response.RootElement);
-            if (!string.IsNullOrWhiteSpace(responseError))
-                throw new InvalidDataException(BuildResponseError(responseError));
-
-            var texts = new List<string>();
-            if (response.RootElement.TryGetProperty("parts", out var parts) && parts.ValueKind == JsonValueKind.Array)
+            try
             {
-                foreach (var part in parts.EnumerateArray())
+                var result = await SendPromptAndReadResponseAsync(sessionId!, body, promptTiming, cancellationToken);
+                promptAckMs = promptTiming.PromptAckMs;
+                timeToFirstTextMs = promptTiming.TimeToFirstTextMs;
+                modelRequestMs = promptTiming.ModelRequestMs;
+                if (!TranscriptFormatter.HasMeaningfulText(result))
                 {
-                    if (part.TryGetProperty("type", out var type) && type.GetString() == "text" &&
-                        part.TryGetProperty("text", out var text) && text.ValueKind == JsonValueKind.String)
-                        texts.Add(text.GetString() ?? string.Empty);
+                    failureKind = "empty-response";
+                    throw new InvalidDataException("モデルから文字として使える回答が返りませんでした。");
                 }
+                responseChars = result.Length;
+                outcome = "success";
+                return result;
             }
-
-            var result = string.Join("\n", texts).Trim();
-            if (!TranscriptFormatter.HasMeaningfulText(result))
-                throw new InvalidDataException("モデルから文字として使える回答が返りませんでした。");
-            return result;
+            finally
+            {
+                promptAckMs = promptTiming.PromptAckMs;
+                timeToFirstTextMs = promptTiming.TimeToFirstTextMs;
+                modelRequestMs = promptTiming.ModelRequestMs;
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            outcome = "cancelled";
+            failureKind = "cancelled";
+            throw;
+        }
+        catch (HttpRequestException ex)
+        {
+            failureKind = ex.StatusCode.HasValue ? $"http-{(int)ex.StatusCode.Value}" : "http-request";
+            throw;
+        }
+        catch (InvalidDataException)
+        {
+            if (failureKind == "none") failureKind = "invalid-response";
+            throw;
+        }
+        catch (Exception ex)
+        {
+            failureKind = ex.GetType().Name;
+            throw;
         }
         finally
         {
             if (!string.IsNullOrWhiteSpace(sessionId) && IsRunning)
             {
+                if (promptTiming.PromptSubmitted && outcome != "success")
+                {
+                    using var abortTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+                    try
+                    {
+                        using var abort = await _http.PostAsync(
+                            new Uri(_baseUri!, $"session/{Uri.EscapeDataString(sessionId)}/abort"),
+                            content: null, abortTimeout.Token);
+                    }
+                    catch { }
+                }
+
+                var deleteTimer = Stopwatch.StartNew();
+                using var deleteTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(2));
                 try
                 {
                     using var delete = await _http.DeleteAsync(
-                        new Uri(_baseUri!, $"session/{Uri.EscapeDataString(sessionId)}"), cancellationToken);
+                        new Uri(_baseUri!, $"session/{Uri.EscapeDataString(sessionId)}"), deleteTimeout.Token);
                 }
                 catch { }
+                sessionDeleteMs = deleteTimer.ElapsedMilliseconds;
             }
+            OpenCodeTimingLog.Write(new OpenCodeTimingEntry(
+                DateTimeOffset.UtcNow,
+                providerId,
+                modelId,
+                gateWaitMs,
+                modelCheckMs,
+                sessionCreateMs,
+                promptAckMs,
+                timeToFirstTextMs,
+                modelRequestMs,
+                sessionDeleteMs,
+                totalTimer.ElapsedMilliseconds,
+                responseChars,
+                outcome,
+                failureKind));
             _gate.Release();
         }
+    }
+
+    private async Task<string> SendPromptAndReadResponseAsync(string sessionId, object body, PromptTiming timing,
+        CancellationToken cancellationToken)
+    {
+        using var requestTimeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        requestTimeout.CancelAfter(TimeSpan.FromMinutes(3));
+        var token = requestTimeout.Token;
+        Stopwatch? requestTimer = null;
+        try
+        {
+            using var eventRequest = new HttpRequestMessage(HttpMethod.Get, new Uri(_baseUri!, "event"));
+            using var eventResponse = await _http.SendAsync(eventRequest,
+                HttpCompletionOption.ResponseHeadersRead, token);
+            if (!eventResponse.IsSuccessStatusCode)
+            {
+                var eventError = await eventResponse.Content.ReadAsStringAsync(token);
+                throw new HttpRequestException(BuildProviderError(eventResponse.StatusCode, eventError),
+                    null, eventResponse.StatusCode);
+            }
+
+            await using var eventStream = await eventResponse.Content.ReadAsStreamAsync(token);
+            using var reader = new StreamReader(eventStream, Encoding.UTF8);
+            if (!await WaitForOpenCodeConnectionAsync(reader, token))
+                throw new InvalidDataException("OpenCodeのイベント接続が終了しました。モデル応答を確認できませんでした。");
+
+            requestTimer = Stopwatch.StartNew();
+            using (var prompt = await _http.PostAsync(
+                       new Uri(_baseUri!, $"session/{Uri.EscapeDataString(sessionId)}/prompt_async"),
+                       JsonBody(body), token))
+            {
+                var promptResponseBody = await prompt.Content.ReadAsStringAsync(token);
+                if (!prompt.IsSuccessStatusCode)
+                    throw new HttpRequestException(BuildProviderError(prompt.StatusCode, promptResponseBody),
+                        null, prompt.StatusCode);
+                timing.PromptAckMs = requestTimer.ElapsedMilliseconds;
+                timing.PromptSubmitted = true;
+            }
+
+            var assistantActivitySeen = false;
+            while (true)
+            {
+                using var eventDocument = await ReadOpenCodeEventAsync(reader, token);
+                if (eventDocument is null)
+                    throw new InvalidDataException("OpenCodeのイベント接続が途中で終了しました。モデル応答を確認できませんでした。");
+
+                var payload = GetOpenCodeEventPayload(eventDocument.RootElement);
+                if (!payload.TryGetProperty("type", out var typeElement) || typeElement.ValueKind != JsonValueKind.String ||
+                    !payload.TryGetProperty("properties", out var properties) || properties.ValueKind != JsonValueKind.Object)
+                    continue;
+
+                var eventType = typeElement.GetString();
+                switch (eventType)
+                {
+                    case "message.updated":
+                        if (properties.TryGetProperty("info", out var info) &&
+                            IsSessionMessage(info, sessionId) &&
+                            info.TryGetProperty("role", out var role) && role.GetString() == "assistant")
+                            assistantActivitySeen = true;
+                        break;
+
+                    case "message.part.updated":
+                        if (properties.TryGetProperty("part", out var part) && IsSessionPart(part, sessionId) &&
+                            part.TryGetProperty("type", out var partType) && partType.GetString() == "text")
+                        {
+                            assistantActivitySeen = true;
+                            var hasDelta = properties.TryGetProperty("delta", out var delta) &&
+                                           delta.ValueKind == JsonValueKind.String &&
+                                           !string.IsNullOrWhiteSpace(delta.GetString());
+                            var hasText = part.TryGetProperty("text", out var text) &&
+                                          text.ValueKind == JsonValueKind.String &&
+                                          !string.IsNullOrWhiteSpace(text.GetString());
+                            if (timing.TimeToFirstTextMs is null && (hasDelta || hasText))
+                                timing.TimeToFirstTextMs = requestTimer.ElapsedMilliseconds;
+                        }
+                        break;
+
+                    case "session.status":
+                        if (!IsSessionEvent(properties, sessionId) ||
+                            !properties.TryGetProperty("status", out var status) ||
+                            !status.TryGetProperty("type", out var statusType))
+                            break;
+                        if (statusType.GetString() == "busy") assistantActivitySeen = true;
+                        if (statusType.GetString() == "idle" && assistantActivitySeen)
+                            return await GetFinalAssistantTextAsync(sessionId, token);
+                        break;
+
+                    case "session.idle":
+                        if (IsSessionEvent(properties, sessionId) && assistantActivitySeen)
+                            return await GetFinalAssistantTextAsync(sessionId, token);
+                        break;
+
+                    case "session.error":
+                        if (!IsSessionErrorEvent(properties, sessionId)) break;
+                        var detail = properties.TryGetProperty("error", out var error)
+                            ? ExtractErrorDetail(error)
+                            : null;
+                        throw string.IsNullOrWhiteSpace(detail)
+                            ? new InvalidDataException("OpenCodeからモデル応答エラーが返りました。")
+                            : new InvalidDataException(BuildResponseError(detail));
+                }
+            }
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            throw new TimeoutException("OpenCodeモデルの応答が3分以内に完了しませんでした。");
+        }
+        finally
+        {
+            if (requestTimer is not null)
+                timing.ModelRequestMs = requestTimer.ElapsedMilliseconds;
+        }
+    }
+
+    private async Task<bool> WaitForOpenCodeConnectionAsync(StreamReader reader, CancellationToken cancellationToken)
+    {
+        while (true)
+        {
+            using var eventDocument = await ReadOpenCodeEventAsync(reader, cancellationToken);
+            if (eventDocument is null) return false;
+            var payload = GetOpenCodeEventPayload(eventDocument.RootElement);
+            if (payload.TryGetProperty("type", out var type) && type.GetString() == "server.connected")
+                return true;
+        }
+    }
+
+    private static async Task<JsonDocument?> ReadOpenCodeEventAsync(StreamReader reader, CancellationToken cancellationToken)
+    {
+        while (true)
+        {
+            var data = new StringBuilder();
+            while (true)
+            {
+                var line = await reader.ReadLineAsync(cancellationToken);
+                if (line is null) return null;
+                if (line.Length == 0)
+                {
+                    if (data.Length > 0) break;
+                    continue;
+                }
+                if (line.StartsWith("data:", StringComparison.Ordinal))
+                {
+                    if (data.Length > 0) data.Append('\n');
+                    data.Append(line.AsSpan(5).TrimStart());
+                }
+            }
+
+            try { return JsonDocument.Parse(data.ToString()); }
+            catch (JsonException) { }
+        }
+    }
+
+    private static JsonElement GetOpenCodeEventPayload(JsonElement root) =>
+        root.TryGetProperty("payload", out var payload) && payload.ValueKind == JsonValueKind.Object
+            ? payload
+            : root;
+
+    private static bool IsSessionMessage(JsonElement message, string sessionId) =>
+        message.TryGetProperty("sessionID", out var id) && id.ValueKind == JsonValueKind.String &&
+        string.Equals(id.GetString(), sessionId, StringComparison.Ordinal);
+
+    private static bool IsSessionPart(JsonElement part, string sessionId) =>
+        part.TryGetProperty("sessionID", out var id) && id.ValueKind == JsonValueKind.String &&
+        string.Equals(id.GetString(), sessionId, StringComparison.Ordinal);
+
+    private static bool IsSessionEvent(JsonElement properties, string sessionId) =>
+        properties.TryGetProperty("sessionID", out var id) && id.ValueKind == JsonValueKind.String &&
+        string.Equals(id.GetString(), sessionId, StringComparison.Ordinal);
+
+    private static bool IsSessionErrorEvent(JsonElement properties, string sessionId) =>
+        !properties.TryGetProperty("sessionID", out var id) || id.ValueKind != JsonValueKind.String ||
+        string.Equals(id.GetString(), sessionId, StringComparison.Ordinal);
+
+    private async Task<string> GetFinalAssistantTextAsync(string sessionId, CancellationToken cancellationToken)
+    {
+        using var response = await _http.GetAsync(
+            new Uri(_baseUri!, $"session/{Uri.EscapeDataString(sessionId)}/message?limit=3"), cancellationToken);
+        var responseBody = await response.Content.ReadAsStringAsync(cancellationToken);
+        if (!response.IsSuccessStatusCode)
+            throw new HttpRequestException(BuildProviderError(response.StatusCode, responseBody), null, response.StatusCode);
+
+        using var messages = JsonDocument.Parse(responseBody);
+        if (messages.RootElement.ValueKind != JsonValueKind.Array)
+            throw new InvalidDataException("OpenCodeからモデル応答の一覧が返りませんでした。");
+
+        var texts = new List<string>();
+        foreach (var message in messages.RootElement.EnumerateArray())
+        {
+            if (!message.TryGetProperty("info", out var info) ||
+                !info.TryGetProperty("role", out var role) || role.GetString() != "assistant")
+                continue;
+
+            if (info.TryGetProperty("error", out var error) && error.ValueKind is not JsonValueKind.Null and not JsonValueKind.Undefined)
+            {
+                var detail = ExtractErrorDetail(error);
+                if (!string.IsNullOrWhiteSpace(detail)) throw new InvalidDataException(BuildResponseError(detail));
+            }
+
+            if (!message.TryGetProperty("parts", out var parts) || parts.ValueKind != JsonValueKind.Array) continue;
+            var current = new List<string>();
+            foreach (var part in parts.EnumerateArray())
+            {
+                if (part.TryGetProperty("type", out var type) && type.GetString() == "text" &&
+                    part.TryGetProperty("text", out var text) && text.ValueKind == JsonValueKind.String)
+                    current.Add(text.GetString() ?? string.Empty);
+            }
+            if (current.Count > 0) texts = current;
+        }
+
+        var result = string.Join("\n", texts).Trim();
+        if (!TranscriptFormatter.HasMeaningfulText(result))
+            throw new InvalidDataException("モデルから文字として使える回答が返りませんでした。");
+        return result;
+    }
+
+    private sealed class PromptTiming
+    {
+        public long PromptAckMs { get; set; }
+        public long? TimeToFirstTextMs { get; set; }
+        public long ModelRequestMs { get; set; }
+        public bool PromptSubmitted { get; set; }
     }
 
     public void Stop() => StopProcess();

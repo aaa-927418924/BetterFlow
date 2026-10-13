@@ -168,7 +168,7 @@
 - `Assets/universfield-gadget-activation-250072.mp3`を単一EXE内のリソースとして再生する。素材は`.gitignore`対象で、リポジトリには追加しない。
 - 通常録音と選択文編集の両方で、マイク開始が成功した直後にだけ再生する。停止・キャンセル・VAD処理開始などでは呼び出さない。再生失敗は録音処理へ影響させない。
 - MP3更新後にRelease build/publishを再実行し、`dist/Better Flow.exe`を更新。発行物と配布先は81,863,898 bytes、SHA-256 `F55BBC8E086C6ABA1E02BEA48B9BFB56C361F58F4FCE9944953C147D0A2E3D71`で一致。差し替え前は`artifacts/BetterFlow-before-activation-sound-v2.exe`へ保存。素材は48,960 bytes、SHA-256 `5E90FDE4E056A9FE396559591C1B8DF2DB1B0BCAF68F5B85B37F92599A769264`で、Gitignore対象。音声デバイス上での実再生は未確認。ビルド警告0・エラー0。テストスイートは実行していない。
-## OpenCode経由のAI整形の実測と対策計画（2026-10-14・対策未実装）
+## OpenCode経由のAI整形の実測と対策（2026-10-14）
 
 - 計測条件: OpenCode 1.18.34の一時loopback serverと現在のOpenCode profile/authを使用。アプリと同じ`agent=build`、接続中のprovider/model、同期`POST /session/:id/message`、要求ごとのsession作成・削除で、同じ短い合成文を各モデルへ2回送信。system指示は実アプリの文面に沿った短い計測用版で、完全なUI経由再現ではない。各provider/modelの初回要求をcold、直後の要求をwarmと呼ぶ。出力はいずれも31文字。AI整形部分のAPI計測で、マイク/VAD/文字起こし/UI貼り付けは含まない。各条件1回ずつで統計的保証はない。
 
@@ -180,5 +180,20 @@
 
 - OpenCode serverのhealth readyは1.06秒、接続モデル一覧取得は2.74秒。session操作は7–30 msで、測定した数秒〜75秒の主因ではない。待ち時間のほぼ全てが同期message要求の内側にあった。
 - 判断: Museは初回だけ約40.5秒長く、直後は約2.9秒まで戻った。provider/model cold startまたは初回経路待ちが有力候補だが、first-token時刻未計測のため確定できない。Geminiは直後も約44秒かかり、cold startだけでは説明できない。Gemini providerの待機または生成速度が候補。GPTは約3秒で、ユーザー報告と整合した。アプリ要求は`variant`/`reasoningEffort`を指定していないが、これが遅延差の原因かは未確認。
-- 次の計画（高速化はまだ実装しない）: (1) 同じ短文/長文条件でproviderごとにcold初回とwarm 3–5回を複数セッションで再測定し、ばらつきと長さ依存を確認する。(2) OpenCodeの`/prompt_async`とSSE `/event`で初回assistant出力(TTFT)と完了時刻を記録し、初回待機と生成区間を分ける。記録対象は時刻・段階・文字数だけにし、本文・音声・認証情報を残さない。(3) OpenCode profileの対象model options/variantと`build` agentの上書きを読み取り専用で確認する。(4) TTFTが長ければprovider待機/cold start、TTFT後の生成が長ければmodel速度/effortを優先して切り分ける。(5) 隠れたwarmup生成は無料枠・課金を消費する可能性があるため採用せず、必要なら透明な初回待機表示や、利用者が明示操作するwarmupを比較案にする。session再利用は実測コストが小さいため優先しない。effort/既定モデルは計画だけで変更しない。
+- 事前チェックポイント: 既存の効果音変更と計測計画を`c6a347b feat: play activation sound on recording start`としてコミットしてから、以下の性能実装に着手した。
+- `/prompt_async`とSSE `/event`の実測は、OpenCode 1.18.34・同一profile/auth・`agent=build`・実アプリの`TranscriptRewritePrompt.SystemMessage`と同じ75文字の合成音声文で実施。system 490文字、user 75文字。3モデルに各1回の非同期要求を送信し、初回テキストと完了を測った。生成本文は記録していない。
+
+| モデル | 非同期TTFT | 非同期完了 | 同期`/message`確認 | session作成/削除 |
+|---|---:|---:|---:|---:|
+| GPT 6 Luna Fast | 95 ms | 2.322 秒 | 2.611 秒・成功 | 28/10 ms（非同期）、38/32 ms（同期） |
+| Muse Spark 1.3 Contributor Free | 38 ms | 3.226 秒 | 1.484 秒・モデル応答エラー | 11/13 ms（非同期）、26/17 ms（同期） |
+| Gemini 3.5 Flash Lite | 52 ms | 1.993 秒 | 2.937 秒・成功 | 6/21 ms（非同期）、27/14 ms（同期） |
+
+- 計測比較: 非同期3モデルに同じプロンプトを使った結果、最初の出力は38–95 msで届き、生成全体は1.99–3.23秒だった。同期方式でもGPTは2.61秒、Geminiは2.94秒。Muse同期要求はモデル応答エラーになったが非同期要求は成功したため、現方式を切り替える根拠にはなる一方、1回ずつのため性能・信頼性の優位を一般化しない。
+- 前回の同期計測はGPT 3.943/2.772秒、Muse 43.462/2.925秒、Gemini 75.295/44.068秒。session create/deleteは7–30 ms、server health 1.06秒、provider一覧取得2.74秒だった。今回の全プロンプトでTTFT/完了が速かったこととの大きな差は、providerのcold状態・負荷・待機などの変動が候補。OpenCodeローカルログには2026-10-13 19:17:58 UTCにHTTP 429の記録が1件あったがprovider/modelとの対応は取れず、特定の遅延原因とは断定できない。音声/VAD/貼り付けや実ユーザー発話は計測していない。
+- profile確認: `build` agentに固定model/optionsはなく、指定モデルのprovider既定を使う。OpenCodeから見えるvariantはGPT `high,low,max,medium,none,xhigh`、Muse `high,low,medium,minimal,xhigh`、Gemini `high,low,medium,minimal`。Better Flowはvariant/reasoning effortを送っていないため、実効effort値は特定できない。
+- 実装: 同期`POST /session/:id/message`を、同じ1回のモデル要求を保つ`POST /session/:id/prompt_async` + SSE `/event`受信へ変更。初回テキストを記録し、session idle後に最終assistant応答を取得する。キャンセル/失敗時はOpenCode側の生成をabortし、sessionを削除する。各AI要求のgate待ち・model確認・session作成・prompt受付・TTFT・完了待ち・session削除・文字数・成否/失敗分類を`AppPaths.Root\opencode-timing.jsonl`へ記録する。本文/音声/プロンプト/出力/認証値は記録しない。ログは256 KiBでクリアされる。
+- 対策判断: 固定のsession費用では大きな遅延を説明できず、隠れたwarmup、model変更、effort指定は行わない。連続要求でも遅い場合は、生成ログを見てprovider/API遅延かTTFT後の生成かを分ける。
+- Release build/publish成功（警告0・エラー0）。`artifacts/publish-opencode-async/BetterFlow.exe`と`dist/Better Flow.exe`は81,871,385 bytes、SHA-256 `A82D27F775ADD21EE2AB1B99E85DD7DF538CD7BB41F8C8E1C0B067A58F951E6A`で一致。更新前は`artifacts/BetterFlow-before-opencode-async.exe`へ保存。dist内はBetter Flow.exeのみ。配布先を使っていた完全一致プロセスだけを停止して更新した。
+- Gemini要求はこの追加計測で計3回、各要求の間隔を1分以上空け、再試行やバックグラウンド要求は行わなかった。テストスイートは実行していない。新EXEの実UI/実音声経路と`opencode-timing.jsonl`への初回記録は未確認。
 - 根拠: [OpenCode Server API](https://dev.opencode.ai/docs/server/)は同期`/message`、非同期`/prompt_async`、server-sent event streamを掲載。[OpenCode Models](https://docs.opencode.ai/docs/models/)はmodel variants/optionsで推論effort等を設定でき、agent設定がglobal optionsを上書きし得ると説明する。
