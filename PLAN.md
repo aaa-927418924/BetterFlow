@@ -124,3 +124,12 @@
 
 - 2026-10-13: 設定画面から指定された補足・完了テキストを削除。マイク名は専用テンプレートで省略せず折り返して表示する。ショートカット変更と音声/OpenCode一覧更新ボタンを共通の角丸スタイルへ揃え、AIモード中に無効なOpenCode更新ボタンはAIモードオフ時と同じ配色を維持する。
 - Releaseビルドとwin-x64自己完結型の単一EXE発行に成功。発行元`artifacts/publish-settings-compact/BetterFlow.exe`と`dist/Better Flow.exe`は81,813,982 bytes、SHA-256 `3855AFE38AAE615C85F0AB8AC612C01530158E78216ED5016ADBFF06DA47F2DC`で一致。NuGet脆弱性フィードに接続できずNU1900警告。実画面での表示・クリック確認は未実施。
+
+## 選択文のGPT Live音声編集
+
+- 設定から選択文の編集方式を切り替えられるようにする。既定は現在のOpenCode方式を維持し、GPT Liveは任意選択とする。
+- GPT LiveではChatGPTサブスクリプションのOAuth認証とWebRTCの双方向音声を使用する。Platform APIキー、API課金経路へのフォールバックは設けない。
+- 選択文を会話の初期文脈として渡し、モデルが文章変更を求められた時だけアプリ内の限定ツールで現在の選択範囲を置換する。文法確認など変更を求めない発話には音声で返答し、文章は変更しない。置換後は選択範囲を保持し、同じライブセッションで連続編集を続ける。
+- OAuthトークンはWindowsユーザーのDPAPIで保護し、WebView側へ渡さない。OpenCode方式は従来どおりローカルOpenCode serverを使う。設定画面には注意書き・規約案内の文章を追加しない。
+- 実装順: WebView2/WebRTC実行基盤、ChatGPT OAuthのサインイン・更新・保管、会話ツールイベントと選択範囲置換、設定UIとモード永続化、README/配布記録の更新。認証クライアントまたはGPT Live側の契約変更で接続できない場合は、OpenCode既定動作を維持し、エラーを明示する。
+- 2026-10-13にOpenClawのGPT Live実装とOpenAIのSign in with ChatGPT資料を参照。GPT Liveのsubscription OAuthルートはOpenClawが利用するWebRTC接続経路を基にする。WebView2 RuntimeはWindows 11には含まれるが、一部のWindows 10環境にはないため、配布では不足時の導入を扱う。
