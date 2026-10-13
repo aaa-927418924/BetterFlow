@@ -55,7 +55,7 @@
                                               Style="{StaticResource ModeToggleStyle}" Click="AiModeToggle_Click"
                                               IsChecked="False"
                                               AutomationProperties.Name="AIによる文章整形モード"
-                                              AutomationProperties.HelpText="オフは文字起こしのみです。オンでは通常の認識文を整え、選択文編集時は選択文と音声指示をOpenCodeの選択モデルへ送ります。" />
+                                              AutomationProperties.HelpText="オフは文字起こしのみです。オンでは通常の認識文を整え、選択文編集時は音声指示で選択文を編集します。" />
                                 <StackPanel VerticalAlignment="Center" Margin="0,0,12,0">
                                     <TextBlock x:Name="AiModeLabel" Text="AIによる文章整形" FontSize="14" />
                                     <TextBlock x:Name="AiModeDescription" Text="オフ: 文字起こしのみ"
@@ -63,6 +63,26 @@
                                                AutomationProperties.LiveSetting="Polite" />
                                 </StackPanel>
                             </DockPanel>
+                            <StackPanel x:Name="SelectionEditEnginePanel" Margin="0,14,0,0">
+                                <TextBlock Text="選択文の編集方式" FontSize="13" Foreground="{StaticResource MutedBrush}" />
+                                <DockPanel Margin="0,5,0,0" LastChildFill="True">
+                                    <Button x:Name="GptLiveAuthButton" DockPanel.Dock="Right" Content="ChatGPTにサインイン"
+                                            MinWidth="150" Height="40" Padding="10,0" Margin="8,0,0,0"
+                                            Style="{StaticResource SecondaryButtonStyle}"
+                                            Click="GptLiveAuthButton_Click" AutomationProperties.Name="ChatGPT音声モードのサインイン" />
+                                    <ComboBox x:Name="SelectionEditEngineCombo" IsEditable="False" MinHeight="40"
+                                              Background="#333333" Foreground="#F4F4F4" BorderBrush="#686868"
+                                              FontFamily="Yu Gothic UI" FontSize="13"
+                                              Style="{StaticResource DarkComboBoxStyle}"
+                                              SelectionChanged="SelectionEditEngineCombo_SelectionChanged"
+                                              AutomationProperties.Name="選択文の編集方式">
+                                        <ComboBoxItem Content="OpenCode" Tag="opencode" />
+                                        <ComboBoxItem Content="GPT Live" Tag="gpt-live" />
+                                    </ComboBox>
+                                </DockPanel>
+                                <TextBlock x:Name="GptLiveAuthStatus" FontSize="11" Foreground="{StaticResource MutedBrush}"
+                                           Margin="0,5,0,0" AutomationProperties.LiveSetting="Polite" />
+                            </StackPanel>
                         </StackPanel>
                         <StackPanel x:Name="MicrophoneSettingsPanel" Margin="0,16,0,0" Visibility="Collapsed">
                             <TextBlock Text="音声入力デバイス" FontSize="14" FontWeight="SemiBold" />

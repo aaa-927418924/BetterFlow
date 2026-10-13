@@ -20,6 +20,9 @@ internal static class AppPaths
     public static string OpenCodeDirectory => Path.Combine(Root, "opencode");
     public static string OpenCodeExecutable => Path.Combine(OpenCodeDirectory, "opencode.exe");
     public static string OpenCodeSetupLockFile => Path.Combine(Root, "opencode-setup.lock");
+    public static string GptLiveCredentialFile => Path.Combine(Root, "gpt-live-credentials.bin");
+    public static string WebView2UserDataDirectory => Path.Combine(Root, "webview2");
+    public static string LiveWebAssetsDirectory => Path.Combine(Root, "live-web");
 
     public static void EnsureDirectories()
     {
