@@ -54,6 +54,7 @@ internal sealed class OpenCodeService : IDisposable
         var lastHealthError = "OpenCode serverから応答がありません。";
         try
         {
+            ConfigureWorkspaceToolPermissions(_workspace);
             if (!_process.Start()) throw new InvalidOperationException("OpenCodeを起動できませんでした。");
             _process.BeginOutputReadLine();
             _process.BeginErrorReadLine();
@@ -125,7 +126,6 @@ internal sealed class OpenCodeService : IDisposable
                 agent = "build",
                 model = new { providerID = providerId, modelID = modelId },
                 system = TranscriptRewritePrompt.SystemMessage,
-                tools = new Dictionary<string, bool> { ["*"] = false },
                 parts = new[] { new { type = "text", text = TranscriptRewritePrompt.CreateUserMessage(transcript) } }
             };
             using var message = await _http.PostAsync(
@@ -361,6 +361,33 @@ internal sealed class OpenCodeService : IDisposable
     {
         _http.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Basic",
             Convert.ToBase64String(Encoding.UTF8.GetBytes(ServerUsername + ":" + password)));
+    }
+
+    private static void ConfigureWorkspaceToolPermissions(string workspace)
+    {
+        const string safeContextFile = "autoprompt-context.txt";
+        var safeContextAbsolutePath = Path.GetFullPath(Path.Combine(workspace, safeContextFile))
+            .Replace(Path.DirectorySeparatorChar, '/');
+        // Zen free-tier requests can be rejected when read/bash are denied. Keep only
+        // one inert workspace file readable and a no-op echo command executable.
+        var permissions = new Dictionary<string, object>
+        {
+            ["*"] = "deny",
+            ["read"] = new Dictionary<string, string>
+            {
+                ["*"] = "deny",
+                [safeContextFile] = "allow",
+                [safeContextAbsolutePath] = "allow"
+            },
+            ["bash"] = new Dictionary<string, string>
+            {
+                ["*"] = "deny",
+                ["echo *"] = "allow"
+            }
+        };
+        var config = new Dictionary<string, object> { ["permission"] = permissions };
+        File.WriteAllText(Path.Combine(workspace, "opencode.json"), JsonSerializer.Serialize(config), new UTF8Encoding(false));
+        File.WriteAllText(Path.Combine(workspace, safeContextFile), "Auto Prompt temporary formatter workspace.", new UTF8Encoding(false));
     }
 
     private static StringContent JsonBody(object body) =>
