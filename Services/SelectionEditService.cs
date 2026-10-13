@@ -154,24 +154,64 @@ internal static class SelectionEditService
         return actual is not null && actual.AsSpan().SequenceEqual(expected);
     }
 
-    private static bool TryReselectInsertedText(TextPattern textPattern, string insertedText)
+    private static async Task<bool> TryReselectInsertedTextAsync(
+        TextPattern textPattern,
+        string insertedText,
+        IntPtr targetWindow,
+        CancellationToken cancellationToken)
     {
         var currentSelections = textPattern.GetSelection();
         if (currentSelections is null || currentSelections.Length != 1)
             return false;
 
         var currentSelection = currentSelections[0];
-        if (string.Equals(NormalizeText(currentSelection.GetText(-1)), NormalizeText(insertedText), StringComparison.Ordinal))
-            return true;
+        var insertedRange = string.Equals(
+            NormalizeText(currentSelection.GetText(-1)),
+            NormalizeText(insertedText),
+            StringComparison.Ordinal)
+            ? currentSelection.Clone()
+            : FindInsertedTextRange(textPattern.DocumentRange, currentSelection, insertedText);
+        if (insertedRange is null) return false;
 
-        var documentRange = textPattern.DocumentRange;
-        TextPatternRange? insertedRange = null;
+        // UIA providers can report a selected range without applying a visible input selection.
+        // Put the real caret at the inserted text's end, then select it with native keyboard input.
+        var caretRange = insertedRange.Clone();
+        caretRange.MoveEndpointByRange(
+            TextPatternRangeEndpoint.Start,
+            insertedRange,
+            TextPatternRangeEndpoint.End);
+        caretRange.Select();
+        await Task.Delay(TimeSpan.FromMilliseconds(20), cancellationToken);
+        if (PasteService.GetForegroundWindowHandle() != targetWindow ||
+            !PasteService.SelectTextBeforeCaret(insertedText, targetWindow))
+            return false;
+
+        for (var attempt = 0; attempt < 5; attempt++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            await Task.Delay(TimeSpan.FromMilliseconds(20), cancellationToken);
+            var verified = textPattern.GetSelection();
+            if (verified is { Length: 1 } &&
+                string.Equals(NormalizeText(verified[0].GetText(-1)), NormalizeText(insertedText), StringComparison.Ordinal))
+                return true;
+        }
+
+        return false;
+    }
+
+    private static TextPatternRange? FindInsertedTextRange(
+        TextPatternRange documentRange,
+        TextPatternRange currentSelection,
+        string insertedText)
+    {
+        var normalizedTarget = NormalizeText(insertedText);
         var candidates = new[]
         {
             insertedText,
             insertedText.Replace("\n", "\r\n", StringComparison.Ordinal),
             insertedText.Replace("\n", "\r", StringComparison.Ordinal)
         }.Distinct(StringComparer.Ordinal);
+
         foreach (var candidate in candidates)
         {
             var textBeforeCaret = documentRange.Clone();
@@ -179,21 +219,73 @@ internal static class SelectionEditService
                 TextPatternRangeEndpoint.End,
                 currentSelection,
                 TextPatternRangeEndpoint.Start);
-            var match = textBeforeCaret.FindText(candidate, backward: true, ignoreCase: false);
-            if (match is null || match.CompareEndpoints(
+            var matchBeforeCaret = textBeforeCaret.FindText(candidate, backward: true, ignoreCase: false);
+            if (matchBeforeCaret is not null && matchBeforeCaret.CompareEndpoints(
                     TextPatternRangeEndpoint.End,
                     currentSelection,
-                    TextPatternRangeEndpoint.Start) != 0)
-                continue;
-            insertedRange = match;
-            break;
-        }
-        if (insertedRange is null) return false;
+                    TextPatternRangeEndpoint.Start) == 0)
+                return matchBeforeCaret;
 
-        insertedRange.Select();
-        var verified = textPattern.GetSelection();
-        return verified is { Length: 1 } &&
-               string.Equals(NormalizeText(verified[0].GetText(-1)), NormalizeText(insertedText), StringComparison.Ordinal);
+            var textFromSelectionStart = documentRange.Clone();
+            textFromSelectionStart.MoveEndpointByRange(
+                TextPatternRangeEndpoint.Start,
+                currentSelection,
+                TextPatternRangeEndpoint.Start);
+            var matchAtSelectionStart = textFromSelectionStart.FindText(candidate, backward: false, ignoreCase: false);
+            if (matchAtSelectionStart is not null && matchAtSelectionStart.CompareEndpoints(
+                    TextPatternRangeEndpoint.Start,
+                    currentSelection,
+                    TextPatternRangeEndpoint.Start) == 0)
+                return matchAtSelectionStart;
+        }
+
+        var matches = new List<TextPatternRange>();
+        foreach (var candidate in candidates)
+        {
+            var searchRange = documentRange.Clone();
+            for (var count = 0; count < 256; count++)
+            {
+                var match = searchRange.FindText(candidate, backward: false, ignoreCase: false);
+                if (match is null) break;
+
+                if (string.Equals(NormalizeText(match.GetText(-1)), normalizedTarget, StringComparison.Ordinal) &&
+                    !matches.Any(existing => existing.CompareEndpoints(TextPatternRangeEndpoint.Start, match,
+                        TextPatternRangeEndpoint.Start) == 0 &&
+                        existing.CompareEndpoints(TextPatternRangeEndpoint.End, match,
+                            TextPatternRangeEndpoint.End) == 0))
+                    matches.Add(match);
+
+                var nextSearchRange = match.Clone();
+                nextSearchRange.MoveEndpointByRange(TextPatternRangeEndpoint.Start, match, TextPatternRangeEndpoint.End);
+                if (nextSearchRange.CompareEndpoints(TextPatternRangeEndpoint.Start, searchRange,
+                        TextPatternRangeEndpoint.Start) <= 0)
+                    break;
+                searchRange = nextSearchRange;
+            }
+        }
+
+        if (matches.Count == 0) return null;
+
+        // Prefer a match ending at the post-paste caret, then a match beginning at the
+        // pre-paste selection's start. These anchors disambiguate repeated text in documents.
+        var collapsedSelection = currentSelection.CompareEndpoints(
+            TextPatternRangeEndpoint.Start, currentSelection, TextPatternRangeEndpoint.End) == 0;
+        if (collapsedSelection)
+        {
+            var caretMatch = matches.FirstOrDefault(match => match.CompareEndpoints(
+                TextPatternRangeEndpoint.End, currentSelection, TextPatternRangeEndpoint.Start) == 0);
+            if (caretMatch is not null) return caretMatch;
+        }
+
+        var startMatch = matches.FirstOrDefault(match => match.CompareEndpoints(
+            TextPatternRangeEndpoint.Start, currentSelection, TextPatternRangeEndpoint.Start) == 0);
+        if (startMatch is not null) return startMatch;
+
+        var endMatch = matches.FirstOrDefault(match => match.CompareEndpoints(
+            TextPatternRangeEndpoint.End, currentSelection, TextPatternRangeEndpoint.End) == 0);
+        if (endMatch is not null) return endMatch;
+
+        return matches.Count == 1 ? matches[0] : null;
     }
 
     private static async Task<bool> TryReselectInsertedTextAsync(
@@ -212,7 +304,8 @@ internal static class SelectionEditService
             try
             {
                 var provider = FindFocusedTextProvider(providerRuntimeId, out var textPattern);
-                if (provider is not null && textPattern is not null && TryReselectInsertedText(textPattern, insertedText))
+                if (provider is not null && textPattern is not null && await TryReselectInsertedTextAsync(
+                        textPattern, insertedText, targetWindow, cancellationToken))
                     return true;
             }
             catch (Exception ex) when (IsAutomationFailure(ex))

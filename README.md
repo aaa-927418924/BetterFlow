@@ -8,7 +8,7 @@ Windows x64向けの音声入力アプリです。入力欄にカーソルを置
 
 テキストを選択してショートカットを押すと、選択文を音声指示で編集する連続セッションを開始します。「英語に翻訳して」「プロンプトとして書いて」などと話すと、認識後に選択文を編集して置き換えます。貼り付け後は置換した文章を再選択するため、そのまま続けて話して編集を重ねられます。もう一度ショートカットを押すと終了します。通常の音声入力は、編集対象の文章を選んでいない状態で使います。
 
-連続編集の発話区間判定にはSilero VADを使います。16 kHz音声を512サンプル単位で判定し、発話判定が約256 ms続いてから編集待ち行列へ送るため、短いクリックや雑音だけでAI編集が始まりにくくなります。開始前の約512 msは保持して発話の頭を欠けにくくし、Silero VADの無音判定後も700 ms待ってから区切ります。SileroモデルはEXEに同梱し、初回使用時にSHA-256を確認してアプリデータへ展開します。貼り付け後の再選択はUI Automationで再試行し、選択を確かめられない場合は連続編集を終了します。使用モデルは[Silero VAD](https://github.com/snakers4/silero-vad)のSherpa-ONNX互換ONNX版です。[対応モデルと512サンプル窓の説明](https://k2-fsa.github.io/sherpa/onnx/vad/silero-vad.html)、[Silero VADのMITライセンス](https://github.com/snakers4/silero-vad/blob/master/LICENSE)を同梱しています。
+連続編集の発話区間判定にはSilero VADを使います。16 kHz音声を512サンプル単位で判定し、発話判定が約256 ms続いてから編集待ち行列へ送るため、短いクリックや雑音だけでAI編集が始まりにくくなります。開始前の約512 msは保持して発話の頭を欠けにくくし、Silero VADの無音判定後も700 ms待ってから区切ります。SileroモデルはEXEに同梱し、初回使用時にSHA-256を確認してアプリデータへ展開します。AI編集後は挿入位置をUI Automationで特定し、キャレットを置いてからネイティブのShift+左キー入力で置換文全体を選択します。選択範囲は入力欄から読み返して確認し、確認できない場合は連続編集を終了します。使用モデルは[Silero VAD](https://github.com/snakers4/silero-vad)のSherpa-ONNX互換ONNX版です。[対応モデルと512サンプル窓の説明](https://k2-fsa.github.io/sherpa/onnx/vad/silero-vad.html)、[Silero VADのMITライセンス](https://github.com/snakers4/silero-vad/blob/master/LICENSE)を同梱しています。
 
 初回画面は白い外周と標準タイトルバーのない角丸フレームレスウィンドウです。上端をドラッグして移動でき、右上のボタンで閉じられます。`Setup` ボタンの文字は黒で表示します。
 
