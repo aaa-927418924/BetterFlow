@@ -47,6 +47,10 @@ internal sealed class OpenCodeService : IDisposable
         var info = CreateStartInfo(command, port, _workspace);
         info.Environment["OPENCODE_SERVER_USERNAME"] = ServerUsername;
         info.Environment["OPENCODE_SERVER_PASSWORD"] = serverPassword;
+        // Auto Prompt only needs the model catalog already available to the local
+        // OpenCode profile. A remote models.dev refresh is unrelated to provider
+        // connection state and can stall catalog initialization on network or lock waits.
+        info.Environment["OPENCODE_DISABLE_MODELS_FETCH"] = "1";
         _process = new Process { StartInfo = info, EnableRaisingEvents = true };
         _process.OutputDataReceived += DiscardOutput;
         _process.ErrorDataReceived += DiscardOutput;
@@ -78,11 +82,7 @@ internal sealed class OpenCodeService : IDisposable
                     {
                         using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync(timeout.Token));
                         if (document.RootElement.TryGetProperty("healthy", out var healthy) && healthy.GetBoolean())
-                        {
-                            startupStage = "OpenCodeモデル一覧の確認";
-                            await GetModelsAsync(timeout.Token);
                             return;
-                        }
                         lastHealthError = "OpenCode serverのhealth応答がhealthyではありません。";
                     }
                     else lastHealthError = $"OpenCode serverのhealth応答はHTTP {(int)response.StatusCode}です。";
