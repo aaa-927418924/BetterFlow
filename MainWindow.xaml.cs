@@ -332,9 +332,12 @@ public partial class MainWindow : System.Windows.Window
     private void InitializeOpenCodeModelUi()
     {
         _loadingOpenCodeModelUi = true;
-        OpenCodeModelCombo.ItemsSource = _openCodeModels;
-        OpenCodeModelCombo.SelectedItem = FindSelectedOpenCodeModel();
-        OpenCodeModelStatus.Text = "OpenCode Desktopで現在接続中のproviderのモデルだけを一覧更新して読み込みます。";
+        var selected = FindSelectedOpenCodeModel();
+        OpenCodeModelCombo.ItemsSource = GetOpenCodeModelItems();
+        OpenCodeModelCombo.SelectedItem = selected;
+        OpenCodeModelStatus.Text = selected is null
+            ? "OpenCode Desktopで現在接続中のproviderのモデルだけを一覧更新して読み込みます。"
+            : $"保存済みの選択: {selected.DisplayName}。接続状態は一覧更新後に確認します。";
         _loadingOpenCodeModelUi = false;
     }
 
@@ -409,6 +412,8 @@ public partial class MainWindow : System.Windows.Window
 
     private OpenCodeModelOption? FindSelectedOpenCodeModel()
     {
+        if (string.IsNullOrWhiteSpace(_settings.OpenCodeModelId)) return null;
+
         var selected = _openCodeModels.FirstOrDefault(option =>
             string.Equals(option.ProviderId, _settings.OpenCodeModelProviderId, StringComparison.OrdinalIgnoreCase) &&
             string.Equals(option.ModelId, _settings.OpenCodeModelId, StringComparison.OrdinalIgnoreCase));
@@ -421,20 +426,40 @@ public partial class MainWindow : System.Windows.Window
             if (matches.Length == 1) return matches[0];
         }
 
+        if (!string.IsNullOrWhiteSpace(_settings.OpenCodeModelProviderId))
+            return new OpenCodeModelOption(_settings.OpenCodeModelProviderId,
+                _settings.OpenCodeModelProviderId, _settings.OpenCodeModelId, _settings.OpenCodeModelId);
+
         return null;
     }
 
     private OpenCodeModelOption? GetSelectedOpenCodeModel() => OpenCodeModelCombo.SelectedItem as OpenCodeModelOption;
+
+    private IReadOnlyList<OpenCodeModelOption> GetOpenCodeModelItems()
+    {
+        var items = _openCodeModels.ToList();
+        var selected = FindSelectedOpenCodeModel();
+        if (selected is not null && !items.Any(option =>
+                string.Equals(option.ProviderId, selected.ProviderId, StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(option.ModelId, selected.ModelId, StringComparison.OrdinalIgnoreCase)))
+            items.Insert(0, selected);
+        return items;
+    }
+
+    private bool IsSelectedOpenCodeModelConnected(OpenCodeModelOption? selected) => selected is not null &&
+        _openCodeModels.Any(option =>
+            string.Equals(option.ProviderId, selected.ProviderId, StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(option.ModelId, selected.ModelId, StringComparison.OrdinalIgnoreCase));
 
     private void ApplyOpenCodeModels()
     {
         _loadingOpenCodeModelUi = true;
         try
         {
-            OpenCodeModelCombo.ItemsSource = _openCodeModels;
             var selected = FindSelectedOpenCodeModel();
+            OpenCodeModelCombo.ItemsSource = GetOpenCodeModelItems();
             OpenCodeModelCombo.SelectedItem = selected;
-            if (selected is not null)
+            if (selected is not null && IsSelectedOpenCodeModelConnected(selected))
             {
                 var changed = _settings.OpenCodeModelProviderId != selected.ProviderId ||
                               _settings.OpenCodeModelId != selected.ModelId;
@@ -506,9 +531,10 @@ public partial class MainWindow : System.Windows.Window
         {
             await EnsureOpenCodeReadyAsync();
             await LoadOpenCodeModelsAsync();
+            var selected = GetSelectedOpenCodeModel();
             OpenCodeModelStatus.Text = _openCodeModels.Count == 0
                 ? "接続済みモデルが見つかりません。OpenCode Desktopでproviderに接続してから更新してください。"
-                : OpenCodeModelCombo.SelectedItem is OpenCodeModelOption
+                : IsSelectedOpenCodeModelConnected(selected)
                     ? $"接続済みproviderのモデルを{_openCodeModels.Count}件読み込みました。"
                     : $"接続済みproviderのモデルを{_openCodeModels.Count}件読み込みました。保存中のモデルは未接続です。接続後に選び直してください。";
         }
@@ -604,8 +630,9 @@ public partial class MainWindow : System.Windows.Window
             var transcript = await Task.Run(() => _asr!.Transcribe(samples), _lifetime.Token);
             Array.Clear(samples);
             samples = null;
-            if (string.IsNullOrWhiteSpace(transcript))
-                throw new InvalidOperationException("音声を認識できませんでした。マイクに近づいて、もう一度お試しください。");
+            transcript = TranscriptFormatter.NormalizeTranscript(transcript);
+            if (!TranscriptFormatter.HasMeaningfulText(transcript))
+                throw new InvalidDataException("文字起こし結果が空、または句読点・記号だけでした。マイクを確認して、もう一度お試しください。");
 
             string text;
             string resultStatus;
@@ -626,13 +653,16 @@ public partial class MainWindow : System.Windows.Window
                     var response = await _openCode.RewriteAsync(
                         transcript, _settings.OpenCodeModelProviderId, _settings.OpenCodeModelId, _lifetime.Token);
                     text = response.Trim();
+                    if (!TranscriptFormatter.HasMeaningfulText(text))
+                        throw new InvalidDataException("モデルから文字として使える回答が返りませんでした。入力欄は変更していません。");
                     resultStatus = "整えた文章を入力欄へ貼り付けました。";
                 }
                 catch (OperationCanceledException) when (_closing) { throw; }
                 catch (Exception ex)
                 {
+                    _openCode.Stop();
                     RuntimeStatus.Text = "AI変換に失敗しました。入力欄は変更していません。 " + ex.Message;
-                    _indicator.ShowStatus("AI変換失敗", TimeSpan.FromSeconds(1));
+                    _indicator.ShowStatus(GetAiFailureIndicatorText(ex), TimeSpan.FromSeconds(1));
                     return;
                 }
             }
@@ -644,7 +674,9 @@ public partial class MainWindow : System.Windows.Window
         catch (Exception ex)
         {
             RuntimeStatus.Text = ex.Message;
-            _indicator.ShowStatus("処理に失敗しました", TimeSpan.FromSeconds(1));
+            _indicator.ShowStatus(ex.Message.Contains("文字起こし結果", StringComparison.Ordinal)
+                ? "音声認識失敗"
+                : "処理に失敗しました", TimeSpan.FromSeconds(1));
         }
         finally
         {
@@ -654,6 +686,18 @@ public partial class MainWindow : System.Windows.Window
             ActionButton.Content = "録音を開始";
             UpdateAiModeDisplay();
         }
+    }
+
+    private static string GetAiFailureIndicatorText(Exception exception)
+    {
+        var message = exception.GetBaseException().Message;
+        if (message.Contains("OAuth認証を更新", StringComparison.OrdinalIgnoreCase) ||
+            message.Contains("Token refresh failed", StringComparison.OrdinalIgnoreCase) ||
+            message.Contains("invalid_grant", StringComparison.OrdinalIgnoreCase))
+            return "OpenCode再ログイン";
+        if (message.Contains("文字として使える回答", StringComparison.Ordinal))
+            return "AI応答なし";
+        return "AI変換失敗";
     }
 
     private void PasteAndShow(string text, string successStatus)

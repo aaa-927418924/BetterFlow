@@ -122,7 +122,7 @@ internal sealed class OpenCodeService : IDisposable
 
             var body = new
             {
-                agent = "plan",
+                agent = "build",
                 model = new { providerID = providerId, modelID = modelId },
                 system = TranscriptRewritePrompt.SystemMessage,
                 tools = new Dictionary<string, bool> { ["*"] = false },
@@ -135,6 +135,10 @@ internal sealed class OpenCodeService : IDisposable
                 throw new HttpRequestException(BuildProviderError(message.StatusCode, responseBody), null, message.StatusCode);
 
             using var response = JsonDocument.Parse(responseBody);
+            var responseError = ExtractResponseError(response.RootElement);
+            if (!string.IsNullOrWhiteSpace(responseError))
+                throw new InvalidDataException(BuildResponseError(responseError));
+
             var texts = new List<string>();
             if (response.RootElement.TryGetProperty("parts", out var parts) && parts.ValueKind == JsonValueKind.Array)
             {
@@ -147,13 +151,8 @@ internal sealed class OpenCodeService : IDisposable
             }
 
             var result = string.Join("\n", texts).Trim();
-            if (string.IsNullOrWhiteSpace(result))
-            {
-                var detail = ExtractResponseError(response.RootElement);
-                throw new InvalidDataException(string.IsNullOrWhiteSpace(detail)
-                    ? "モデルから空の回答が返りました。OpenCodeの応答内容を確認できませんでした。"
-                    : BuildResponseError(detail));
-            }
+            if (!TranscriptFormatter.HasMeaningfulText(result))
+                throw new InvalidDataException("モデルから文字として使える回答が返りませんでした。");
             return result;
         }
         finally

@@ -10,6 +10,9 @@ internal static partial class TranscriptFormatter
         return WhitespaceRegex().Replace(normalized, " ").Trim();
     }
 
+    public static bool HasMeaningfulText(string? text) =>
+        !string.IsNullOrWhiteSpace(text) && text.Any(char.IsLetterOrDigit);
+
     [GeneratedRegex("\\s+", RegexOptions.CultureInvariant)]
     private static partial Regex WhitespaceRegex();
 }
