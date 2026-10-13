@@ -3,6 +3,7 @@
 .vs/
 dist/
 artifacts/
+/Assets/universfield-gadget-activation-250072.mp3
 *.user
 *.suo
 *.log

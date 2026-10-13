@@ -37,5 +37,8 @@
   <ItemGroup>
     <EmbeddedResource Include="Assets\silero_vad.onnx" LogicalName="BetterFlow.Assets.silero_vad.onnx" />
     <EmbeddedResource Include="Assets\SileroVAD-LICENSE.txt" LogicalName="BetterFlow.Assets.SileroVAD-LICENSE.txt" />
+    <EmbeddedResource Include="Assets\universfield-gadget-activation-250072.mp3"
+                      LogicalName="BetterFlow.Assets.activation.mp3"
+                      Condition="Exists('Assets\universfield-gadget-activation-250072.mp3')" />
   </ItemGroup>
 </Project>

@@ -162,3 +162,23 @@
 
 - 編集セッションが有効な間は、次のショートカットを「録音停止して未処理発話を処理する」経路に渡さず、即座にセッションキャンセルへ分岐する。キャンセルトークンで処理中のASR/OpenCode編集を止め、連続マイクを停止し、待機中の発話を破棄する。
 - Release buildは警告0・エラー0、win-x64単体EXE発行と`dist/Better Flow.exe`の差し替えに成功。`artifacts/publish-edit-session-hotkey-cancel/BetterFlow.exe`と配布先は81,819,276 bytes、SHA-256 `605A9C1DDE7D8EDFD425FF64A9640F06C056B7A05B80214A971FCEE46BB1C474`で一致。差し替え前EXEは`artifacts/BetterFlow-before-edit-session-hotkey-cancel.exe`へ保存。テストスイートは未実施で、実アプリ上のショートカットキャンセル動作は未確認。
+
+## ホットキー開始時の効果音（2026-10-14）
+
+- `Assets/universfield-gadget-activation-250072.mp3`を単一EXE内のリソースとして再生する。素材は`.gitignore`対象で、リポジトリには追加しない。
+- 通常録音と選択文編集の両方で、マイク開始が成功した直後にだけ再生する。停止・キャンセル・VAD処理開始などでは呼び出さない。再生失敗は録音処理へ影響させない。
+- MP3更新後にRelease build/publishを再実行し、`dist/Better Flow.exe`を更新。発行物と配布先は81,863,898 bytes、SHA-256 `F55BBC8E086C6ABA1E02BEA48B9BFB56C361F58F4FCE9944953C147D0A2E3D71`で一致。差し替え前は`artifacts/BetterFlow-before-activation-sound-v2.exe`へ保存。素材は48,960 bytes、SHA-256 `5E90FDE4E056A9FE396559591C1B8DF2DB1B0BCAF68F5B85B37F92599A769264`で、Gitignore対象。音声デバイス上での実再生は未確認。ビルド警告0・エラー0。テストスイートは実行していない。
+## OpenCode経由のAI整形の実測と対策計画（2026-10-14・対策未実装）
+
+- 計測条件: OpenCode 1.18.34の一時loopback serverと現在のOpenCode profile/authを使用。アプリと同じ`agent=build`、接続中のprovider/model、同期`POST /session/:id/message`、要求ごとのsession作成・削除で、同じ短い合成文を各モデルへ2回送信。system指示は実アプリの文面に沿った短い計測用版で、完全なUI経由再現ではない。各provider/modelの初回要求をcold、直後の要求をwarmと呼ぶ。出力はいずれも31文字。AI整形部分のAPI計測で、マイク/VAD/文字起こし/UI貼り付けは含まない。各条件1回ずつで統計的保証はない。
+
+| モデル | 初回生成 | 直後の生成 | session作成 | session削除 |
+|---|---:|---:|---:|---:|
+| GPT 6 Luna Fast (`openai/gpt-6-luna-fast`) | 3.94秒 | 2.77秒 | 19 / 7 ms | 30 / 11 ms |
+| Muse Spark 1.3 Contributor Free (`opencode/muse-spark-1.3-contributor-free`) | 43.46秒 | 2.93秒 | 30 / 13 ms | 9 / 8 ms |
+| Gemini 3.5 Flash Lite (`google/gemini-3.5-flash-lite`) | 75.30秒 | 44.07秒 | 14 / 26 ms | 15 / 7 ms |
+
+- OpenCode serverのhealth readyは1.06秒、接続モデル一覧取得は2.74秒。session操作は7–30 msで、測定した数秒〜75秒の主因ではない。待ち時間のほぼ全てが同期message要求の内側にあった。
+- 判断: Museは初回だけ約40.5秒長く、直後は約2.9秒まで戻った。provider/model cold startまたは初回経路待ちが有力候補だが、first-token時刻未計測のため確定できない。Geminiは直後も約44秒かかり、cold startだけでは説明できない。Gemini providerの待機または生成速度が候補。GPTは約3秒で、ユーザー報告と整合した。アプリ要求は`variant`/`reasoningEffort`を指定していないが、これが遅延差の原因かは未確認。
+- 次の計画（高速化はまだ実装しない）: (1) 同じ短文/長文条件でproviderごとにcold初回とwarm 3–5回を複数セッションで再測定し、ばらつきと長さ依存を確認する。(2) OpenCodeの`/prompt_async`とSSE `/event`で初回assistant出力(TTFT)と完了時刻を記録し、初回待機と生成区間を分ける。記録対象は時刻・段階・文字数だけにし、本文・音声・認証情報を残さない。(3) OpenCode profileの対象model options/variantと`build` agentの上書きを読み取り専用で確認する。(4) TTFTが長ければprovider待機/cold start、TTFT後の生成が長ければmodel速度/effortを優先して切り分ける。(5) 隠れたwarmup生成は無料枠・課金を消費する可能性があるため採用せず、必要なら透明な初回待機表示や、利用者が明示操作するwarmupを比較案にする。session再利用は実測コストが小さいため優先しない。effort/既定モデルは計画だけで変更しない。
+- 根拠: [OpenCode Server API](https://dev.opencode.ai/docs/server/)は同期`/message`、非同期`/prompt_async`、server-sent event streamを掲載。[OpenCode Models](https://docs.opencode.ai/docs/models/)はmodel variants/optionsで推論effort等を設定でき、agent設定がglobal optionsを上書きし得ると説明する。

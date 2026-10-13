@@ -16,6 +16,7 @@ public partial class MainWindow : System.Windows.Window
     private readonly ContinuousMicrophoneRecorder _continuousRecorder = new();
     private readonly CancellationTokenSource _lifetime = new();
     private readonly OpenCodeService _openCode = new();
+    private readonly ActivationSoundPlayer _activationSoundPlayer = new();
     private readonly IndicatorWindow _indicator;
     private readonly UndoWindow _undoWindow;
     private readonly bool _startHiddenInTray;
@@ -711,6 +712,7 @@ public partial class MainWindow : System.Windows.Window
 
                 var selectedInput = MicrophoneDeviceCombo.SelectedItem as AudioInputDeviceOption;
                 StartRecorderWithFallback(_recorder.Start, selectedInput);
+                _activationSoundPlayer.Play();
                 ActionButton.Content = "録音を停止して変換";
                 RuntimeStatus.Text = "録音中 · もう一度ショートカットで停止";
                 _indicator.ShowStatus("録音中");
@@ -753,6 +755,7 @@ public partial class MainWindow : System.Windows.Window
             _selectionEditCancellation = cancellation;
             _selectionEditSessionActive = true;
             _selectionEditSessionStopping = false;
+            _activationSoundPlayer.Play();
             RuntimeStatus.Text = "選択文を編集します。続けて話してください。ショートカットで終了できます。";
             ActionButton.Content = "編集セッションを終了";
             _indicator.ShowStatus("選択文編集中");
@@ -1468,6 +1471,7 @@ public partial class MainWindow : System.Windows.Window
         _undoWindow.Close();
         _recorder.Dispose();
         _continuousRecorder.Dispose();
+        _activationSoundPlayer.Dispose();
         _asr?.Dispose();
         _openCode.Dispose();
         if (_trayIcon is not null)
