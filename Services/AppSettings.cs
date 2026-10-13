@@ -8,7 +8,6 @@ internal sealed class AppSettings
     public bool AiModeEnabled { get; set; } = false;
     public string OpenCodeModelProviderId { get; set; } = "opencode";
     public string OpenCodeModelId { get; set; } = string.Empty;
-    public string AiTermsAcceptedFor { get; set; } = string.Empty;
     public string MicrophoneDeviceId { get; set; } = AudioInputDeviceOption.SystemDefaultId;
     public uint ShortcutModifiers { get; set; }
     public uint ShortcutVirtualKey { get; set; } = HotkeyBinding.RightAltVirtualKey;

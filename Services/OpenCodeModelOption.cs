@@ -6,7 +6,9 @@ internal sealed record OpenCodeModelOption(
     string ModelId,
     string ModelName)
 {
-    public string DisplayName => $"{ProviderName} — {ModelName} ({ProviderId}/{ModelId})";
+    public string DisplayName => $"{ProviderName} — {ModelName}";
+
+    public override string ToString() => DisplayName;
 }
 
 internal sealed class LegacyAiProviderSettings

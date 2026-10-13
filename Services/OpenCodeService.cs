@@ -125,6 +125,7 @@ internal sealed class OpenCodeService : IDisposable
                 agent = "plan",
                 model = new { providerID = providerId, modelID = modelId },
                 system = TranscriptRewritePrompt.SystemMessage,
+                tools = new Dictionary<string, bool> { ["*"] = false },
                 parts = new[] { new { type = "text", text = TranscriptRewritePrompt.CreateUserMessage(transcript) } }
             };
             using var message = await _http.PostAsync(
@@ -432,6 +433,10 @@ internal sealed class OpenCodeService : IDisposable
 
     private static string BuildResponseError(string detail)
     {
+        if (detail.Contains("Token refresh failed", StringComparison.OrdinalIgnoreCase) ||
+            detail.Contains("invalid_grant", StringComparison.OrdinalIgnoreCase))
+            return "OpenCodeのOAuth認証を更新できませんでした。OpenCode Desktopで選択モデルのproviderに再ログインし、Auto PromptのAIモードを一度オフにしてからオンにしてください。詳細: " + detail;
+
         if (detail.Contains("can only be used from within OpenCode", StringComparison.OrdinalIgnoreCase) ||
             detail.Contains("FreeTierError", StringComparison.OrdinalIgnoreCase))
             return "OpenCode Zenの無料枠がこの要求を拒否しました。OpenCodeのツール設定または無料枠の判定を確認してください。詳細: " + detail;

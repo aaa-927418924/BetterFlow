@@ -77,7 +77,8 @@
                                         Click="RefreshMicrophoneDevices_Click" AutomationProperties.Name="音声入力デバイス一覧を再読み込み" />
                                 <ComboBox x:Name="MicrophoneDeviceCombo" IsEditable="False" MinHeight="40"
                                           Background="#333333" Foreground="#F4F4F4" BorderBrush="#686868"
-                                          FontFamily="Yu Gothic UI" FontSize="13" DisplayMemberPath="DisplayName"
+                                          FontFamily="Yu Gothic UI" FontSize="13"
+                                          ItemTemplate="{StaticResource DropdownDisplayNameTemplate}"
                                           Style="{StaticResource DarkComboBoxStyle}"
                                           SelectionChanged="MicrophoneDeviceCombo_SelectionChanged"
                                           AutomationProperties.Name="音声入力デバイス" />
@@ -98,11 +99,16 @@
                                         Click="RefreshOpenCodeModels_Click" AutomationProperties.Name="OpenCodeモデル一覧を更新" />
                                 <ComboBox x:Name="OpenCodeModelCombo" IsEditable="False" MinHeight="40"
                                           Background="#333333" Foreground="#F4F4F4" BorderBrush="#686868"
-                                          FontFamily="Yu Gothic UI" FontSize="13" DisplayMemberPath="DisplayName"
+                                          FontFamily="Yu Gothic UI" FontSize="13"
+                                          ItemTemplate="{StaticResource DropdownDisplayNameTemplate}"
                                           Style="{StaticResource DarkComboBoxStyle}"
                                           SelectionChanged="OpenCodeModelCombo_SelectionChanged"
                                           AutomationProperties.Name="OpenCode Desktopのモデル" />
                             </DockPanel>
+                            <TextBlock x:Name="OpenCodeModelModeHint"
+                                       Text="AIモード中はモデルを変更できません。変更するにはAIモードをオフにしてください。"
+                                       FontSize="11" Foreground="{StaticResource MutedBrush}" Margin="0,5,0,0"
+                                       Visibility="Collapsed" />
                             <TextBlock x:Name="OpenCodeModelStatus" FontSize="11" Foreground="{StaticResource MutedBrush}"
                                        Margin="0,5,0,0" AutomationProperties.LiveSetting="Polite" />
                         </StackPanel>

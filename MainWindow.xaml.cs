@@ -32,6 +32,7 @@ public partial class MainWindow : System.Windows.Window
     private bool _exitRequested;
     private bool _syncingStartupMenu;
     private bool _isCapturingShortcut;
+    private bool _isRefreshingOpenCodeModels;
     private bool _loadingOpenCodeModelUi;
     private bool _loadingMicrophoneDeviceUi;
     private IReadOnlyList<OpenCodeModelOption> _openCodeModels = Array.Empty<OpenCodeModelOption>();
@@ -269,6 +270,13 @@ public partial class MainWindow : System.Windows.Window
         PrivacyNotice.Text = _settings.AiModeEnabled
             ? "AIモードでは文字起こしテキストをOpenCode経由で選択中のモデルへ送信します。音声はPC内で処理します。"
             : "音声と文字起こしはPC内で処理します。AIモードを使うときだけ文字起こしテキストをOpenCode経由で送信します。";
+        AiModeToggle.IsEnabled = _asr is not null && !_isBusy && !_recorder.IsRecording && !_isRefreshingOpenCodeModels;
+        var canChooseModel = !_settings.AiModeEnabled && !_isBusy && !_recorder.IsRecording;
+        OpenCodeModelCombo.IsEnabled = canChooseModel;
+        RefreshOpenCodeModelsButton.IsEnabled = canChooseModel && !_isRefreshingOpenCodeModels;
+        OpenCodeModelModeHint.Visibility = _settings.AiModeEnabled
+            ? System.Windows.Visibility.Visible
+            : System.Windows.Visibility.Collapsed;
     }
 
     private void NormalizeAiSettings()
@@ -304,7 +312,6 @@ public partial class MainWindow : System.Windows.Window
 
             if (oldProviderId is not ("" or "opencode-zen-free"))
                 _settings.AiModeEnabled = false;
-            _settings.AiTermsAcceptedFor = string.Empty;
             _settings.LegacyAiProviderId = null;
             _settings.LegacyAiProviders = null;
             _settingsStore.Save(_settings);
@@ -492,7 +499,8 @@ public partial class MainWindow : System.Windows.Window
         }
 
         var wasRunning = _openCode.IsRunning;
-        RefreshOpenCodeModelsButton.IsEnabled = false;
+        _isRefreshingOpenCodeModels = true;
+        UpdateAiModeDisplay();
         OpenCodeModelStatus.Text = "OpenCode Desktopで接続中のproviderを確認しています…";
         try
         {
@@ -511,7 +519,8 @@ public partial class MainWindow : System.Windows.Window
         finally
         {
             if (!wasRunning && !_settings.AiModeEnabled) _openCode.Stop();
-            RefreshOpenCodeModelsButton.IsEnabled = true;
+            _isRefreshingOpenCodeModels = false;
+            UpdateAiModeDisplay();
         }
     }
 
@@ -571,6 +580,7 @@ public partial class MainWindow : System.Windows.Window
                 ActionButton.Content = "録音を停止して変換";
                 RuntimeStatus.Text = "録音中 · もう一度ショートカットで停止";
                 _indicator.ShowStatus("録音中");
+                UpdateAiModeDisplay();
             }
             catch (Exception ex) { RuntimeStatus.Text = ex.Message; }
             return;
@@ -605,11 +615,6 @@ public partial class MainWindow : System.Windows.Window
                 text = TranscriptFormatter.NormalizeTranscript(transcript);
                 resultStatus = "文字起こしを入力欄へ貼り付けました。";
             }
-            else if (!EnsureAiDataConsent())
-            {
-                text = TranscriptFormatter.NormalizeTranscript(transcript);
-                resultStatus = "送信をキャンセルしたため、文字起こしをそのまま貼り付けました。";
-            }
             else
             {
                 RuntimeStatus.Text = "OpenCodeを準備しています…";
@@ -626,8 +631,9 @@ public partial class MainWindow : System.Windows.Window
                 catch (OperationCanceledException) when (_closing) { throw; }
                 catch (Exception ex)
                 {
-                    text = TranscriptFormatter.NormalizeTranscript(transcript);
-                    resultStatus = "AI変換に失敗したため文字起こしを貼り付けました。 " + ex.Message;
+                    RuntimeStatus.Text = "AI変換に失敗しました。入力欄は変更していません。 " + ex.Message;
+                    _indicator.ShowStatus("AI変換失敗", TimeSpan.FromSeconds(1));
+                    return;
                 }
             }
 
@@ -648,27 +654,6 @@ public partial class MainWindow : System.Windows.Window
             ActionButton.Content = "録音を開始";
             UpdateAiModeDisplay();
         }
-    }
-
-    private bool EnsureAiDataConsent()
-    {
-        var termsKey = $"{_settings.OpenCodeModelProviderId}|{_settings.OpenCodeModelId}";
-        if (string.Equals(_settings.AiTermsAcceptedFor, termsKey, StringComparison.Ordinal)) return true;
-
-        var providerSpecificTerms = _settings.OpenCodeModelProviderId == "opencode" &&
-                                    _settings.OpenCodeModelId == "muse-spark-1.3-contributor-free"
-            ? "\n\n現在の無料モデルでは、入力と回答がMetaの今後のモデル学習に利用される条件です。"
-            : string.Empty;
-
-        var result = System.Windows.MessageBox.Show(this,
-            "音声はPC内で処理します。文字起こしテキストはOpenCode経由で選択したモデルへ送信し、生成文を受信して入力欄へ貼り付けます。OpenCode Desktopのモデル設定で選んだ接続先の利用規約とデータ利用条件を確認してください。" +
-            providerSpecificTerms + "\n\n送信を続けますか?",
-            "データ送信の確認", System.Windows.MessageBoxButton.YesNo, System.Windows.MessageBoxImage.Information);
-        if (result != System.Windows.MessageBoxResult.Yes) return false;
-
-        _settings.AiTermsAcceptedFor = termsKey;
-        _settingsStore.Save(_settings);
-        return true;
     }
 
     private void PasteAndShow(string text, string successStatus)

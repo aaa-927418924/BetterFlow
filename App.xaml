@@ -18,6 +18,13 @@
             <Setter Property="TextWrapping" Value="Wrap" />
         </Style>
 
+        <DataTemplate x:Key="DropdownDisplayNameTemplate">
+            <TextBlock Text="{Binding DisplayName}"
+                       Foreground="{Binding Foreground, RelativeSource={RelativeSource AncestorType={x:Type ComboBoxItem}}, FallbackValue={StaticResource TextBrush}}"
+                       TextWrapping="NoWrap"
+                       TextTrimming="CharacterEllipsis" />
+        </DataTemplate>
+
         <Style x:Key="DarkDropdownItemStyle" TargetType="ComboBoxItem">
             <Setter Property="Background" Value="#333333" />
             <Setter Property="Foreground" Value="#F4F4F4" />
@@ -85,15 +92,27 @@
                                                   IsHitTestVisible="False"
                                                   Content="{TemplateBinding SelectionBoxItem}"
                                                   ContentTemplate="{TemplateBinding SelectionBoxItemTemplate}"
+                                                  ContentTemplateSelector="{TemplateBinding ItemTemplateSelector}"
                                                   ContentStringFormat="{TemplateBinding SelectionBoxItemStringFormat}"
                                                   VerticalAlignment="Center"
                                                   TextElement.Foreground="{TemplateBinding Foreground}" />
-                                <Path Grid.Column="1" Width="8" Height="5"
+                                <Path x:Name="DropDownArrow" Grid.Column="1" Width="8" Height="5"
                                       HorizontalAlignment="Center" VerticalAlignment="Center"
+                                      RenderTransformOrigin="0.5,0.5"
                                       Data="M 0 0 L 4 4 L 8 0"
                                       Stroke="{TemplateBinding Foreground}" StrokeThickness="1.5"
                                       StrokeStartLineCap="Round" StrokeEndLineCap="Round" />
                             </Grid>
+                            <ToggleButton x:Name="DropDownToggle"
+                                          IsChecked="{Binding IsDropDownOpen, Mode=TwoWay, RelativeSource={RelativeSource TemplatedParent}}"
+                                          ClickMode="Press" Focusable="False" IsTabStop="False"
+                                          Background="Transparent" BorderThickness="0" Cursor="Hand">
+                                <ToggleButton.Template>
+                                    <ControlTemplate TargetType="ToggleButton">
+                                        <Border Background="{TemplateBinding Background}" />
+                                    </ControlTemplate>
+                                </ToggleButton.Template>
+                            </ToggleButton>
                             <Popup x:Name="PART_Popup"
                                    Placement="Bottom"
                                    PlacementTarget="{Binding RelativeSource={RelativeSource TemplatedParent}}"
@@ -130,6 +149,11 @@
                             </Trigger>
                             <Trigger Property="IsDropDownOpen" Value="True">
                                 <Setter TargetName="ComboBorder" Property="BorderBrush" Value="#EAEAEA" />
+                                <Setter TargetName="DropDownArrow" Property="RenderTransform">
+                                    <Setter.Value>
+                                        <RotateTransform Angle="180" />
+                                    </Setter.Value>
+                                </Setter>
                             </Trigger>
                             <Trigger Property="IsEnabled" Value="False">
                                 <Setter TargetName="ComboBorder" Property="Background" Value="#292929" />
