@@ -281,6 +281,7 @@ public partial class MainWindow : System.Windows.Window
 
     private void NormalizeAiSettings()
     {
+        var shouldSaveSettings = !File.Exists(AppPaths.SettingsFile);
         var resolveLegacyModelById = false;
         var hadLegacySettings = _settings.LegacyAiProviderId is not null || _settings.LegacyAiProviders is not null;
         if (hadLegacySettings)
@@ -314,13 +315,22 @@ public partial class MainWindow : System.Windows.Window
                 _settings.AiModeEnabled = false;
             _settings.LegacyAiProviderId = null;
             _settings.LegacyAiProviders = null;
-            _settingsStore.Save(_settings);
+            shouldSaveSettings = true;
         }
 
         if (string.IsNullOrWhiteSpace(_settings.OpenCodeModelProviderId) && !resolveLegacyModelById)
+        {
             _settings.OpenCodeModelProviderId = "opencode";
+            shouldSaveSettings = true;
+        }
         if (string.IsNullOrWhiteSpace(_settings.OpenCodeModelId))
+        {
             _settings.OpenCodeModelId = "muse-spark-1.3-contributor-free";
+            shouldSaveSettings = true;
+        }
+
+        if (shouldSaveSettings)
+            _settingsStore.Save(_settings);
 
         string ResolveLegacyModelProvider()
         {

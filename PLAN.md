@@ -2,7 +2,7 @@
 
 ## 目的
 
-入力欄にフォーカスしてショートカットを押し、話した内容をローカルで文字起こしして元の入力欄へ貼り付ける。既定は文字起こしのみ。セットアップ後にAIモードを有効にすると、話者の言い方や語調を保ち、フィラーと自己訂正を整える。言い直しでは変更箇所だけを置き換え、計画など変わらない依頼も残す。箇条書きは発話で複数項目が明確に列挙されたときだけ使う。初回セットアップは画面上の一つの操作で日本語音声モデルを取得して使えるようにする。
+入力欄にフォーカスしてショートカットを押し、話した内容をローカルで文字起こしして元の入力欄へ貼り付ける。新規設定ではAIモードをオンにし、Muse Spark 1.3 Contributor Freeで話者の言い方や語調を保ち、フィラーと自己訂正を整える。モデル選択は設定へ保存し、再起動後も維持する。言い直しでは変更箇所だけを置き換え、計画など変わらない依頼も残す。箇条書きは発話で複数項目が明確に列挙されたときだけ使う。初回セットアップは画面上の一つの操作で日本語音声モデルを取得して使えるようにする。
 
 ## 決定事項
 
@@ -10,9 +10,9 @@
 - セットアップ画面は添付参考画像に合わせた濃い角丸パネル、左上のアイコン、右下の明るい `Setup` ボタンで構成する。標準タイトルバーを使わない透過フレームレスウィンドウにし、パネルを画面いっぱいに広げる。上部をドラッグ領域、右上にカスタムの閉じるボタンを置く。`Setup` の文字は無効時も黒で表示する。
 - 画面・ウィンドウ・タスクバー・EXEのアイコンはプロジェクト直下の `icon.svg` を元に生成する。
 - 音声認識はNVIDIA `parakeet-tdt_ctc-0.6b-ja` のINT8 ONNXモデル。初回にGitHubからアーカイブを取得し、サイズとSHA-256を確認してユーザーのローカルアプリデータ領域へ展開する。
-- 文章変換はOpenCode経由に限定する。既定モデルは `Muse Spark 1.3 Contributor`（provider ID `opencode`、model ID `muse-spark-1.3-contributor-free`）。設定画面の一覧はOpenCode serverのprovider/model一覧から取得し、OpenCode Desktopでプロファイルへ追加したモデルも表示・選択できる。Auto Prompt内に直接API接続、APIキー、Base URLの設定を置かない。
+- 文章変換はOpenCode経由に限定する。新規設定の既定モデルは `Muse Spark 1.3 Contributor Free`（provider ID `opencode`、model ID `muse-spark-1.3-contributor-free`）。設定画面の一覧はOpenCode serverのprovider/model一覧から取得し、OpenCode Desktopでプロファイルへ追加したモデルも表示・選択できる。選択したprovider/modelは設定ファイルへ保存し、再起動後も維持する。Auto Prompt内に直接API接続、APIキー、Base URLの設定を置かない。
 - モデル一覧はOpenCode serverの`/provider`応答に含まれる`connected` provider IDで`all`カタログを絞り、接続済みproviderのモデルだけ表示する。`connected`情報が取れない場合は全カタログへのフォールバックをせず、更新をエラーにする。
-- 既定はAIを使わない文字起こしモード。セットアップ後のショートカット設定画面にあるトグルでAIモードを切り替え、選択をユーザー設定へ保存する。OpenCodeはAIモードを選ぶ時だけ起動し、文字起こしモードではOpenCodeへ接続・送信しない。
+- 新規設定ではAIモードをオンにする。セットアップ後のショートカット設定画面にあるトグルでAIモードを切り替え、選択をユーザー設定へ保存する。既存設定に保存済みのオン/オフは尊重する。OpenCodeはAIモードを使う時だけ起動し、文字起こしモードではOpenCodeへ接続・送信しない。
 - AIモードの通常整形は、話者の言語・話し方・敬語/くだけた表現を維持し、意味のないフィラー・重複を除去、自己訂正は最後の意図を採用する。文体を敬語に統一せず、要約・補足・推測もしない。
 - 初回SetupではOpenCode公式GitHub Releases APIから最新安定版Windows x64 baseline CLIを取得し、公式APIのSHA-256とサイズを照合してから `%LOCALAPPDATA%\AutoPrompt\opencode` に展開する。既存OpenCodeが `PATH` にある場合はそちらを優先する。アプリはPATHやシステム設定を変更せず、ユーザー名・PC固有の絶対パスをコードへ固定しない。
 - OpenCodeは同じWindowsユーザーの通常のDesktop/CLIプロファイルと認証を使う。OpenCode Desktopで追加・接続したprovider/modelは一覧更新後にAuto Promptから選べる。Auto PromptはOpenCode設定ファイルと認証ファイルを直接読み書きせず、モデル一覧と生成をOpenCode server経由で扱う。
@@ -68,3 +68,4 @@
 - 同日、配布資産名をWindows x64 baseline版へ統一して再発行し、`dist/AutoPrompt.exe`を更新。発行元と配布先は81,286,388 bytes、SHA-256 `37940B52F13C2A923EDE1747056ABFCE94B120E59138EF5ACAFCD99BDCEDA406`で一致。NuGet脆弱性フィード取得失敗によるNU1900警告あり。アプリの実起動、OpenCode自動ダウンロード・展開、Zen認証、モデルへの実要求、画面操作は未確認。テストスイートは実行していない。
 - 2026-10-13: OpenCodeのprovider/model一覧だけをAIモデル選択元にし、Desktopで設定したモデルを含む一覧更新UIに統一。直接API接続とAPIキー/Base URL UIを削除。設定画面にコンパクトなカスタムスクロールバー、選択項目の黒文字、マイク選択を追加。マイク初期値はWindowsのシステム既定で、選択デバイスが使えない場合は既定マイクへフォールバックする。Release単一EXEは81,281,071 bytes、SHA-256 `6DC8448B3004F61F5A9400A0824AF630C6A561FEFFDD99D65467DF4E49FED0D6`で発行し、`dist/AutoPrompt.exe`との差分なし。ビルド成功、NU1900警告あり。画面の実表示、マイク実入力、OpenCode/Desktopモデルへの実要求は未確認。テストスイートは実行していない。
 - 2026-10-13: 画面でドロップダウン選択項目が明るい背景・白文字になって見づらい問題を、ComboBoxItemの明示テンプレートで明るい背景・黒文字に修正。OpenCodeモデル一覧は`/provider`の全カタログではなく`connected` provider IDに限定し、全providerを表示して8497件になる問題を修正。仕様は[OpenCode Server API](https://dev.opencode.ai/docs/server/)で確認。Release単一EXEは81,281,415 bytes、SHA-256 `C42E34368585735D23A13600213F7D26FC1EDACE71668F249D063CC225989C01`で発行し、`dist/AutoPrompt.exe`と一致。ビルド成功、NU1900警告あり。実画面での色確認とOpenCode接続一覧の実取得は未確認。テストスイートは実行していない。
+- 2026-10-13: 新規設定のAIモードをオン、既定モデルをOpenCode Zen FreeのMuse Spark 1.3 Contributor Freeに変更。設定ファイルがない場合やモデルIDが空の場合は既定を保存し、選択したモデルは既存の選択イベントで再起動後も保持する。既存設定に保存済みのモードとモデルは維持する。Releaseビルド・単一EXE発行に成功し、発行元と`dist/AutoPrompt.exe`は81,283,162 bytes、SHA-256 `F83032AEDC1D5EA294C4E8DF359CD40D5F851FFF777FD49BFA44420AFDAA0DDC`で一致。NuGet脆弱性フィード接続失敗のNU1900警告あり。アプリ実起動とOpenCodeモデルへの生成要求は未確認。テストスイートは実行していない。

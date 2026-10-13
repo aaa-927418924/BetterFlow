@@ -5,9 +5,9 @@ namespace AutoPrompt.Services;
 
 internal sealed class AppSettings
 {
-    public bool AiModeEnabled { get; set; } = false;
+    public bool AiModeEnabled { get; set; } = true;
     public string OpenCodeModelProviderId { get; set; } = "opencode";
-    public string OpenCodeModelId { get; set; } = string.Empty;
+    public string OpenCodeModelId { get; set; } = "muse-spark-1.3-contributor-free";
     public string MicrophoneDeviceId { get; set; } = AudioInputDeviceOption.SystemDefaultId;
     public uint ShortcutModifiers { get; set; }
     public uint ShortcutVirtualKey { get; set; } = HotkeyBinding.RightAltVirtualKey;
