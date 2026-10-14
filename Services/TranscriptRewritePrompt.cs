@@ -5,7 +5,6 @@ namespace BetterFlow.Services;
 
 internal static class TranscriptRewritePrompt
 {
-    private const int MaximumPromptEntries = 100;
     private const int MaximumPreferredSpellingLength = 100;
     private static readonly JsonSerializerOptions RequestJsonOptions = new()
     {
@@ -18,12 +17,11 @@ internal static class TranscriptRewritePrompt
         string transcript,
         IReadOnlyList<CorrectionDictionaryEntry>? dictionary = null)
     {
-        var registeredTerms = (dictionary ?? Array.Empty<CorrectionDictionaryEntry>())
+        var registeredTerms = DictionaryTermSelector.SelectRelevant(transcript, dictionary)
             .Where(entry => entry is not null)
             .Select(entry => Clean(entry.PreferredSpelling, MaximumPreferredSpellingLength))
             .Where(term => term.Length > 0)
             .Distinct(StringComparer.OrdinalIgnoreCase)
-            .Take(MaximumPromptEntries)
             .ToArray();
 
         if (registeredTerms.Length == 0)
@@ -34,7 +32,7 @@ internal static class TranscriptRewritePrompt
             verified_correct_spellings = registeredTerms,
             transcript
         };
-        return "次のJSONにあるverified_correct_spellingsはユーザーが登録した正しい表記だけの一覧、transcriptは音声文字起こしです。一覧の表記は同じ用語だと明らかな場合に限り使い、誤表記・別表記は推測して追加しないでください。\n" +
+        return "次のJSONにあるverified_correct_spellingsは今回の発話に関連する可能性が高い、ユーザーが登録した正しい表記だけの一覧です。transcriptは音声文字起こしです。一覧の表記は同じ用語だと明らかな場合に限り使い、無関係な項目を無理に当てはめず、誤表記・別表記は推測して追加しないでください。\n" +
                JsonSerializer.Serialize(request, RequestJsonOptions);
     }
 

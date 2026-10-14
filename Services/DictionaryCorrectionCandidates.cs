@@ -149,20 +149,30 @@ internal static class DictionaryCorrectionCandidates
 
     private static string GetSentenceContext(string text, int spanStart, int spanEnd)
     {
+        var spanLength = Math.Max(1, spanEnd - spanStart);
+        var beforeBudget = Math.Max(20, (MaximumContextLength - spanLength) / 2);
+        var afterBudget = Math.Max(20, MaximumContextLength - spanLength - beforeBudget);
         var start = spanStart;
-        while (start > 0 && spanStart - start < MaximumContextLength / 2 &&
-               !IsSentenceBoundary(text[start - 1]))
+        while (start > 0 && spanStart - start < beforeBudget &&
+               !IsSentenceBoundary(text, start - 1))
             start--;
 
         var end = spanEnd;
-        while (end < text.Length && end - spanEnd < MaximumContextLength / 2 &&
-               !IsSentenceBoundary(text[end]))
+        while (end < text.Length && end - spanEnd < afterBudget &&
+               !IsSentenceBoundary(text, end))
             end++;
 
         return text[start..end].Trim();
     }
 
-    private static bool IsSentenceBoundary(char value) => value is '。' or '！' or '？' or '\n' or '.' or '!' or '?';
+    private static bool IsSentenceBoundary(string text, int index)
+    {
+        var value = text[index];
+        if (value is '。' or '！' or '？' or '\n' or '!' or '?') return true;
+        if (value != '.') return false;
+        return index == 0 || index == text.Length - 1 ||
+               !char.IsDigit(text[index - 1]) || !char.IsDigit(text[index + 1]);
+    }
 
     private static bool IsCandidate(string previous, string corrected) =>
         previous.Length is >= 2 and <= 120 && corrected.Length is >= 2 and <= 100 &&
