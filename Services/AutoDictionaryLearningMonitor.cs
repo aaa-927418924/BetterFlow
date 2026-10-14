@@ -248,6 +248,15 @@ internal sealed class AutoDictionaryLearningMonitor : IDisposable
                     if (TryExtractSegment(currentText, out var segment))
                     {
                         SetSnapshot(currentText, segment);
+                        if (submitDetected)
+                        {
+                            lock (_snapshotLock)
+                            {
+                                _submitSnapshotValid = true;
+                                _submitSegment = segment;
+                                _submitFullText = currentText;
+                            }
+                        }
                     }
                     else if (!submitDetected)
                     {
@@ -281,10 +290,19 @@ internal sealed class AutoDictionaryLearningMonitor : IDisposable
                 ReportStatus("submit_detected", "送信を確認しました。修正候補を判定しています。");
 
                 var submissionConfirmed = false;
+                var confirmationReadCount = 0;
+                var confirmationReadFailureCount = 0;
+                var observedChangedText = false;
+                var observedClearedText = false;
                 for (var confirmAttempt = 0; confirmAttempt < 8; confirmAttempt++)
                 {
                     await Task.Delay(TimeSpan.FromMilliseconds(180), monitorToken).ConfigureAwait(false);
-                    if (!TryReadText(editor, textPattern, valuePattern, out var afterSubmit)) continue;
+                    if (!TryReadText(editor, textPattern, valuePattern, out var afterSubmit))
+                    {
+                        confirmationReadFailureCount++;
+                        continue;
+                    }
+                    confirmationReadCount++;
                     afterSubmit = NormalizeLineEndings(afterSubmit);
                     if (afterSubmit.Length > MaxDocumentLength)
                     {
@@ -294,7 +312,9 @@ internal sealed class AutoDictionaryLearningMonitor : IDisposable
                     var editorChanged = !string.Equals(afterSubmit, textBeforeSubmit, StringComparison.Ordinal);
                     var contentCleared = afterSubmit.Length == 0 ||
                                          !TryExtractSegment(afterSubmit, out var remainingSegment) ||
-                                         remainingSegment.Length == 0;
+                                         string.IsNullOrWhiteSpace(remainingSegment);
+                    observedChangedText |= editorChanged;
+                    observedClearedText |= contentCleared;
                     if (!editorChanged || !contentCleared) continue;
 
                     SubmissionConfirmed?.Invoke(this,
@@ -304,7 +324,17 @@ internal sealed class AutoDictionaryLearningMonitor : IDisposable
                     return;
                 }
                 if (!submissionConfirmed)
-                    ReportStatus("submission_not_confirmed", "送信後の入力欄の変化を確認できず、登録を見送りました。");
+                {
+                    var reason = confirmationReadCount == 0
+                        ? "editor-unreadable"
+                        : !observedChangedText
+                            ? "field-unchanged"
+                            : !observedClearedText
+                                ? "field-retained-text"
+                                : "inconsistent-editor-state";
+                    ReportStatus("submission_not_confirmed", "送信後の入力欄の変化を確認できず、登録を見送りました。",
+                        reason, confirmationReadCount + confirmationReadFailureCount);
+                }
             }
         }
         catch (OperationCanceledException) when (token.IsCancellationRequested)
@@ -394,9 +424,9 @@ internal sealed class AutoDictionaryLearningMonitor : IDisposable
         catch (SemaphoreFullException) { }
     }
 
-    private void ReportStatus(string stage, string message, string detail = "none")
+    private void ReportStatus(string stage, string message, string detail = "none", int count = 0)
     {
-        DictionaryLearningDiagnosticLog.Write(stage, detail);
+        DictionaryLearningDiagnosticLog.Write(stage, detail, count);
         StatusChanged?.Invoke(message);
     }
 
