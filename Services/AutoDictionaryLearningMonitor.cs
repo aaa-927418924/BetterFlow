@@ -47,22 +47,29 @@ internal sealed class AutoDictionaryLearningMonitor : IDisposable
     }
 
     public event EventHandler<DictionaryCorrectionSubmission>? SubmissionConfirmed;
+    public event Action<string>? StatusChanged;
 
     public static AutoDictionaryLearningMonitor? TryStart(IntPtr targetWindow, string pastedText)
     {
         if (targetWindow == IntPtr.Zero || string.IsNullOrWhiteSpace(pastedText) ||
             pastedText.Length > MaxDocumentLength || PasteService.GetForegroundWindowHandle() != targetWindow)
+        {
+            DictionaryLearningDiagnosticLog.Write("monitor_not_started", "invalid-target-or-paste");
             return null;
+        }
 
         var monitor = new AutoDictionaryLearningMonitor(targetWindow, pastedText);
         var module = GetModuleHandle(null);
         monitor._keyboardHook = SetWindowsHookEx(WhKeyboardLl, monitor._keyboardProc, module, 0);
         if (monitor._keyboardHook == IntPtr.Zero)
         {
+            DictionaryLearningDiagnosticLog.Write("monitor_not_started", "keyboard-hook-failed",
+                Marshal.GetLastWin32Error());
             monitor.Dispose();
             return null;
         }
 
+        DictionaryLearningDiagnosticLog.Write("monitor_started");
         monitor._monitorTask = Task.Run(monitor.MonitorAsync);
         return monitor;
     }
@@ -114,13 +121,34 @@ internal sealed class AutoDictionaryLearningMonitor : IDisposable
                     await Task.Delay(TimeSpan.FromMilliseconds(100), monitorToken).ConfigureAwait(false);
             }
 
-            if (editor is null || !TryReadText(editor, textPattern, valuePattern, out var initialText)) return;
-            initialText = NormalizeLineEndings(initialText);
-            if (initialText.Length > MaxDocumentLength) return;
-            var insertedStart = initialText.IndexOf(_pastedText, StringComparison.Ordinal);
-            if (insertedStart < 0 || initialText.IndexOf(_pastedText, insertedStart + _pastedText.Length,
-                    StringComparison.Ordinal) >= 0)
+            if (editor is null)
+            {
+                ReportStatus("editor_not_found", "入力欄を読み取れず、自動登録の監視を開始できませんでした。");
                 return;
+            }
+            if (!TryReadText(editor, textPattern, valuePattern, out var initialText))
+            {
+                ReportStatus("editor_text_unavailable", "入力欄の文章を読み取れず、自動登録の監視を開始できませんでした。");
+                return;
+            }
+            initialText = NormalizeLineEndings(initialText);
+            if (initialText.Length > MaxDocumentLength)
+            {
+                ReportStatus("editor_text_too_long", "入力欄が長いため、自動登録の監視を開始できませんでした。");
+                return;
+            }
+            var insertedStart = initialText.IndexOf(_pastedText, StringComparison.Ordinal);
+            if (insertedStart < 0)
+            {
+                ReportStatus("pasted_text_not_found", "貼り付けた文章を入力欄内で特定できませんでした。");
+                return;
+            }
+            if (initialText.IndexOf(_pastedText, insertedStart + _pastedText.Length,
+                    StringComparison.Ordinal) >= 0)
+            {
+                ReportStatus("pasted_text_ambiguous", "同じ文章が入力欄に複数あり、追跡を開始できませんでした。");
+                return;
+            }
 
             lock (_snapshotLock)
             {
@@ -131,6 +159,7 @@ internal sealed class AutoDictionaryLearningMonitor : IDisposable
                 _lastFullText = initialText;
             }
             Volatile.Write(ref _initialized, 1);
+            ReportStatus("tracking_started", "音声入力した文章を送信するまで監視しています。");
 
             textChangedHandler = (_, _) => RefreshSnapshot(editor, textPattern, valuePattern);
             try { Automation.AddAutomationEventHandler(TextPattern.TextChangedEvent, editor,
@@ -162,7 +191,11 @@ internal sealed class AutoDictionaryLearningMonitor : IDisposable
                 if (TryReadText(editor, textPattern, valuePattern, out var currentText))
                 {
                     currentText = NormalizeLineEndings(currentText);
-                    if (currentText.Length > MaxDocumentLength) return;
+                    if (currentText.Length > MaxDocumentLength)
+                    {
+                        ReportStatus("editor_text_too_long", "入力欄が長くなったため、自動登録の監視を終了しました。");
+                        return;
+                    }
                     if (TryExtractSegment(currentText, out var segment))
                     {
                         SetSnapshot(currentText, segment);
@@ -170,6 +203,7 @@ internal sealed class AutoDictionaryLearningMonitor : IDisposable
                     else if (!submitDetected)
                     {
                         lock (_snapshotLock) _snapshotInvalid = true;
+                        ReportStatus("tracked_range_lost", "入力欄の文章構成が変わり、音声入力部分を追跡できなくなりました。");
                         return;
                     }
                 }
@@ -180,23 +214,34 @@ internal sealed class AutoDictionaryLearningMonitor : IDisposable
                 string originalSegment;
                 lock (_snapshotLock)
                 {
-                    if (!_submitSnapshotValid) return;
+                    if (!_submitSnapshotValid)
+                    {
+                        ReportStatus("submit_snapshot_invalid", "送信前の文章を確認できず、登録を見送りました。");
+                        return;
+                    }
                     submittedCorrection = _submitSegment;
                     textBeforeSubmit = _submitFullText;
                     originalSegment = _originalSegment;
                 }
                 if (string.Equals(submittedCorrection, originalSegment, StringComparison.Ordinal))
                 {
-                    // The user sent the original voice text without correcting it.
+                    ReportStatus("submitted_without_correction", "手修正が見つからなかったため、辞書は変更していません。");
                     return;
                 }
 
+                ReportStatus("submit_detected", "送信を確認しました。修正候補を判定しています。");
+
+                var submissionConfirmed = false;
                 for (var confirmAttempt = 0; confirmAttempt < 8; confirmAttempt++)
                 {
                     await Task.Delay(TimeSpan.FromMilliseconds(180), monitorToken).ConfigureAwait(false);
                     if (!TryReadText(editor, textPattern, valuePattern, out var afterSubmit)) continue;
                     afterSubmit = NormalizeLineEndings(afterSubmit);
-                    if (afterSubmit.Length > MaxDocumentLength) return;
+                    if (afterSubmit.Length > MaxDocumentLength)
+                    {
+                        ReportStatus("post_submit_text_too_long", "送信後の入力欄が長いため、登録を見送りました。");
+                        return;
+                    }
                     var editorChanged = !string.Equals(afterSubmit, textBeforeSubmit, StringComparison.Ordinal);
                     var contentCleared = afterSubmit.Length == 0 ||
                                          !TryExtractSegment(afterSubmit, out var remainingSegment) ||
@@ -205,12 +250,26 @@ internal sealed class AutoDictionaryLearningMonitor : IDisposable
 
                     SubmissionConfirmed?.Invoke(this,
                         new DictionaryCorrectionSubmission(originalSegment, submittedCorrection));
+                    DictionaryLearningDiagnosticLog.Write("submission_confirmed");
+                    submissionConfirmed = true;
                     return;
                 }
+                if (!submissionConfirmed)
+                    ReportStatus("submission_not_confirmed", "送信後の入力欄の変化を確認できず、登録を見送りました。");
             }
         }
-        catch (OperationCanceledException) when (token.IsCancellationRequested) { }
-        catch (Exception ex) when (IsAutomationFailure(ex) || ex is ObjectDisposedException) { }
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
+        {
+            DictionaryLearningDiagnosticLog.Write("monitor_cancelled");
+        }
+        catch (OperationCanceledException)
+        {
+            ReportStatus("monitor_timeout", "監視時間を過ぎたため、自動登録を終了しました。");
+        }
+        catch (Exception ex) when (IsAutomationFailure(ex) || ex is ObjectDisposedException)
+        {
+            ReportStatus("monitor_exception", "入力欄の追跡中にエラーが発生し、監視を終了しました。", ex.GetType().Name);
+        }
         finally
         {
             if (root is not null && invokedHandler is not null)
@@ -247,7 +306,7 @@ internal sealed class AutoDictionaryLearningMonitor : IDisposable
                 name.Contains("send", StringComparison.OrdinalIgnoreCase) ||
                 name.Contains("submit", StringComparison.OrdinalIgnoreCase) ||
                 name.Contains("投稿", StringComparison.OrdinalIgnoreCase))
-                SignalSubmit();
+                SignalSubmit("send-button");
         }
         catch (Exception ex) when (IsAutomationFailure(ex) || ex is ObjectDisposedException) { }
     }
@@ -261,13 +320,13 @@ internal sealed class AutoDictionaryLearningMonitor : IDisposable
             if (key.VirtualKey == VkReturn && (key.Flags & LlkhfInjected) == 0 &&
                 (GetAsyncKeyState(VkShift) & 0x8000) == 0 &&
                 GetForegroundWindow() == _targetWindow)
-                SignalSubmit();
+                SignalSubmit("enter");
         }
 
         return CallNextHookEx(_keyboardHook, code, wParam, lParam);
     }
 
-    private void SignalSubmit()
+    private void SignalSubmit(string source)
     {
         if (Volatile.Read(ref _disposed) != 0) return;
         try
@@ -278,10 +337,17 @@ internal sealed class AutoDictionaryLearningMonitor : IDisposable
                 _submitSegment = _lastSegment;
                 _submitFullText = _lastFullText;
             }
+            DictionaryLearningDiagnosticLog.Write("submit_signal", source);
             if (_submitSignal.CurrentCount == 0) _submitSignal.Release();
         }
         catch (ObjectDisposedException) { }
         catch (SemaphoreFullException) { }
+    }
+
+    private void ReportStatus(string stage, string message, string detail = "none")
+    {
+        DictionaryLearningDiagnosticLog.Write(stage, detail);
+        StatusChanged?.Invoke(message);
     }
 
     private bool TryExtractSegment(string fullText, out string segment)

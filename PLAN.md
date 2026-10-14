@@ -375,3 +375,10 @@
 - コミット: 計画改訂`885c543`、実装直前チェックポイント`d2a6b38`。実装コミットはこの結果記録を含む。
 - Release buildとwin-x64 self-contained publish成功（0エラー、NU1900はNuGet脆弱性フィード接続警告）。発行物と`dist/Better Flow.exe`は82,431,195 bytes、SHA-256 `3028E88D5FF3034B5D72F822D6BC58FE72525DBFC316E2658FB4EEC5CB488532`で一致。更新前EXEは`artifacts/BetterFlow-before-canonical-dictionary-learning-20261014.exe`へ退避。更新時に実行パスが一致するアプリプロセスのみを停止。
 - 実行時のCodex/Chrome入力欄UI Automation・送信検知、実マイク、OpenCode候補精度と遅延は未確認。テストスイートは実行していない。
+
+## Better Flow — 自動辞書登録の診断性改善（2026-10-14）
+
+- 再調査（分類: 実行設定確認・障害切り分け、出典: AutoPrompt/settings.jsonとopencode-timing.jsonl、確認日: 2026-10-14 Asia/Tokyo、信頼度: 保存設定とログ値は高、個別リクエストの用途は未確定）: AutoLearnDictionaryEnabled=true、DictionaryLearningMode=precision、AiModeEnabled=true、選択モデルはopenai/gpt-6-luna-fast、辞書件数0。直近のOpenCode計測ログには16:18:38 JSTの成功リクエストがあるが、既存ログは処理用途を記録せず、候補判定なのか文章整形なのか特定できない。OpenCode応答文字数と通信成功だけでは候補承認・解析・設定保存を確認できない。自動学習処理の例外も従来は握りつぶされていた。
+- 改善: 入力欄の検出、貼り付け範囲の一致、送信操作、送信後の欄変更、候補抽出、精度/ローカル判定、承認件数、設定保存の段階と安全な理由コードを、本文・用語・ウィンドウ名なしでdictionary-learning-diagnostics.jsonlへ記録する。設定画面の辞書状態テキストにも各失敗段階を表示する。ログ上限128KB。
+- 実装前チェックポイントはaebb4d6。Release build/publish成功（0エラー、NU1900はNuGet脆弱性フィード接続警告）。単体EXEは82,434,126 bytes、SHA-256 47CB7ACFA733F70B99F4326E9EF40B36F5A1917C9C4E20BB502F1CBAA986ACB4。配布EXEと発行物のハッシュ一致を確認し、更新前はartifacts/BetterFlow-before-dictionary-learning-diagnostics-20261014.exeへ退避。置換時点で完全一致する実行中アプリプロセスはなかった。
+- 新ビルドのCodex/Chrome送信検出、辞書候補の判定と保存は未確認。テストスイートは実行していない。
