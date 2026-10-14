@@ -1,16 +1,24 @@
+using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Windows.Automation;
 using System.Windows.Automation.Text;
 
 namespace BetterFlow.Services;
 
-internal sealed record DictionaryCorrectionSubmission(string OriginalText, string CorrectedText);
+internal sealed record DictionaryCorrectionSubmission(
+    string OriginalText,
+    string CorrectedText,
+    string MonitorId,
+    long CandidateId);
 
 internal sealed class AutoDictionaryLearningMonitor : IDisposable
 {
     private const int WhKeyboardLl = 13;
     private const int WmKeyDown = 0x0100;
     private const int WmSysKeyDown = 0x0104;
+    private const int WmKeyUp = 0x0101;
+    private const int WmSysKeyUp = 0x0105;
     private const uint LlkhfInjected = 0x10;
     private const int VkReturn = 0x0D;
     private const int VkShift = 0x10;
@@ -18,6 +26,8 @@ internal sealed class AutoDictionaryLearningMonitor : IDisposable
     private const int MaxMonitorMinutes = 10;
     private const int PastePropagationTimeoutMs = 2_000;
     private const int PastePropagationPollMs = 50;
+    private const int SnapshotFreshnessMs = 1_500;
+    private const int RecentPreClearSnapshotMs = 500;
 
     private readonly IntPtr _targetWindow;
     private readonly string _pastedText;
@@ -25,6 +35,8 @@ internal sealed class AutoDictionaryLearningMonitor : IDisposable
     private readonly CancellationToken _token;
     private readonly SemaphoreSlim _submitSignal = new(0, 1);
     private readonly object _snapshotLock = new();
+    private readonly ConcurrentQueue<SubmitCandidate> _pendingSubmissions = new();
+    private readonly string _monitorId = Guid.NewGuid().ToString("N")[..8];
     private readonly TaskCompletionSource<bool> _readySignal = new(
         TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly LowLevelKeyboardProc _keyboardProc;
@@ -33,14 +45,20 @@ internal sealed class AutoDictionaryLearningMonitor : IDisposable
     private string _prefix = string.Empty;
     private string _suffix = string.Empty;
     private string _originalSegment = string.Empty;
-    private string _lastSegment = string.Empty;
-    private string _lastFullText = string.Empty;
-    private string _submitSegment = string.Empty;
-    private string _submitFullText = string.Empty;
-    private bool _snapshotInvalid;
-    private bool _submitSnapshotValid;
+    private string? _editorRuntimeId;
+    private EditorSnapshot _snapshot = EditorSnapshot.Unreadable;
+    private EditorSnapshot _lastValidSnapshot = EditorSnapshot.Unreadable;
+    private SubmitCandidate? _preparedApplicationSubmit;
+    private long _snapshotVersion;
+    private long _nextCandidateId;
+    private long _latestCandidateId;
+    private int _enterKeyDown;
+    private long _lastSignalSnapshotVersion = -1;
+    private long _lastSignalTimestamp;
+    private string _lastSignalSource = string.Empty;
+    private int _submissionCompleted;
+    private int _deduplicatedSignalCount;
     private int _initialized;
-    private int _applicationSubmitPending;
     private int _disposed;
 
     private AutoDictionaryLearningMonitor(IntPtr targetWindow, string pastedText)
@@ -69,13 +87,70 @@ internal sealed class AutoDictionaryLearningMonitor : IDisposable
     public void NotifyApplicationSubmit()
     {
         if (Volatile.Read(ref _disposed) != 0) return;
-        if (Volatile.Read(ref _initialized) == 0)
+        SubmitCandidate? candidate;
+        var superseded = false;
+        lock (_snapshotLock)
         {
-            Interlocked.Exchange(ref _applicationSubmitPending, 1);
+            candidate = _preparedApplicationSubmit;
+            _preparedApplicationSubmit = null;
+            if (candidate is not null && _submissionCompleted == 0 && candidate.Id >= _latestCandidateId)
+                _latestCandidateId = candidate.Id;
+            else
+            {
+                superseded = candidate is not null;
+                candidate = null;
+            }
+        }
+
+        if (candidate is null)
+        {
+            Log(superseded ? "application_submit_superseded" : "application_submit_unprepared",
+                superseded ? "newer-user-submit-candidate-exists" : "send-was-not-snapshotted");
             return;
         }
 
-        SignalSubmit("application-send");
+        EnqueueSubmission(candidate with { Source = "application-send" });
+    }
+
+    public bool PrepareApplicationSubmit()
+    {
+        if (Volatile.Read(ref _disposed) != 0 || Volatile.Read(ref _initialized) == 0)
+            return false;
+
+        SubmitCandidate candidate;
+        var valid = false;
+        lock (_snapshotLock)
+        {
+            _preparedApplicationSubmit = null;
+            candidate = CreateCandidateLocked("application-send", DateTimeOffset.UtcNow);
+            valid = candidate.IsValid;
+            if (valid) _preparedApplicationSubmit = candidate;
+        }
+
+        if (!valid)
+        {
+            Log("application_submit_prepare_failed",
+                $"{candidate.Snapshot.State};{SnapshotDescription(candidate.Snapshot)}", 0, candidate.Id);
+            return false;
+        }
+
+        Log("application_submit_prepared",
+            $"{SnapshotDescription(candidate.Snapshot)};signal-utc={candidate.SignalTime:O}", 0, candidate.Id);
+        return true;
+    }
+
+    public void CancelPreparedApplicationSubmit()
+    {
+        SubmitCandidate? candidate;
+        lock (_snapshotLock)
+        {
+            candidate = _preparedApplicationSubmit;
+            _preparedApplicationSubmit = null;
+        }
+
+        if (candidate is not null)
+            Log("application_submit_cancelled",
+                $"send-input-failed;{SnapshotDescription(candidate.Snapshot)}", 0, candidate.Id);
     }
 
     public static AutoDictionaryLearningMonitor? TryStart(IntPtr targetWindow, string pastedText)
@@ -92,13 +167,12 @@ internal sealed class AutoDictionaryLearningMonitor : IDisposable
         monitor._keyboardHook = SetWindowsHookEx(WhKeyboardLl, monitor._keyboardProc, module, 0);
         if (monitor._keyboardHook == IntPtr.Zero)
         {
-            DictionaryLearningDiagnosticLog.Write("monitor_not_started", "keyboard-hook-failed",
-                Marshal.GetLastWin32Error());
+            monitor.Log("monitor_not_started", "keyboard-hook-failed", Marshal.GetLastWin32Error());
             monitor.Dispose();
             return null;
         }
 
-        DictionaryLearningDiagnosticLog.Write("monitor_started");
+        monitor.Log("monitor_started");
         monitor._monitorTask = Task.Run(monitor.MonitorAsync);
         return monitor;
     }
@@ -117,11 +191,11 @@ internal sealed class AutoDictionaryLearningMonitor : IDisposable
             _prefix = string.Empty;
             _suffix = string.Empty;
             _originalSegment = string.Empty;
-            _lastSegment = string.Empty;
-            _lastFullText = string.Empty;
-            _submitSegment = string.Empty;
-            _submitFullText = string.Empty;
+            _snapshot = EditorSnapshot.Unreadable;
+            _lastValidSnapshot = EditorSnapshot.Unreadable;
+            _preparedApplicationSubmit = null;
         }
+        while (_pendingSubmissions.TryDequeue(out _)) { }
         _submitSignal.Dispose();
         _cancellation.Dispose();
     }
@@ -155,6 +229,8 @@ internal sealed class AutoDictionaryLearningMonitor : IDisposable
                 ReportStatus("editor_not_found", "入力欄を読み取れず、自動登録の監視を開始できませんでした。");
                 return;
             }
+            _editorRuntimeId = GetRuntimeId(editor);
+            Log("editor_bound", _editorRuntimeId is null ? "runtime-id-unavailable" : "runtime-id-captured");
             var initialText = string.Empty;
             var insertedStart = -1;
             var pasteReadAttempts = 0;
@@ -163,7 +239,7 @@ internal sealed class AutoDictionaryLearningMonitor : IDisposable
             {
                 monitorToken.ThrowIfCancellationRequested();
                 pasteReadAttempts++;
-                if (TryReadText(editor, textPattern, valuePattern, out var currentText))
+                if (TryReadText(editor, textPattern, valuePattern, out var currentText, out _))
                 {
                     initialText = NormalizeLineEndings(currentText);
                     if (initialText.Length > MaxDocumentLength)
@@ -182,11 +258,11 @@ internal sealed class AutoDictionaryLearningMonitor : IDisposable
 
             if (insertedStart < 0)
             {
-                DictionaryLearningDiagnosticLog.Write("paste_wait_expired", "text-not-visible", pasteReadAttempts);
+                Log("paste_wait_expired", "text-not-visible", pasteReadAttempts);
                 ReportStatus("pasted_text_not_found", "入力欄に貼り付けた文章を確認できず、自動登録の監視を開始できませんでした。");
                 return;
             }
-            DictionaryLearningDiagnosticLog.Write("pasted_text_detected",
+            Log("pasted_text_detected",
                 pasteReadAttempts == 1 ? "immediate" : "after-ui-update", pasteReadAttempts);
             if (initialText.IndexOf(_pastedText, insertedStart + _pastedText.Length,
                     StringComparison.Ordinal) >= 0)
@@ -200,8 +276,7 @@ internal sealed class AutoDictionaryLearningMonitor : IDisposable
                 _prefix = initialText[..insertedStart];
                 _suffix = initialText[(insertedStart + _pastedText.Length)..];
                 _originalSegment = _pastedText;
-                _lastSegment = _pastedText;
-                _lastFullText = initialText;
+                SetSnapshotLocked(initialText, _pastedText, SnapshotState.Valid, "initial-paste");
             }
             Volatile.Write(ref _initialized, 1);
             ReportStatus("tracking_started", "音声入力した文章を送信するまで監視しています。");
@@ -228,16 +303,17 @@ internal sealed class AutoDictionaryLearningMonitor : IDisposable
             catch (Exception ex) when (IsAutomationFailure(ex)) { }
 
             _readySignal.TrySetResult(true);
-            if (Interlocked.Exchange(ref _applicationSubmitPending, 0) != 0)
-                SignalSubmit("application-send");
 
             while (!monitorToken.IsCancellationRequested)
             {
                 await Task.Delay(TimeSpan.FromMilliseconds(500), monitorToken).ConfigureAwait(false);
                 if (Volatile.Read(ref _disposed) != 0) return;
 
-                var submitDetected = _submitSignal.Wait(0);
-                if (TryReadText(editor, textPattern, valuePattern, out var currentText))
+                while (_submitSignal.Wait(0)) { }
+                var deduplicatedCount = Interlocked.Exchange(ref _deduplicatedSignalCount, 0);
+                if (deduplicatedCount > 0)
+                    Log("submit_signal_deduplicated", "repeat-or-cross-source", deduplicatedCount);
+                if (TryReadText(editor, textPattern, valuePattern, out var currentText, out var readState))
                 {
                     currentText = NormalizeLineEndings(currentText);
                     if (currentText.Length > MaxDocumentLength)
@@ -248,99 +324,33 @@ internal sealed class AutoDictionaryLearningMonitor : IDisposable
                     if (TryExtractSegment(currentText, out var segment))
                     {
                         SetSnapshot(currentText, segment);
-                        if (submitDetected)
-                        {
-                            lock (_snapshotLock)
-                            {
-                                _submitSnapshotValid = true;
-                                _submitSegment = segment;
-                                _submitFullText = currentText;
-                            }
-                        }
                     }
-                    else if (!submitDetected)
+                    else
                     {
-                        lock (_snapshotLock) _snapshotInvalid = true;
-                        ReportStatus("tracked_range_lost", "入力欄の文章構成が変わり、音声入力部分を追跡できなくなりました。");
-                        return;
+                        var changed = SetSnapshotState(currentText, string.Empty, SnapshotState.RangeLost,
+                            "tracked-range-not-found");
+                        if (changed)
+                            ReportStatus("tracked_range_lost", "入力欄の文章構成が変わり、音声入力部分を追跡できなくなりました。");
                     }
                 }
-
-                if (!submitDetected) continue;
-                string submittedCorrection;
-                string textBeforeSubmit;
-                string originalSegment;
-                lock (_snapshotLock)
+                else
                 {
-                    if (!_submitSnapshotValid)
-                    {
-                        ReportStatus("submit_snapshot_invalid", "送信前の文章を確認できず、登録を見送りました。");
-                        return;
-                    }
-                    submittedCorrection = _submitSegment;
-                    textBeforeSubmit = _submitFullText;
-                    originalSegment = _originalSegment;
-                }
-                if (string.Equals(submittedCorrection, originalSegment, StringComparison.Ordinal))
-                {
-                    ReportStatus("submitted_without_correction", "手修正が見つからなかったため、辞書は変更していません。");
-                    return;
+                    var changed = SetSnapshotState(null, null, SnapshotState.ReadFailed, readState);
+                    if (changed)
+                        Log("editor_read_failed", $"{readState};version={_snapshot.Version}");
                 }
 
-                ReportStatus("submit_detected", "送信を確認しました。修正候補を判定しています。");
-
-                var submissionConfirmed = false;
-                var confirmationReadCount = 0;
-                var confirmationReadFailureCount = 0;
-                var observedChangedText = false;
-                var observedClearedText = false;
-                for (var confirmAttempt = 0; confirmAttempt < 8; confirmAttempt++)
+                while (_pendingSubmissions.TryDequeue(out var candidate))
                 {
-                    await Task.Delay(TimeSpan.FromMilliseconds(180), monitorToken).ConfigureAwait(false);
-                    if (!TryReadText(editor, textPattern, valuePattern, out var afterSubmit))
-                    {
-                        confirmationReadFailureCount++;
-                        continue;
-                    }
-                    confirmationReadCount++;
-                    afterSubmit = NormalizeLineEndings(afterSubmit);
-                    if (afterSubmit.Length > MaxDocumentLength)
-                    {
-                        ReportStatus("post_submit_text_too_long", "送信後の入力欄が長いため、登録を見送りました。");
-                        return;
-                    }
-                    var editorChanged = !string.Equals(afterSubmit, textBeforeSubmit, StringComparison.Ordinal);
-                    var contentCleared = afterSubmit.Length == 0 ||
-                                         !TryExtractSegment(afterSubmit, out var remainingSegment) ||
-                                         string.IsNullOrWhiteSpace(remainingSegment);
-                    observedChangedText |= editorChanged;
-                    observedClearedText |= contentCleared;
-                    if (!editorChanged || !contentCleared) continue;
-
-                    SubmissionConfirmed?.Invoke(this,
-                        new DictionaryCorrectionSubmission(originalSegment, submittedCorrection));
-                    DictionaryLearningDiagnosticLog.Write("submission_confirmed");
-                    submissionConfirmed = true;
-                    return;
-                }
-                if (!submissionConfirmed)
-                {
-                    var reason = confirmationReadCount == 0
-                        ? "editor-unreadable"
-                        : !observedChangedText
-                            ? "field-unchanged"
-                            : !observedClearedText
-                                ? "field-retained-text"
-                                : "inconsistent-editor-state";
-                    var providerState = DescribeTextProviders(textPattern, valuePattern, textBeforeSubmit);
-                    ReportStatus("submission_not_confirmed", "送信後の入力欄の変化を確認できず、登録を見送りました。",
-                        $"{reason};{providerState}", confirmationReadCount + confirmationReadFailureCount);
+                    await ProcessSubmissionCandidateAsync(candidate, editor, textPattern, valuePattern,
+                        monitorToken).ConfigureAwait(false);
+                    if (Volatile.Read(ref _submissionCompleted) != 0) return;
                 }
             }
         }
         catch (OperationCanceledException) when (token.IsCancellationRequested)
         {
-            DictionaryLearningDiagnosticLog.Write("monitor_cancelled");
+            Log("monitor_cancelled");
         }
         catch (OperationCanceledException)
         {
@@ -381,7 +391,7 @@ internal sealed class AutoDictionaryLearningMonitor : IDisposable
         try
         {
             var current = element.Current;
-            if (current.ControlType != ControlType.Button) return;
+            if (current.ControlType != ControlType.Button || !current.IsEnabled) return;
             var name = current.Name ?? string.Empty;
             if (name.Contains("送信", StringComparison.OrdinalIgnoreCase) ||
                 name.Contains("send", StringComparison.OrdinalIgnoreCase) ||
@@ -394,11 +404,19 @@ internal sealed class AutoDictionaryLearningMonitor : IDisposable
 
     private IntPtr KeyboardHookCallback(int code, IntPtr wParam, IntPtr lParam)
     {
-        if (code >= 0 && Volatile.Read(ref _initialized) != 0 && Volatile.Read(ref _disposed) == 0 &&
-            wParam.ToInt32() is WmKeyDown or WmSysKeyDown)
+        if (code >= 0 && Volatile.Read(ref _disposed) == 0 &&
+            wParam.ToInt32() is WmKeyUp or WmSysKeyUp)
+        {
+            var key = Marshal.PtrToStructure<KeyboardData>(lParam);
+            if (key.VirtualKey == VkReturn && (key.Flags & LlkhfInjected) == 0)
+                Interlocked.Exchange(ref _enterKeyDown, 0);
+        }
+        else if (code >= 0 && Volatile.Read(ref _initialized) != 0 && Volatile.Read(ref _disposed) == 0 &&
+                 wParam.ToInt32() is WmKeyDown or WmSysKeyDown)
         {
             var key = Marshal.PtrToStructure<KeyboardData>(lParam);
             if (key.VirtualKey == VkReturn && (key.Flags & LlkhfInjected) == 0 &&
+                Interlocked.Exchange(ref _enterKeyDown, 1) == 0 &&
                 (GetAsyncKeyState(VkShift) & 0x8000) == 0 &&
                 GetForegroundWindow() == _targetWindow)
                 SignalSubmit("enter");
@@ -410,24 +428,175 @@ internal sealed class AutoDictionaryLearningMonitor : IDisposable
     private void SignalSubmit(string source)
     {
         if (Volatile.Read(ref _disposed) != 0) return;
+        SubmitCandidate? candidate = null;
+        var deduplicated = false;
+        var alreadyCompleted = false;
+        lock (_snapshotLock)
+        {
+            if (_submissionCompleted != 0)
+                alreadyCompleted = true;
+            else
+            {
+                var now = Stopwatch.GetTimestamp();
+                var sameSignalWindow = now - _lastSignalTimestamp < Stopwatch.Frequency / 4;
+                var duplicateCrossSource = sameSignalWindow &&
+                                           _snapshot.Version == _lastSignalSnapshotVersion &&
+                                           !string.Equals(source, _lastSignalSource, StringComparison.Ordinal);
+                var duplicateButtonInvoke = source == "send-button" && _lastSignalSource == "send-button" &&
+                                           _snapshot.Version == _lastSignalSnapshotVersion && sameSignalWindow;
+                if (duplicateCrossSource || duplicateButtonInvoke)
+                {
+                    deduplicated = true;
+                }
+                else
+                {
+                    candidate = CreateCandidateLocked(source, DateTimeOffset.UtcNow);
+                    _latestCandidateId = candidate.Id;
+                    _lastSignalSnapshotVersion = _snapshot.Version;
+                    _lastSignalTimestamp = now;
+                    _lastSignalSource = source;
+                }
+            }
+        }
+
+        if (alreadyCompleted) return;
+        if (deduplicated)
+        {
+            Interlocked.Increment(ref _deduplicatedSignalCount);
+            return;
+        }
+        if (candidate is null) return;
+
+        EnqueueSubmission(candidate);
+    }
+
+    private void EnqueueSubmission(SubmitCandidate candidate)
+    {
+        if (Volatile.Read(ref _disposed) != 0) return;
+        _pendingSubmissions.Enqueue(candidate);
         try
         {
-            lock (_snapshotLock)
-            {
-                _submitSnapshotValid = !_snapshotInvalid;
-                _submitSegment = _lastSegment;
-                _submitFullText = _lastFullText;
-            }
-            DictionaryLearningDiagnosticLog.Write("submit_signal", source);
             if (_submitSignal.CurrentCount == 0) _submitSignal.Release();
         }
         catch (ObjectDisposedException) { }
         catch (SemaphoreFullException) { }
     }
 
-    private void ReportStatus(string stage, string message, string detail = "none", int count = 0)
+    private async Task ProcessSubmissionCandidateAsync(
+        SubmitCandidate candidate,
+        AutomationElement editor,
+        TextPattern? textPattern,
+        ValuePattern? valuePattern,
+        CancellationToken cancellationToken)
     {
-        DictionaryLearningDiagnosticLog.Write(stage, detail, count);
+        var snapshot = candidate.Snapshot;
+        Log("submit_candidate_captured",
+            $"source={candidate.Source};valid={candidate.IsValid};recent-preclear={candidate.UsedRecentPreClearSnapshot};signal-utc={candidate.SignalTime:O};{SnapshotDescription(snapshot)}",
+            0, candidate.Id);
+        if (!candidate.IsValid || snapshot.State != SnapshotState.Valid ||
+            string.IsNullOrWhiteSpace(snapshot.Segment))
+        {
+            Log("submit_snapshot_invalid",
+                $"source={candidate.Source};{SnapshotDescription(snapshot)}", 0, candidate.Id);
+            return;
+        }
+
+        var correction = !string.Equals(snapshot.Segment, _originalSegment, StringComparison.Ordinal);
+        var confirmationReadCount = 0;
+        var confirmationReadFailureCount = 0;
+        var observedChangedText = false;
+        var observedClearedText = false;
+        var clearEvidence = "none";
+
+        for (var confirmAttempt = 0; confirmAttempt < 8; confirmAttempt++)
+        {
+            await Task.Delay(TimeSpan.FromMilliseconds(180), cancellationToken).ConfigureAwait(false);
+            if (candidate.Id != Volatile.Read(ref _latestCandidateId))
+            {
+                Log("submit_candidate_superseded", $"source={candidate.Source};newer-candidate-exists",
+                    confirmAttempt, candidate.Id);
+                return;
+            }
+            if (!IsSameTrackedEditor(editor))
+            {
+                confirmationReadFailureCount++;
+                Log("submit_confirmation_editor_mismatch", "target-or-runtime-id-changed",
+                    confirmationReadFailureCount, candidate.Id);
+                continue;
+            }
+            if (!TryReadText(editor, textPattern, valuePattern, out var afterSubmit, out var readState))
+            {
+                confirmationReadFailureCount++;
+                clearEvidence = readState;
+                continue;
+            }
+
+            confirmationReadCount++;
+            afterSubmit = NormalizeLineEndings(afterSubmit);
+            if (afterSubmit.Length > MaxDocumentLength)
+            {
+                ReportStatus("post_submit_text_too_long", "送信後の入力欄が長いため、登録を見送りました。",
+                    $"candidate={candidate.Id};read={readState}", confirmationReadCount);
+                return;
+            }
+
+            var editorChanged = !string.Equals(afterSubmit, snapshot.FullText, StringComparison.Ordinal);
+            var contentCleared = IsTrackedRangeCleared(afterSubmit, out var evidence);
+            observedChangedText |= editorChanged;
+            observedClearedText |= contentCleared;
+            if (!editorChanged || !contentCleared) continue;
+
+            clearEvidence = evidence;
+            var accepted = false;
+            lock (_snapshotLock)
+            {
+                if (_submissionCompleted == 0 && _latestCandidateId == candidate.Id)
+                {
+                    _submissionCompleted = 1;
+                    accepted = true;
+                }
+            }
+            if (!accepted)
+            {
+                Log("submit_candidate_superseded", "newer-candidate-arrived-before-confirmation",
+                    confirmationReadCount, candidate.Id);
+                return;
+            }
+
+            Log("submission_confirmed",
+                $"source={candidate.Source};evidence={clearEvidence};snapshot={SnapshotDescription(snapshot)};read={readState}",
+                confirmationReadCount, candidate.Id);
+            if (!correction)
+            {
+                ReportStatus("submitted_without_correction", "手修正が見つからなかったため、辞書は変更していません。",
+                    $"candidate={candidate.Id};evidence={clearEvidence}", confirmationReadCount, candidate.Id);
+                return;
+            }
+
+            ReportStatus("submission_ready_for_learning", "送信を確認しました。修正候補を判定しています。",
+                $"candidate={candidate.Id};evidence={clearEvidence}", confirmationReadCount, candidate.Id);
+            SubmissionConfirmed?.Invoke(this,
+                new DictionaryCorrectionSubmission(_originalSegment, snapshot.Segment, _monitorId, candidate.Id));
+            return;
+        }
+
+        var reason = confirmationReadCount == 0
+            ? "editor-unreadable-or-identity-changed"
+            : !observedChangedText
+                ? "field-unchanged"
+                : !observedClearedText
+                    ? "tracked-text-retained-or-range-lost"
+                    : "inconsistent-editor-state";
+        var providerState = DescribeTextProviders(editor, textPattern, valuePattern, snapshot.FullText);
+        ReportStatus("submission_not_confirmed", "送信後の入力欄の変化を確認できず、登録を見送りました。",
+            $"candidate={candidate.Id};source={candidate.Source};reason={reason};{SnapshotDescription(snapshot)};{providerState};last-read={clearEvidence}",
+            confirmationReadCount + confirmationReadFailureCount, candidate.Id);
+    }
+
+    private void ReportStatus(string stage, string message, string detail = "none", int count = 0,
+        long? candidateId = null)
+    {
+        Log(stage, detail, count, candidateId);
         StatusChanged?.Invoke(message);
     }
 
@@ -449,14 +618,23 @@ internal sealed class AutoDictionaryLearningMonitor : IDisposable
         TextPattern? textPattern,
         ValuePattern? valuePattern)
     {
-        if (Volatile.Read(ref _disposed) != 0 ||
-            !TryReadText(editor, textPattern, valuePattern, out var currentText))
+        if (Volatile.Read(ref _disposed) != 0) return;
+        if (!TryReadText(editor, textPattern, valuePattern, out var currentText, out var readState))
+        {
+            if (SetSnapshotState(null, null, SnapshotState.ReadFailed, readState))
+                Log("editor_read_failed", $"{readState};version={_snapshot.Version}");
             return;
+        }
         currentText = NormalizeLineEndings(currentText);
-        if (currentText.Length > MaxDocumentLength) return;
+        if (currentText.Length > MaxDocumentLength)
+        {
+            SetSnapshotState(currentText, string.Empty, SnapshotState.TooLong, $"length={currentText.Length}");
+            return;
+        }
         if (!TryExtractSegment(currentText, out var segment))
         {
-            lock (_snapshotLock) _snapshotInvalid = true;
+            if (SetSnapshotState(currentText, string.Empty, SnapshotState.RangeLost, "tracked-range-not-found"))
+                ReportStatus("tracked_range_lost", "入力欄の文章構成が変わり、音声入力部分を追跡できなくなりました。");
             return;
         }
         SetSnapshot(currentText, segment);
@@ -465,10 +643,105 @@ internal sealed class AutoDictionaryLearningMonitor : IDisposable
     private void SetSnapshot(string fullText, string segment)
     {
         lock (_snapshotLock)
+            SetSnapshotLocked(fullText, segment,
+                string.IsNullOrWhiteSpace(segment) ? SnapshotState.EmptySegment : SnapshotState.Valid,
+                string.IsNullOrWhiteSpace(segment) ? "tracked-segment-empty" : "readable");
+    }
+
+    private bool SetSnapshotState(string? fullText, string? segment, SnapshotState state, string readState)
+    {
+        lock (_snapshotLock)
         {
-            _lastFullText = fullText;
-            _lastSegment = segment;
-            _snapshotInvalid = false;
+            var prior = _snapshot;
+            var nextFullText = fullText ?? prior.FullText;
+            var nextSegment = segment ?? prior.Segment;
+            var changed = prior.State != state || prior.ReadState != readState ||
+                          !string.Equals(prior.FullText, nextFullText, StringComparison.Ordinal) ||
+                          !string.Equals(prior.Segment, nextSegment, StringComparison.Ordinal);
+            SetSnapshotLocked(nextFullText, nextSegment, state, readState);
+            return changed;
+        }
+    }
+
+    private void SetSnapshotLocked(string fullText, string segment, SnapshotState state, string readState)
+    {
+        var contentChanged = _snapshot.State != state || _snapshot.ReadState != readState ||
+                             !string.Equals(_snapshot.FullText, fullText, StringComparison.Ordinal) ||
+                             !string.Equals(_snapshot.Segment, segment, StringComparison.Ordinal);
+        var version = contentChanged ? ++_snapshotVersion : _snapshot.Version;
+        _snapshot = new EditorSnapshot(version, Stopwatch.GetTimestamp(), fullText, segment, state, readState);
+        if (state == SnapshotState.Valid) _lastValidSnapshot = _snapshot;
+    }
+
+    private SubmitCandidate CreateCandidateLocked(string source, DateTimeOffset signalTime)
+    {
+        var snapshot = _snapshot;
+        var usedRecentPreClearSnapshot = false;
+        if (source == "send-button" && snapshot.State == SnapshotState.EmptySegment &&
+            _lastValidSnapshot.State == SnapshotState.Valid &&
+            GetSnapshotAgeMilliseconds(_lastValidSnapshot) <= RecentPreClearSnapshotMs)
+        {
+            snapshot = _lastValidSnapshot;
+            usedRecentPreClearSnapshot = true;
+        }
+        var age = GetSnapshotAgeMilliseconds(snapshot);
+        var valid = snapshot.State == SnapshotState.Valid &&
+                    !string.IsNullOrWhiteSpace(snapshot.Segment) && age <= SnapshotFreshnessMs;
+        return new SubmitCandidate(++_nextCandidateId, source, signalTime, snapshot, valid,
+            usedRecentPreClearSnapshot);
+    }
+
+    private void Log(string stage, string detail = "none", int count = 0, long? candidateId = null) =>
+        DictionaryLearningDiagnosticLog.Write(stage, detail, count, _monitorId, candidateId);
+
+    private static string SnapshotDescription(EditorSnapshot snapshot) =>
+        $"version={snapshot.Version};state={snapshot.State};age-ms={GetSnapshotAgeMilliseconds(snapshot)};full-length={snapshot.FullText.Length};segment-length={snapshot.Segment.Length};read={snapshot.ReadState}";
+
+    private static long GetSnapshotAgeMilliseconds(EditorSnapshot snapshot)
+    {
+        if (snapshot.ObservedTimestamp == 0) return long.MaxValue;
+        return Math.Max(0, (long)Stopwatch.GetElapsedTime(snapshot.ObservedTimestamp).TotalMilliseconds);
+    }
+
+    private bool IsTrackedRangeCleared(string fullText, out string evidence)
+    {
+        if (string.IsNullOrWhiteSpace(fullText))
+        {
+            evidence = "same-editor-whole-field-empty";
+            return true;
+        }
+        if (!TryExtractSegment(fullText, out var remainingSegment))
+        {
+            evidence = "range-mismatch-not-clear-evidence";
+            return false;
+        }
+        if (string.IsNullOrWhiteSpace(remainingSegment))
+        {
+            evidence = "same-editor-tracked-range-empty";
+            return true;
+        }
+        evidence = "tracked-range-retains-text";
+        return false;
+    }
+
+    private bool IsSameTrackedEditor(AutomationElement editor)
+    {
+        if (!IsWithinWindow(editor, _targetWindow)) return false;
+        if (_editorRuntimeId is null) return true;
+        var currentId = GetRuntimeId(editor);
+        return currentId is not null && string.Equals(currentId, _editorRuntimeId, StringComparison.Ordinal);
+    }
+
+    private static string? GetRuntimeId(AutomationElement editor)
+    {
+        try
+        {
+            var runtimeId = editor.GetRuntimeId();
+            return runtimeId.Length == 0 ? null : string.Join(",", runtimeId);
+        }
+        catch (Exception ex) when (IsAutomationFailure(ex) || ex is ObjectDisposedException)
+        {
+            return null;
         }
     }
 
@@ -509,28 +782,80 @@ internal sealed class AutoDictionaryLearningMonitor : IDisposable
         AutomationElement element,
         TextPattern? textPattern,
         ValuePattern? valuePattern,
-        out string text)
+        out string text,
+        out string readState)
     {
         text = string.Empty;
+        readState = "unreadable";
+        bool isPassword;
         try
         {
-            if (element.Current.IsPassword) return false;
-            if (valuePattern is not null)
-                text = valuePattern.Current.Value ?? string.Empty;
-            else if (textPattern is not null)
-                text = textPattern.DocumentRange.GetText(MaxDocumentLength + 1);
-            else
-                return false;
-            return true;
+            isPassword = element.Current.IsPassword;
         }
-        catch (Exception ex) when (IsAutomationFailure(ex) || ex is ObjectDisposedException) { return false; }
+        catch (Exception ex) when (IsAutomationFailure(ex) || ex is ObjectDisposedException)
+        {
+            readState = $"element-metadata-failed:{ex.GetType().Name}";
+            return false;
+        }
+        if (isPassword)
+        {
+            readState = "password-field-blocked";
+            return false;
+        }
+
+        string? valueFailure = null;
+        if (valuePattern is not null)
+        {
+            try
+            {
+                text = valuePattern.Current.Value ?? string.Empty;
+                readState = "value-pattern";
+                return true;
+            }
+            catch (Exception ex) when (IsAutomationFailure(ex) || ex is ObjectDisposedException)
+            {
+                valueFailure = ex.GetType().Name;
+            }
+        }
+
+        if (textPattern is not null)
+        {
+            try
+            {
+                text = textPattern.DocumentRange.GetText(MaxDocumentLength + 1);
+                readState = valueFailure is null ? "text-pattern" : $"text-pattern-fallback-after:{valueFailure}";
+                return true;
+            }
+            catch (Exception ex) when (IsAutomationFailure(ex) || ex is ObjectDisposedException)
+            {
+                readState = $"text-pattern-failed:{ex.GetType().Name};value-pattern={valueFailure ?? "unavailable"}";
+                return false;
+            }
+        }
+
+        readState = valueFailure is not null
+            ? $"value-pattern-failed:{valueFailure};text-pattern=unavailable"
+            : "no-readable-text-pattern";
+        return false;
     }
 
     private static string DescribeTextProviders(
+        AutomationElement element,
         TextPattern? textPattern,
         ValuePattern? valuePattern,
         string beforeSubmit)
     {
+        string metadataState;
+        try
+        {
+            if (element.Current.IsPassword)
+                return $"baseline-length={beforeSubmit.Length};element=password-blocked";
+            metadataState = "available";
+        }
+        catch (Exception ex) when (IsAutomationFailure(ex) || ex is ObjectDisposedException)
+        {
+            return $"baseline-length={beforeSubmit.Length};element=unreadable:{ex.GetType().Name}";
+        }
         var valueState = valuePattern is null
             ? "unavailable"
             : DescribeTextProvider(() => valuePattern.Current.Value ?? string.Empty, beforeSubmit);
@@ -539,7 +864,7 @@ internal sealed class AutoDictionaryLearningMonitor : IDisposable
             : DescribeTextProvider(
                 () => textPattern.DocumentRange.GetText(MaxDocumentLength + 1), beforeSubmit);
 
-        return $"baseline-length={beforeSubmit.Length};value-pattern={valueState};text-pattern={textState}";
+        return $"baseline-length={beforeSubmit.Length};element={metadataState};value-pattern={valueState};text-pattern={textState}";
     }
 
     private static string DescribeTextProvider(Func<string> read, string beforeSubmit)
@@ -554,7 +879,7 @@ internal sealed class AutoDictionaryLearningMonitor : IDisposable
         }
         catch (Exception ex) when (IsAutomationFailure(ex) || ex is ObjectDisposedException)
         {
-            return "unreadable";
+            return $"unreadable:{ex.GetType().Name}";
         }
     }
 
@@ -581,6 +906,36 @@ internal sealed class AutoDictionaryLearningMonitor : IDisposable
     private static bool IsAutomationFailure(Exception exception) =>
         exception is ElementNotAvailableException or InvalidOperationException or COMException or
             UnauthorizedAccessException or ArgumentException;
+
+    private enum SnapshotState
+    {
+        Unreadable,
+        Valid,
+        EmptySegment,
+        RangeLost,
+        ReadFailed,
+        TooLong
+    }
+
+    private sealed record EditorSnapshot(
+        long Version,
+        long ObservedTimestamp,
+        string FullText,
+        string Segment,
+        SnapshotState State,
+        string ReadState)
+    {
+        public static EditorSnapshot Unreadable { get; } =
+            new(0, 0, string.Empty, string.Empty, SnapshotState.Unreadable, "not-initialized");
+    }
+
+    private sealed record SubmitCandidate(
+        long Id,
+        string Source,
+        DateTimeOffset SignalTime,
+        EditorSnapshot Snapshot,
+        bool IsValid,
+        bool UsedRecentPreClearSnapshot);
 
     private delegate IntPtr LowLevelKeyboardProc(int code, IntPtr wParam, IntPtr lParam);
 

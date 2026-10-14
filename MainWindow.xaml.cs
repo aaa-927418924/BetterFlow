@@ -751,13 +751,14 @@ public partial class MainWindow : System.Windows.Window
     {
         if (!_settings.AutoLearnDictionaryEnabled || _closing)
         {
-            DictionaryLearningDiagnosticLog.Write("learning_skipped", "disabled-or-closing");
+            DictionaryLearningDiagnosticLog.Write("learning_skipped", "disabled-or-closing",
+                monitorId: submission.MonitorId, candidateId: submission.CandidateId);
             return;
         }
         var changes = DictionaryCorrectionCandidates.ExtractChanges(
             submission.OriginalText, submission.CorrectedText);
         DictionaryLearningDiagnosticLog.Write("candidates_extracted", changes.Count == 0 ? "none" : "found",
-            changes.Count);
+            changes.Count, submission.MonitorId, submission.CandidateId);
         if (changes.Count == 0)
         {
             CorrectionDictionaryStatus.Text = "単語単位の修正候補を特定できず、辞書は変更していません。";
@@ -777,11 +778,13 @@ public partial class MainWindow : System.Windows.Window
             {
                 if (!TryReserveDictionaryReviewRequest())
                 {
-                    DictionaryLearningDiagnosticLog.Write("model_review_skipped", "rate-limit", changes.Count);
+                    DictionaryLearningDiagnosticLog.Write("model_review_skipped", "rate-limit", changes.Count,
+                        submission.MonitorId, submission.CandidateId);
                     CorrectionDictionaryStatus.Text = "辞書判定の回数制限に達したため、今回は登録を見送りました。";
                     return;
                 }
-                DictionaryLearningDiagnosticLog.Write("model_review_started", "precision", changes.Count);
+                DictionaryLearningDiagnosticLog.Write("model_review_started", "precision", changes.Count,
+                    submission.MonitorId, submission.CandidateId);
                 var indexes = await _openCode.ReviewDictionaryCorrectionsAsync(
                     changes, _settings.OpenCodeModelProviderId, _settings.OpenCodeModelId, cancellation.Token);
                 approvedTerms = indexes
@@ -789,7 +792,8 @@ public partial class MainWindow : System.Windows.Window
                     .Select(index => changes[index].CorrectSpelling)
                     .ToArray();
                 DictionaryLearningDiagnosticLog.Write("model_review_completed",
-                    approvedTerms.Count == 0 ? "no-approved-candidates" : "approved", approvedTerms.Count);
+                    approvedTerms.Count == 0 ? "no-approved-candidates" : "approved", approvedTerms.Count,
+                    submission.MonitorId, submission.CandidateId);
                 if (approvedTerms.Count == 0)
                 {
                     CorrectionDictionaryStatus.Text = "選択モデルが登録可能な用語修正を承認しなかったため、辞書は変更していません。";
@@ -805,10 +809,12 @@ public partial class MainWindow : System.Windows.Window
                         : !_openCodeReady
                             ? "model-not-ready"
                             : "opencode-not-running";
-                DictionaryLearningDiagnosticLog.Write("local_review_started", fallbackReason, changes.Count);
+                DictionaryLearningDiagnosticLog.Write("local_review_started", fallbackReason, changes.Count,
+                    submission.MonitorId, submission.CandidateId);
                 approvedTerms = DictionaryCorrectionCandidates.SelectFastCandidates(changes);
                 DictionaryLearningDiagnosticLog.Write("local_review_completed",
-                    approvedTerms.Count == 0 ? "no-local-candidates" : "approved", approvedTerms.Count);
+                    approvedTerms.Count == 0 ? "no-local-candidates" : "approved", approvedTerms.Count,
+                    submission.MonitorId, submission.CandidateId);
                 if (approvedTerms.Count == 0)
                 {
                     CorrectionDictionaryStatus.Text = "ローカル判定で登録できる表記修正が見つからず、辞書は変更していません。";
@@ -817,10 +823,11 @@ public partial class MainWindow : System.Windows.Window
             }
 
             cancellation.Token.ThrowIfCancellationRequested();
-            var addedCount = AddLearnedDictionaryTerms(approvedTerms);
+            var addedCount = AddLearnedDictionaryTerms(approvedTerms, submission.MonitorId, submission.CandidateId);
             if (addedCount > 0)
             {
-                DictionaryLearningDiagnosticLog.Write("learning_completed", "saved", addedCount);
+                DictionaryLearningDiagnosticLog.Write("learning_completed", "saved", addedCount,
+                    submission.MonitorId, submission.CandidateId);
                 CorrectionDictionaryStatus.Text = addedCount == 1
                     ? "送信した修正から正しい表記を1件登録しました。"
                     : $"送信した修正から正しい表記を{addedCount}件登録しました。";
@@ -828,14 +835,16 @@ public partial class MainWindow : System.Windows.Window
             }
             else
             {
-                DictionaryLearningDiagnosticLog.Write("learning_completed", "no-new-entry", approvedTerms.Count);
+                DictionaryLearningDiagnosticLog.Write("learning_completed", "no-new-entry", approvedTerms.Count,
+                    submission.MonitorId, submission.CandidateId);
                 CorrectionDictionaryStatus.Text = "候補は承認されましたが、新しい辞書項目は追加されませんでした。既登録または上限に達している可能性があります。";
             }
         }
         catch (OperationCanceledException) when (cancellation.IsCancellationRequested) { }
         catch (Exception ex)
         {
-            DictionaryLearningDiagnosticLog.Write("learning_failed", ex.GetType().Name, changes.Count);
+            DictionaryLearningDiagnosticLog.Write("learning_failed", ex.GetType().Name, changes.Count,
+                submission.MonitorId, submission.CandidateId);
             CorrectionDictionaryStatus.Text = "自動登録の判定に失敗しました。辞書は変更していません。詳細は診断ログを確認してください。";
         }
         finally
@@ -860,11 +869,12 @@ public partial class MainWindow : System.Windows.Window
         }
     }
 
-    private int AddLearnedDictionaryTerms(IEnumerable<string> terms)
+    private int AddLearnedDictionaryTerms(IEnumerable<string> terms, string monitorId, long candidateId)
     {
         if (!_settings.AutoLearnDictionaryEnabled)
         {
-            DictionaryLearningDiagnosticLog.Write("dictionary_save_skipped", "disabled");
+            DictionaryLearningDiagnosticLog.Write("dictionary_save_skipped", "disabled",
+                monitorId: monitorId, candidateId: candidateId);
             return 0;
         }
         var candidates = terms.Select(term => CleanDictionaryField(term, 100))
@@ -876,7 +886,8 @@ public partial class MainWindow : System.Windows.Window
             .ToArray();
         if (candidates.Length == 0)
         {
-            DictionaryLearningDiagnosticLog.Write("dictionary_save_skipped", "duplicate-or-capacity");
+            DictionaryLearningDiagnosticLog.Write("dictionary_save_skipped", "duplicate-or-capacity",
+                monitorId: monitorId, candidateId: candidateId);
             return 0;
         }
 
@@ -887,14 +898,16 @@ public partial class MainWindow : System.Windows.Window
         {
             _settingsStore.Save(_settings);
             RefreshCorrectionDictionaryItems();
-            DictionaryLearningDiagnosticLog.Write("dictionary_saved", "success", candidates.Length);
+            DictionaryLearningDiagnosticLog.Write("dictionary_saved", "success", candidates.Length,
+                monitorId, candidateId);
             return candidates.Length;
         }
         catch (Exception ex)
         {
             _settings.CorrectionDictionary = previous;
             RefreshCorrectionDictionaryItems();
-            DictionaryLearningDiagnosticLog.Write("dictionary_save_failed", ex.GetType().Name, candidates.Length);
+            DictionaryLearningDiagnosticLog.Write("dictionary_save_failed", ex.GetType().Name, candidates.Length,
+                monitorId, candidateId);
             return 0;
         }
     }
@@ -2127,14 +2140,18 @@ public partial class MainWindow : System.Windows.Window
 
                 await Task.Delay(TimeSpan.FromMilliseconds(150), cancellationToken);
                 cancellationToken.ThrowIfCancellationRequested();
+                var learningMonitor = _autoDictionaryLearningMonitor;
+                var learningPrepared = learningMonitor?.PrepareApplicationSubmit() == true;
                 if (PasteService.SendEnter(_pasteTarget))
                 {
-                    _autoDictionaryLearningMonitor?.NotifyApplicationSubmit();
+                    if (learningPrepared)
+                        learningMonitor?.NotifyApplicationSubmit();
                     RuntimeStatus.Text = "文章を入力欄へ貼り付けて送信しました。";
                     _indicator.ShowStatus("送信しました", TimeSpan.FromSeconds(1));
                 }
                 else
                 {
+                    learningMonitor?.CancelPreparedApplicationSubmit();
                     RuntimeStatus.Text = "文章は貼り付けましたが、入力欄のフォーカスを確認できず送信していません。";
                     _indicator.ShowStatus("送信未完了", TimeSpan.FromSeconds(1));
                 }
