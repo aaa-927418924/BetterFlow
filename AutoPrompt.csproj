@@ -25,6 +25,7 @@
 
   <ItemGroup>
     <PackageReference Include="NAudio" Version="2.2.1" />
+    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.4191.47" />
     <PackageReference Include="SharpCompress" Version="0.50.5" />
     <PackageReference Include="org.k2fsa.sherpa.onnx" Version="1.13.8" />
   </ItemGroup>
@@ -37,6 +38,7 @@
   <ItemGroup>
     <EmbeddedResource Include="Assets\silero_vad.onnx" LogicalName="BetterFlow.Assets.silero_vad.onnx" />
     <EmbeddedResource Include="Assets\SileroVAD-LICENSE.txt" LogicalName="BetterFlow.Assets.SileroVAD-LICENSE.txt" />
+    <EmbeddedResource Include="Assets\gpt-live.html" LogicalName="BetterFlow.Assets.gpt-live.html" />
     <EmbeddedResource Include="Assets\universfield-gadget-activation-250072.mp3"
                       LogicalName="BetterFlow.Assets.activation.mp3"
                       Condition="Exists('Assets\universfield-gadget-activation-250072.mp3')" />

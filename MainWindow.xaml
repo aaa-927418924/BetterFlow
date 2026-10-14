@@ -105,6 +105,31 @@
                             <TextBlock x:Name="OpenCodeModelStatus" FontSize="11" Foreground="{StaticResource MutedBrush}"
                                        Margin="0,5,0,0" AutomationProperties.LiveSetting="Polite" />
                         </StackPanel>
+                        <StackPanel x:Name="SelectedTextAnswerSettingsPanel" Margin="0,16,0,0" Visibility="Collapsed">
+                            <TextBlock Text="選択した文章への回答方法" FontSize="14" FontWeight="SemiBold" />
+                            <ComboBox x:Name="SelectedTextAnswerModeCombo" IsEditable="False" MinHeight="40"
+                                      Background="#333333" Foreground="#F4F4F4" BorderBrush="#686868"
+                                      FontFamily="Yu Gothic UI" FontSize="13" Margin="0,8,0,0"
+                                      Style="{StaticResource DarkComboBoxStyle}"
+                                      SelectionChanged="SelectedTextAnswerModeCombo_SelectionChanged"
+                                      AutomationProperties.Name="選択文章への回答方法">
+                                <ComboBoxItem Content="OpenCodeのテキスト回答" Tag="opencode" />
+                                <ComboBoxItem Content="GPT Liveの音声会話" Tag="gpt-live" />
+                            </ComboBox>
+                            <DockPanel x:Name="GptLiveSignInPanel" Margin="0,8,0,0" LastChildFill="True"
+                                       Visibility="Collapsed">
+                                <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+                                    <Button x:Name="GptLiveSignInButton" Content="サインイン" MinWidth="96" Height="38"
+                                            Padding="12,0" Margin="6,0,0,0" Style="{StaticResource SecondaryButtonStyle}"
+                                            Click="GptLiveSignInButton_Click" AutomationProperties.Name="ChatGPTにサインイン" />
+                                    <Button x:Name="GptLiveSignOutButton" Content="サインアウト" MinWidth="96" Height="38"
+                                            Padding="12,0" Margin="6,0,0,0" Style="{StaticResource SecondaryButtonStyle}"
+                                            Click="GptLiveSignOutButton_Click" AutomationProperties.Name="ChatGPTからサインアウト" />
+                                </StackPanel>
+                                <TextBlock x:Name="GptLiveSignInStatus" FontSize="11" Foreground="{StaticResource MutedBrush}"
+                                           VerticalAlignment="Center" AutomationProperties.LiveSetting="Polite" />
+                            </DockPanel>
+                        </StackPanel>
                         <ProgressBar x:Name="SetupProgress" Height="5" Minimum="0" Maximum="100" Value="0"
                                      Visibility="Collapsed" Foreground="#EAEAEA" Background="#555555"
                                      BorderThickness="0" Margin="0,20,0,0" />

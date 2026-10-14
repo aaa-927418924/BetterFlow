@@ -6,16 +6,18 @@ namespace BetterFlow.Services;
 
 internal sealed class SelectionEditContext
 {
-    public SelectionEditContext(IntPtr targetWindow, int[] providerRuntimeId, string selectedText)
+    public SelectionEditContext(IntPtr targetWindow, int[] providerRuntimeId, string selectedText, bool isEditable)
     {
         TargetWindow = targetWindow;
         ProviderRuntimeId = providerRuntimeId;
         CurrentText = selectedText;
+        IsEditable = isEditable;
     }
 
     public IntPtr TargetWindow { get; }
     public int[] ProviderRuntimeId { get; }
     public string CurrentText { get; set; }
+    public bool IsEditable { get; }
 }
 
 internal readonly record struct SelectionEditResult(bool Applied, bool CanContinue, string Message);
@@ -36,16 +38,13 @@ internal static class SelectionEditService
 
         try
         {
-            var provider = FindFocusedTextProvider(null, out var textPattern);
-            if (provider is null || textPattern is null)
+            var provider = FindSelectedTextProvider(targetWindow, out var textPattern, out var selections);
+            if (provider is null || textPattern is null || selections is null)
                 return false;
 
-            var selections = textPattern.GetSelection();
-            if (selections is null || selections.Length == 0)
-                return false;
             if (selections.Length != 1)
             {
-                failureMessage = "複数の選択範囲がある入力欄には対応していません。1つの文章を選択してください。";
+                failureMessage = "複数の選択範囲には対応していません。1つの文章を選択してください。";
                 return false;
             }
 
@@ -58,14 +57,96 @@ internal static class SelectionEditService
                 return false;
             }
 
-            context = new SelectionEditContext(targetWindow, provider.GetRuntimeId(), selectedText);
+            context = new SelectionEditContext(targetWindow, provider.GetRuntimeId(), selectedText,
+                IsEditableTextProvider(provider));
             return true;
         }
         catch (Exception ex) when (IsAutomationFailure(ex))
         {
-            failureMessage = "選択範囲を読み取れませんでした。対応するテキスト入力欄で選択し直してください。";
+            failureMessage = "選択範囲を読み取れませんでした。文章を選択し直してください。";
             return false;
         }
+    }
+
+    private static AutomationElement? FindSelectedTextProvider(
+        IntPtr targetWindow,
+        out TextPattern? pattern,
+        out TextPatternRange[]? selections)
+    {
+        pattern = null;
+        selections = null;
+        var visited = new HashSet<string>(StringComparer.Ordinal);
+        var focused = AutomationElement.FocusedElement;
+        var walker = TreeWalker.ControlViewWalker;
+
+        for (var depth = 0; focused is not null && depth < MaximumFocusedAncestors; depth++)
+        {
+            if (TryReadSelection(focused, visited, out pattern, out selections))
+                return focused;
+            focused = walker.GetParent(focused);
+        }
+
+        var root = AutomationElement.FromHandle(targetWindow);
+        var condition = new PropertyCondition(AutomationElement.IsTextPatternAvailableProperty, true);
+        var candidates = root.FindAll(TreeScope.Descendants, condition);
+        for (var index = 0; index < candidates.Count && index < 4096; index++)
+        {
+            var candidate = candidates[index];
+            if (TryReadSelection(candidate, visited, out pattern, out selections))
+                return candidate;
+        }
+
+        return null;
+    }
+
+    private static bool TryReadSelection(
+        AutomationElement element,
+        HashSet<string> visited,
+        out TextPattern? pattern,
+        out TextPatternRange[]? selections)
+    {
+        pattern = null;
+        selections = null;
+        try
+        {
+            if (element.Current.IsPassword || !element.TryGetCurrentPattern(TextPattern.Pattern, out var value) ||
+                value is not TextPattern textPattern)
+                return false;
+
+            var runtimeId = element.GetRuntimeId();
+            var key = runtimeId is null ? string.Empty : string.Join(',', runtimeId);
+            if (key.Length > 0 && !visited.Add(key)) return false;
+
+            var selectedRanges = textPattern.GetSelection();
+            if (selectedRanges is null || selectedRanges.Length == 0) return false;
+            pattern = textPattern;
+            selections = selectedRanges;
+            return true;
+        }
+        catch (Exception ex) when (IsAutomationFailure(ex))
+        {
+            return false;
+        }
+    }
+
+    private static bool IsEditableTextProvider(AutomationElement provider)
+    {
+        var walker = TreeWalker.ControlViewWalker;
+        var element = provider;
+        for (var depth = 0; element is not null && depth < MaximumFocusedAncestors; depth++)
+        {
+            if (element.Current.IsPassword) return false;
+            if (element.Current.ControlType == ControlType.Edit)
+            {
+                return !element.TryGetCurrentPattern(ValuePattern.Pattern, out var editValue) ||
+                       editValue is not ValuePattern editValuePattern || !editValuePattern.Current.IsReadOnly;
+            }
+            if (element.TryGetCurrentPattern(ValuePattern.Pattern, out var value) && value is ValuePattern valuePattern &&
+                !valuePattern.Current.IsReadOnly)
+                return true;
+            element = walker.GetParent(element);
+        }
+        return false;
     }
 
     public static async Task<SelectionEditResult> ReplaceCurrentSelectionAsync(

@@ -7,6 +7,7 @@ internal sealed class AppSettings
 {
     public bool AiModeEnabled { get; set; } = true;
     public string SelectionEditEngine { get; set; } = "opencode";
+    public string SelectedTextAnswerMode { get; set; } = "opencode";
     public string OpenCodeModelProviderId { get; set; } = "opencode";
     public string OpenCodeModelId { get; set; } = "muse-spark-1.3-contributor-free";
     public string MicrophoneDeviceId { get; set; } = AudioInputDeviceOption.SystemDefaultId;
