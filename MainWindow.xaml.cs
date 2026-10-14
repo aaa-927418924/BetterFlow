@@ -44,6 +44,7 @@ public partial class MainWindow : System.Windows.Window
     private bool _isCapturingShortcut;
     private bool _isRefreshingOpenCodeModels;
     private bool _loadingOpenCodeModelUi;
+    private bool _loadingSpeechRecognitionModelUi;
     private bool _loadingMicrophoneDeviceUi;
     private bool _openCodeReady;
     private CancellationTokenSource? _audioProcessingCancellation;
@@ -105,14 +106,16 @@ public partial class MainWindow : System.Windows.Window
         _undoWindow = new UndoWindow();
         _undoWindow.UndoRequested += UndoWindow_UndoRequested;
         _undoWindow.UndoExpired += UndoWindow_UndoExpired;
-        _startHiddenInTray = Bootstrapper.IsModelReady();
+        _settings = _settingsStore.Load();
+        NormalizeSpeechRecognitionModelSetting();
+        InitializeSpeechRecognitionModelUi();
+        _startHiddenInTray = Bootstrapper.IsModelReady(_settings.SpeechRecognitionModelId);
         if (_startHiddenInTray)
         {
             TitleText.Text = "アプリを起動しています…";
             BodyText.Text = "音声モデルを確認しています。";
             CapacityText.Text = string.Empty;
         }
-        _settings = _settingsStore.Load();
         NormalizeAiSettings();
         InitializeOpenCodeModelUi();
         RefreshCorrectionDictionaryItems();
@@ -153,7 +156,7 @@ public partial class MainWindow : System.Windows.Window
         var currentStage = "音声モデルの起動";
         try
         {
-            await LoadRecognizerAsync(_lifetime.Token);
+            await LoadRecognizerAsync(_settings.SpeechRecognitionModelId, _lifetime.Token);
             SetupStatus.Text = string.Empty;
         }
         catch (OperationCanceledException) when (_closing) { _indicator.HideStatus(); }
@@ -205,6 +208,7 @@ public partial class MainWindow : System.Windows.Window
     {
         _isBusy = true;
         ActionButton.IsEnabled = false;
+        UpdateAiModeDisplay();
         SetupProgress.Visibility = System.Windows.Visibility.Visible;
         SetupProgress.IsIndeterminate = true;
         SetupProgress.Value = 0;
@@ -220,7 +224,7 @@ public partial class MainWindow : System.Windows.Window
                 SetupStatus.Text = update.Message;
                 SetupProgress.Value = Math.Clamp(update.Percent, 0, 100);
             });
-            await new Bootstrapper().EnsureModelAsync(progress, _lifetime.Token);
+            await new Bootstrapper().EnsureModelAsync(progress, _lifetime.Token, _settings.SpeechRecognitionModelId);
             currentStage = "OpenCodeの準備";
             try
             {
@@ -233,7 +237,8 @@ public partial class MainWindow : System.Windows.Window
             }
             currentStage = "音声モデルの起動";
             SetupStatus.Text = "音声モデルを起動しています…";
-            await LoadRecognizerAsync(_lifetime.Token);
+            await LoadRecognizerAsync(_settings.SpeechRecognitionModelId, _lifetime.Token);
+            _settingsStore.Save(_settings);
             SetupProgress.Value = 100;
             SetupStatus.Text = string.Empty;
             RuntimeStatus.Text = openCodeSetupIssue is null
@@ -253,6 +258,7 @@ public partial class MainWindow : System.Windows.Window
             _isBusy = false;
             ActionButton.IsEnabled = true;
             if (_asr is null) ActionButton.Content = "Setup";
+            UpdateAiModeDisplay();
         }
 
         ScheduleOpenCodeWarmupIfNeeded();
@@ -322,6 +328,7 @@ public partial class MainWindow : System.Windows.Window
     private void UpdateAiModeDisplay()
     {
         var canChooseModel = _asr is not null && !_isBusy && !IsAnyRecording && !_isRefreshingOpenCodeModels;
+        SpeechRecognitionModelCombo.IsEnabled = !_isBusy && !IsAnyRecording;
         OpenCodeModelCombo.IsEnabled = canChooseModel;
         RefreshOpenCodeModelsButton.IsEnabled = canChooseModel && !_isRefreshingOpenCodeModels;
         CorrectionDictionarySettingsPanel.IsEnabled = _asr is not null && !_isBusy && !IsAnyRecording;
@@ -1478,9 +1485,138 @@ public partial class MainWindow : System.Windows.Window
         _loadingOpenCodeModelUi = false;
     }
 
-    private async Task LoadRecognizerAsync(CancellationToken cancellationToken)
+    private void NormalizeSpeechRecognitionModelSetting()
     {
-        var recognizer = await Task.Run(() => AsrService.Load(AppPaths.ModelFile, AppPaths.TokensFile), cancellationToken);
+        if (_settings.SpeechRecognitionModelId is AsrService.WhisperLargeV3TurboModelId or AsrService.ParakeetJapaneseModelId)
+            return;
+
+        _settings.SpeechRecognitionModelId = AsrService.WhisperLargeV3TurboModelId;
+        _settingsStore.Save(_settings);
+    }
+
+    private void InitializeSpeechRecognitionModelUi()
+    {
+        _loadingSpeechRecognitionModelUi = true;
+        SpeechRecognitionModelCombo.SelectedValue = _settings.SpeechRecognitionModelId;
+        _loadingSpeechRecognitionModelUi = false;
+        UpdateSpeechRecognitionModelDescription();
+    }
+
+    private void UpdateSpeechRecognitionModelDescription(string? modelId = null)
+    {
+        var selectedModelId = modelId ?? _settings.SpeechRecognitionModelId;
+        if (selectedModelId == AsrService.WhisperLargeV3TurboModelId)
+        {
+            SpeechModelStatus.Text = "INT8版（モデル約1.04 GB）をPC内で処理します。Parakeetへいつでも切り替えられます。";
+            if (_asr is null)
+            {
+                BodyText.Text = "Whisper Large V3 TurboとOpenCodeを準備します。\nOpenCode Zenの利用には別途サインインが必要です。";
+                CapacityText.Text = "必要な空き容量: 約1.3 GB";
+            }
+        }
+        else
+        {
+            SpeechModelStatus.Text = "Parakeet 0.6Bの日本語モデルです。保存済みならそのまま再利用します。";
+            if (_asr is null)
+            {
+                BodyText.Text = "Parakeet日本語モデルとOpenCodeを準備します。\nOpenCode Zenの利用には別途サインインが必要です。";
+                CapacityText.Text = "必要な空き容量: 約1.2 GB";
+            }
+        }
+    }
+
+    private async void SpeechRecognitionModelCombo_SelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
+    {
+        if (_loadingSpeechRecognitionModelUi) return;
+        if (SpeechRecognitionModelCombo.SelectedValue is not string requestedModelId ||
+            requestedModelId is not (AsrService.WhisperLargeV3TurboModelId or AsrService.ParakeetJapaneseModelId))
+            return;
+
+        var previousModelId = _settings.SpeechRecognitionModelId;
+        if (requestedModelId == previousModelId) return;
+        if (_isBusy || IsAnyRecording)
+        {
+            _loadingSpeechRecognitionModelUi = true;
+            SpeechRecognitionModelCombo.SelectedValue = previousModelId;
+            _loadingSpeechRecognitionModelUi = false;
+            SpeechModelStatus.Text = "録音や処理が終わってから文字起こしモデルを変更できます。";
+            return;
+        }
+
+        UpdateSpeechRecognitionModelDescription(requestedModelId);
+        if (_asr is null)
+        {
+            _settings.SpeechRecognitionModelId = requestedModelId;
+            _settingsStore.Save(_settings);
+            UpdateSpeechRecognitionModelDescription();
+            return;
+        }
+
+        await SwitchSpeechRecognitionModelAsync(previousModelId, requestedModelId);
+    }
+
+    private async Task SwitchSpeechRecognitionModelAsync(string previousModelId, string requestedModelId)
+    {
+        _isBusy = true;
+        ActionButton.IsEnabled = false;
+        UpdateAiModeDisplay();
+        SetupProgress.Visibility = System.Windows.Visibility.Visible;
+        SetupProgress.IsIndeterminate = true;
+        SetupProgress.Value = 0;
+        SetupStatus.Text = "文字起こしモデルを切り替えています…";
+        RuntimeStatus.Text = string.Empty;
+        var currentStage = "音声モデルの準備";
+        try
+        {
+            var progress = new Progress<SetupProgress>(update =>
+            {
+                currentStage = update.Message.TrimEnd('…', '.');
+                SetupStatus.Text = update.Message;
+                SetupProgress.IsIndeterminate = false;
+                SetupProgress.Value = Math.Clamp(update.Percent, 0, 100);
+            });
+
+            _settings.SpeechRecognitionModelId = requestedModelId;
+            _settingsStore.Save(_settings);
+            await new Bootstrapper().EnsureModelAsync(progress, _lifetime.Token, requestedModelId);
+            currentStage = "音声モデルの起動";
+            SetupStatus.Text = "音声モデルを起動しています…";
+            SetupProgress.IsIndeterminate = true;
+            await LoadRecognizerAsync(requestedModelId, _lifetime.Token);
+            SetupProgress.Value = 100;
+            SetupStatus.Text = string.Empty;
+            UpdateSpeechRecognitionModelDescription();
+        }
+        catch (OperationCanceledException) when (_closing) { }
+        catch (Exception ex)
+        {
+            _settings.SpeechRecognitionModelId = previousModelId;
+            try { _settingsStore.Save(_settings); } catch { }
+            _loadingSpeechRecognitionModelUi = true;
+            SpeechRecognitionModelCombo.SelectedValue = previousModelId;
+            _loadingSpeechRecognitionModelUi = false;
+            UpdateSpeechRecognitionModelDescription();
+            RuntimeStatus.Text = $"文字起こしモデルを切り替えられませんでした。失敗した工程: {currentStage}\n{DescribeSetupError(ex)}";
+        }
+        finally
+        {
+            SetupProgress.IsIndeterminate = false;
+            SetupProgress.Visibility = System.Windows.Visibility.Collapsed;
+            _isBusy = false;
+            ActionButton.IsEnabled = true;
+            UpdateAiModeDisplay();
+        }
+    }
+
+    private async Task LoadRecognizerAsync(string modelId, CancellationToken cancellationToken)
+    {
+        var recognizer = await Task.Run(() => modelId switch
+        {
+            AsrService.WhisperLargeV3TurboModelId => AsrService.LoadWhisperLargeV3Turbo(
+                AppPaths.WhisperEncoderFile, AppPaths.WhisperDecoderFile, AppPaths.WhisperTokensFile),
+            AsrService.ParakeetJapaneseModelId => AsrService.Load(AppPaths.ModelFile, AppPaths.TokensFile),
+            _ => throw new InvalidDataException("文字起こしモデルの選択が正しくありません。")
+        }, cancellationToken);
         cancellationToken.ThrowIfCancellationRequested();
         _asr?.Dispose();
         _asr = recognizer;

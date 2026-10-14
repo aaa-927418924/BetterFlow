@@ -37,6 +37,21 @@
                                    FontSize="16" LineHeight="22" Margin="0,20,0,0" />
                         <TextBlock x:Name="CapacityText" Text="必要な空き容量: 約1.2 GB"
                                    FontSize="15" Margin="0,18,0,0" />
+                        <StackPanel x:Name="SpeechModelSettingsPanel" Margin="0,16,0,0">
+                            <TextBlock Text="文字起こしモデル" FontSize="14" FontWeight="SemiBold" />
+                            <ComboBox x:Name="SpeechRecognitionModelCombo" IsEditable="False" MinHeight="40"
+                                      Background="#333333" Foreground="#F4F4F4" BorderBrush="#686868"
+                                      FontFamily="Yu Gothic UI" FontSize="13" Margin="0,8,0,0"
+                                      Style="{StaticResource DarkComboBoxStyle}"
+                                      SelectedValuePath="Tag"
+                                      SelectionChanged="SpeechRecognitionModelCombo_SelectionChanged"
+                                      AutomationProperties.Name="文字起こしモデル">
+                                <ComboBoxItem Content="Whisper Large V3 Turbo" Tag="whisper-large-v3-turbo" />
+                                <ComboBoxItem Content="Parakeet 0.6B 日本語" Tag="parakeet-ja-int8" />
+                            </ComboBox>
+                            <TextBlock x:Name="SpeechModelStatus" FontSize="11" Foreground="{StaticResource MutedBrush}"
+                                       LineHeight="18" Margin="0,5,0,0" AutomationProperties.LiveSetting="Polite" />
+                        </StackPanel>
                         <StackPanel x:Name="ShortcutSettingsPanel" Margin="0,18,0,0" Visibility="Collapsed">
                             <TextBlock Text="ショートカットキー" FontSize="13" Foreground="{StaticResource MutedBrush}" />
                             <DockPanel Margin="0,4,0,0" LastChildFill="True">

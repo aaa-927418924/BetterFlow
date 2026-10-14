@@ -10,6 +10,7 @@ internal sealed class AppSettings
     public string SelectedTextAnswerMode { get; set; } = "opencode";
     public string OpenCodeModelProviderId { get; set; } = "opencode";
     public string OpenCodeModelId { get; set; } = "muse-spark-1.3-contributor-free";
+    public string SpeechRecognitionModelId { get; set; } = AsrService.WhisperLargeV3TurboModelId;
     public List<CorrectionDictionaryEntry> CorrectionDictionary { get; set; } = new();
     public List<DictionaryLearningEvidence> PendingDictionaryLearning { get; set; } = new();
     public List<string> SuppressedAutomaticDictionaryTerms { get; set; } = new();

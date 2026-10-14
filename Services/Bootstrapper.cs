@@ -15,38 +15,51 @@ internal sealed class Bootstrapper
 
     private static readonly HttpClient Client = new() { Timeout = Timeout.InfiniteTimeSpan };
 
-    public async Task EnsureModelAsync(IProgress<SetupProgress> progress, CancellationToken cancellationToken)
+    public async Task EnsureModelAsync(IProgress<SetupProgress> progress, CancellationToken cancellationToken, string modelId)
     {
         AppPaths.EnsureDirectories();
         progress.Report(new SetupProgress("音声モデルのセットアップ状態を確認しています…", 0));
         await using var setupLock = await AcquireSetupLockAsync(cancellationToken);
 
-        if (!IsModelReady())
+        if (modelId == AsrService.WhisperLargeV3TurboModelId)
         {
-            EnsureFreeSpace(1_200_000_000);
-            var setupDirectory = Path.Combine(AppPaths.TemporaryDirectory, "setup-" + Guid.NewGuid().ToString("N"));
-            Directory.CreateDirectory(setupDirectory);
-            try
-            {
-                progress.Report(new SetupProgress("日本語音声モデルをダウンロードしています…", 1));
-                var archivePath = Path.Combine(setupDirectory, "parakeet-ja-int8.tar.bz2");
-                await DownloadVerifiedAsync(ModelUrl, archivePath, ModelArchiveSize, ModelArchiveSha256,
-                    value => progress.Report(new SetupProgress("日本語音声モデルをダウンロードしています…", value * 0.75)), cancellationToken);
-                await Task.Run(() => ExtractModel(archivePath, cancellationToken, progress), cancellationToken);
-                if (!IsModelReady())
-                    throw new InvalidDataException("音声モデルの必要ファイルが見つかりませんでした。");
-            }
-            finally
-            {
-                TryDeleteDirectory(setupDirectory);
-            }
+            await new WhisperAsrSetupService().EnsureReadyAsync(progress, cancellationToken);
+        }
+        else if (modelId == AsrService.ParakeetJapaneseModelId)
+        {
+            await EnsureParakeetModelAsync(progress, cancellationToken);
         }
         else
-        {
-            progress.Report(new SetupProgress("日本語音声モデルを確認しました。", 96));
-        }
+            throw new InvalidDataException("認識モデルの選択が正しくありません。設定からモデルを選び直してください。");
 
         progress.Report(new SetupProgress("音声モデルを起動しています…", 98));
+    }
+
+    private async Task EnsureParakeetModelAsync(IProgress<SetupProgress> progress, CancellationToken cancellationToken)
+    {
+        if (IsParakeetModelReady())
+        {
+            progress.Report(new SetupProgress("Parakeet日本語モデルを確認しました。", 96));
+            return;
+        }
+
+        EnsureFreeSpace(1_200_000_000);
+        var setupDirectory = Path.Combine(AppPaths.TemporaryDirectory, "setup-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(setupDirectory);
+        try
+        {
+            progress.Report(new SetupProgress("Parakeet日本語モデルをダウンロードしています…", 1));
+            var archivePath = Path.Combine(setupDirectory, "parakeet-ja-int8.tar.bz2");
+            await DownloadVerifiedAsync(ModelUrl, archivePath, ModelArchiveSize, ModelArchiveSha256,
+                value => progress.Report(new SetupProgress("Parakeet日本語モデルをダウンロードしています…", value * 0.75)), cancellationToken);
+            await Task.Run(() => ExtractModel(archivePath, cancellationToken, progress), cancellationToken);
+            if (!IsParakeetModelReady())
+                throw new InvalidDataException("Parakeet日本語モデルの必要ファイルが見つかりませんでした。");
+        }
+        finally
+        {
+            TryDeleteDirectory(setupDirectory);
+        }
     }
 
     private static async Task<FileStream> AcquireSetupLockAsync(CancellationToken cancellationToken)
@@ -71,7 +84,12 @@ internal sealed class Bootstrapper
     private static bool IsSharingViolation(IOException exception) =>
         (exception.HResult & 0xFFFF) is 32 or 33;
 
-    public static bool IsModelReady() =>
+    public static bool IsModelReady(string? modelId) =>
+        modelId == AsrService.WhisperLargeV3TurboModelId
+            ? WhisperAsrSetupService.IsReady()
+            : modelId == AsrService.ParakeetJapaneseModelId && IsParakeetModelReady();
+
+    private static bool IsParakeetModelReady() =>
         File.Exists(AppPaths.ModelFile) && new FileInfo(AppPaths.ModelFile).Length > 500_000_000 &&
         File.Exists(AppPaths.TokensFile) && new FileInfo(AppPaths.TokensFile).Length > 100;
 
