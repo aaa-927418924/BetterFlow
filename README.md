@@ -1,6 +1,6 @@
 # Better Flow
 
-Better Flow is a voice dictation and selected-text editing app for Windows x64. It transcribes Japanese speech locally using Whisper Large V3 Turbo by default, then refines the text with a model accessed through OpenCode while preserving your speaking style.
+Better Flow is a voice dictation and selected-text editing app for Windows x64. It transcribes Japanese speech locally using Parakeet 0.6B Japanese by default, with Whisper Large V3 Turbo available as an option, then refines the text with a model accessed through OpenCode while preserving your speaking style.
 
 Simply press Right Alt and speak to enter text. If you select text before activating Better Flow, you can edit the selection or ask questions about it.
 
@@ -11,18 +11,18 @@ Simply press Right Alt and speak to enter text. If you select text before activa
 - **Ask questions about selected text**: Select text on a web page or in an AI response and ask questions such as "Summarize this in three lines." Answers stream into a panel at the bottom of the screen without modifying the original text. You can select and copy the answers.
 - **Custom terminology dictionary**: Manually register correct spellings and example misrecognitions. When you manually correct dictated text and submit it, Better Flow can also automatically register corrections identified as spelling or terminology fixes for the same term.
 - **Undo**: Revert the most recent change using the Undo button shown after an edit or a spoken command during an editing session.
-- **Settings and background operation**: Configure the shortcut, microphone, speech-recognition model, and OpenCode model. You can switch back to Parakeet 0.6B Japanese from the speech-model list. Better Flow supports system tray operation and automatic startup with Windows.
+- **Settings and background operation**: Configure the shortcut, microphone, speech-recognition model, and OpenCode model. Parakeet 0.6B Japanese is the default; Whisper Large V3 Turbo remains available in the speech-model list. Better Flow supports system tray operation and automatic startup with Windows.
 
 Text refinement is always enabled. Better Flow uses the same user profile as OpenCode Desktop and lets you choose models from connected providers. Your model selection persists across restarts. There are no separate API key or base URL fields in Better Flow.
 
 ## First-Time Setup
 
 1. Launch the distributed standalone EXE.
-2. Select **Whisper Large V3 Turbo** (the default) or **Parakeet 0.6B Japanese**, then click **Setup**. Better Flow downloads the selected speech model and, if necessary, the OpenCode CLI.
+2. Select **Parakeet 0.6B Japanese** (the default) or **Whisper Large V3 Turbo**, then click **Setup**. Better Flow downloads the selected speech model and, if necessary, the OpenCode CLI.
 3. If your chosen model requires authentication, sign in through OpenCode, such as OpenCode Desktop.
 4. Once the speech model and OpenCode model are ready, you can start using Better Flow with the keyboard shortcut.
 
-The initial setup requires an internet connection and approximately 1.3 GB of free space for Whisper Large V3 Turbo. Its Sherpa-ONNX INT8 encoder and decoder are stored separately from the existing Parakeet model and verified with SHA-256 checks. The current Windows runtime uses the CPU provider; this Whisper trial reduces the model footprint but does not use GPU VRAM. Choose Parakeet in settings to switch back without replacing the EXE. The models are not bundled with the EXE; the selected model is downloaded during setup.
+The initial setup requires an internet connection and approximately 1.2 GB of free space for Parakeet or 1.3 GB for Whisper Large V3 Turbo. Whisper's Sherpa-ONNX INT8 encoder and decoder are stored separately from the Parakeet model and verified with SHA-256 checks. The current Windows runtime uses the CPU provider; Whisper does not use GPU VRAM. The models are not bundled with the EXE; the selected model is downloaded during setup. You can change the model later in settings.
 
 If OpenCode is already available on your PATH, Better Flow uses that installation first. Otherwise, it installs the official Windows x64 baseline release into the application's data folder. The default model ID is `opencode/muse-spark-1.3-contributor-free`. Available models and authentication requirements depend on OpenCode's offerings.
 
@@ -88,7 +88,7 @@ pwsh -NoProfile -File tools/Generate-Icons.ps1
 
 ## Speech Models and Dependencies
 
-- **Japanese ASR**: The sherpa-onnx INT8 ONNX version of Parakeet TDT-CTC 0.6B JA.
+- **Japanese ASR**: The sherpa-onnx INT8 ONNX version of Parakeet TDT-CTC 0.6B JA by default, with sherpa-onnx INT8 Whisper Large V3 Turbo as an option.
 - **Speech detection**: A Sherpa-ONNX-compatible ONNX version of [Silero VAD](https://github.com/snakers4/silero-vad). The model and its [MIT license notice](Assets/SileroVAD-LICENSE.txt) are included.
 - **Audio input/output**: NAudio.
 - **Model inference**: sherpa-onnx.

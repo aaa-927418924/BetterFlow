@@ -1490,7 +1490,7 @@ public partial class MainWindow : System.Windows.Window
         if (_settings.SpeechRecognitionModelId is AsrService.WhisperLargeV3TurboModelId or AsrService.ParakeetJapaneseModelId)
             return;
 
-        _settings.SpeechRecognitionModelId = AsrService.WhisperLargeV3TurboModelId;
+        _settings.SpeechRecognitionModelId = AsrService.ParakeetJapaneseModelId;
         _settingsStore.Save(_settings);
     }
 
