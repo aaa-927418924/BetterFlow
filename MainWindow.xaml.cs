@@ -1600,7 +1600,7 @@ public partial class MainWindow : System.Windows.Window
             var paste = PasteService.CopyAndPaste(text, _pasteTarget);
             RuntimeStatus.Text = paste == PasteResult.Pasted
                 ? successStatus
-                : successStatus + " 貼り付け先が変わったため、Ctrl+Vで入力してください。";
+                : successStatus + " 自動貼り付けを確認できないため、結果はクリップボードにコピーしました。必要ならCtrl+Vで入力してください。";
         }
         catch (Exception ex)
         {

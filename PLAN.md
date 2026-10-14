@@ -233,3 +233,11 @@
 - 発話確定前に届くGPT Live応答イベントを、音声入力開始イベントから質問文字起こし完了まで内部バッファへ保持する。質問確定時に先行回答があればそれを引き継いで表示し、セッション開始時の未依頼応答は引き続き表示しない。
 - OpenCode/GPT Liveとも次の質問を処理している間は前回答を表示し続け、新しい回答テキストが届いた時点で同じダイアログ内を置き換える。回答ダイアログ右上の閉じるボタンを削除する。
 - Release publish成功（NU1900: NuGet脆弱性フィード接続警告のみ）。`artifacts/publish-question-dialog-stream-fix-20261014/BetterFlow.exe`と`dist/Better Flow.exe`は82,405,780 bytes、SHA-256 `B35CCD60E16DA2FB877B7FC10D6C76B9FE456C7B18C8FD1E02B43F32CCC04544`で一致。更新前EXEは`artifacts/BetterFlow-before-final-question-dialog-stream-fix-20261014.exe`へ退避。実GPT Liveイベント、ホットキー操作、UI表示は未確認。テストスイートは実行していない。
+
+## 選択文編集の置換と連続認識の修正（2026-10-14）
+
+- 変更前チェックポイント: `d3e6842 chore: checkpoint before selection edit fix`。
+- `PasteService`の貼り付け入力を`keybd_event`から`SendInput`のCtrl+Vイベント列へ変更。SelectionEditServiceでは貼り付け前に元の選択範囲を確認し、貼り付け後に置換テキストの選択状態を確認してから編集成功とする。UI Automation要素が編集で再生成された場合は、同じ前面ウィンドウ内の編集可能な入力欄に限定して再選択を試す。
+- 置換を確認できず元の選択範囲が残っている場合は、テキストを成功扱いせずクリップボードへのコピーを案内しつつ連続録音を維持する。置換後の選択状態が確認できた場合は同じ録音セッションで次の発話を受け付ける。
+- Release build/publish成功。NuGet脆弱性フィードへの接続に関する`NU1900`警告のみ。`artifacts/publish-selection-edit-replace-continue-20261014/BetterFlow.exe`と`dist/Better Flow.exe`は82,406,518 bytes、SHA-256 `9304809875C31B6BB8F359BDC74855E51F2C4183AA25F4D829E0AD35C915BB83`で一致。更新前EXEは`artifacts/BetterFlow-before-selection-edit-replace-continue-20261014.exe`に保存し、フルパスが一致するPID 33140を停止して更新した。
+- 実マイク、OpenCode応答、対象アプリでの置換・連続発話は未確認。テストスイートは実行していない。
