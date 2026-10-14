@@ -332,8 +332,9 @@ internal sealed class AutoDictionaryLearningMonitor : IDisposable
                             : !observedClearedText
                                 ? "field-retained-text"
                                 : "inconsistent-editor-state";
+                    var providerState = DescribeTextProviders(textPattern, valuePattern, textBeforeSubmit);
                     ReportStatus("submission_not_confirmed", "送信後の入力欄の変化を確認できず、登録を見送りました。",
-                        reason, confirmationReadCount + confirmationReadFailureCount);
+                        $"{reason};{providerState}", confirmationReadCount + confirmationReadFailureCount);
                 }
             }
         }
@@ -523,6 +524,38 @@ internal sealed class AutoDictionaryLearningMonitor : IDisposable
             return true;
         }
         catch (Exception ex) when (IsAutomationFailure(ex) || ex is ObjectDisposedException) { return false; }
+    }
+
+    private static string DescribeTextProviders(
+        TextPattern? textPattern,
+        ValuePattern? valuePattern,
+        string beforeSubmit)
+    {
+        var valueState = valuePattern is null
+            ? "unavailable"
+            : DescribeTextProvider(() => valuePattern.Current.Value ?? string.Empty, beforeSubmit);
+        var textState = textPattern is null
+            ? "unavailable"
+            : DescribeTextProvider(
+                () => textPattern.DocumentRange.GetText(MaxDocumentLength + 1), beforeSubmit);
+
+        return $"baseline-length={beforeSubmit.Length};value-pattern={valueState};text-pattern={textState}";
+    }
+
+    private static string DescribeTextProvider(Func<string> read, string beforeSubmit)
+    {
+        try
+        {
+            var current = NormalizeLineEndings(read());
+            if (string.IsNullOrWhiteSpace(current)) return $"empty:length={current.Length}";
+            return string.Equals(current, beforeSubmit, StringComparison.Ordinal)
+                ? $"unchanged:length={current.Length}"
+                : $"changed:length={current.Length}";
+        }
+        catch (Exception ex) when (IsAutomationFailure(ex) || ex is ObjectDisposedException)
+        {
+            return "unreadable";
+        }
     }
 
     private static bool IsWithinWindow(AutomationElement element, IntPtr targetWindow)

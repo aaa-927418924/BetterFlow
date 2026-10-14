@@ -824,6 +824,7 @@ public partial class MainWindow : System.Windows.Window
                 CorrectionDictionaryStatus.Text = addedCount == 1
                     ? "送信した修正から正しい表記を1件登録しました。"
                     : $"送信した修正から正しい表記を{addedCount}件登録しました。";
+                ShowDictionarySavedIndicator();
             }
             else
             {
@@ -987,6 +988,7 @@ public partial class MainWindow : System.Windows.Window
 
         if (!PersistCorrectionDictionary(previous, existing is null ? "辞書に登録しました。" : "辞書を更新しました。"))
             return;
+        if (existing is null) ShowDictionarySavedIndicator();
         DictionaryPreferredSpellingBox.Clear();
     }
 
@@ -1019,6 +1021,9 @@ public partial class MainWindow : System.Windows.Window
             return false;
         }
     }
+
+    private void ShowDictionarySavedIndicator() =>
+        _indicator.ShowStatus("辞書に登録しました", TimeSpan.FromSeconds(1.5));
 
     private List<CorrectionDictionaryEntry> CloneCorrectionDictionary() => _settings.CorrectionDictionary
         .Select(entry => new CorrectionDictionaryEntry
