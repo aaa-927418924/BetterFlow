@@ -118,16 +118,28 @@
                                          VerticalContentAlignment="Center"
                                          AutomationProperties.Name="辞書に登録する正しい表記" />
                             </Border>
-                            <TextBlock Text="誤認識・別表記（任意。複数は「、」区切り）"
-                                       FontSize="12" Foreground="{StaticResource MutedBrush}" Margin="0,8,0,4" />
-                            <Border Background="#333333" BorderBrush="#686868" BorderThickness="1"
-                                    CornerRadius="10" Height="42" Padding="10,4">
-                                <TextBox x:Name="DictionaryAlternativesBox" BorderThickness="0"
-                                         Background="Transparent" Foreground="#F4F4F4"
-                                         FontFamily="Yu Gothic UI" FontSize="13" MaxLength="400"
-                                         VerticalContentAlignment="Center"
-                                         AutomationProperties.Name="辞書に登録する誤認識・別表記" />
-                            </Border>
+                            <DockPanel Margin="0,8,0,0" LastChildFill="True">
+                                <ToggleButton x:Name="AutoDictionaryLearningToggle" DockPanel.Dock="Right"
+                                              Style="{StaticResource ModeToggleStyle}"
+                                              Click="AutoDictionaryLearningToggle_Click"
+                                              AutomationProperties.Name="送信した修正から正しい表記を自動登録" />
+                                <StackPanel VerticalAlignment="Center" Margin="0,0,12,0">
+                                    <TextBlock Text="修正した表記を自動登録" FontSize="13" />
+                                    <TextBlock x:Name="AutoDictionaryLearningDescription"
+                                               Text="送信後に、修正した正しい表記を辞書へ追加します。"
+                                               FontSize="11" Foreground="{StaticResource MutedBrush}" />
+                                </StackPanel>
+                            </DockPanel>
+                            <TextBlock Text="判定方法" FontSize="12" Foreground="{StaticResource MutedBrush}" Margin="0,8,0,4" />
+                            <ComboBox x:Name="DictionaryLearningModeCombo" IsEditable="False" MinHeight="40"
+                                      Background="#333333" Foreground="#F4F4F4" BorderBrush="#686868"
+                                      FontFamily="Yu Gothic UI" FontSize="13"
+                                      Style="{StaticResource DarkComboBoxStyle}"
+                                      SelectionChanged="DictionaryLearningModeCombo_SelectionChanged"
+                                      AutomationProperties.Name="自動辞書登録の判定方法">
+                                <ComboBoxItem Content="精度優先（選択中のOpenCodeモデルで判定）" Tag="precision" />
+                                <ComboBoxItem Content="速度優先（ローカルで明確な単語だけ）" Tag="speed" />
+                            </ComboBox>
                             <Button Content="単語を登録" Height="38" HorizontalAlignment="Right"
                                     MinWidth="112" Padding="12,0" Margin="0,8,0,0"
                                     Style="{StaticResource SecondaryButtonStyle}"

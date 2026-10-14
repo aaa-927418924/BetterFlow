@@ -327,7 +327,7 @@
 - AIには辞書項目を表記補正データとして扱わせ、登録済み別表記を文脈に応じて正式表記に寄せる。辞書にない固有名詞は推測で別名に置き換えず、発話にない事実・説明も追加しないよう指示する。自動学習による誤った語の定着を避けるため、辞書への追加自体は手動登録とする。
 - Release build/publish成功（0エラー）。NuGet脆弱性フィード接続警告（NU1900）あり。win-x64自己完結型単体EXEの発行物とdist/Better Flow.exeは82,421,379 bytes、SHA-256 541D1133CC089DDC0131591E597AA4E6937FB36D9726ACC60E049ACA5FB62066で一致。更新前EXEはartifacts/BetterFlow-before-correction-dictionary-20261014.exeへ退避し、実行パスが一致したPID 41948を終了。実マイク認識とモデルが登録語を正しく補正するかは未確認。
 
-## 送信時の手修正から用語辞書へ自動登録する計画（2026-10-14、未実装）
+## 送信時の手修正から用語辞書へ自動登録（2026-10-14、実装完了）
 
 - ユーザー要件: 通常音声入力で貼り付けた文章を手で修正して送信した際、修正した用語の**正しい表記だけ**を既存辞書へ自動登録する。誤表記・別表記は保存せず、辞書の内部データとAI整形プロンプトにも含めない。設定画面から「誤認識・別表記」入力を削除する。精度・遅延に問題が出た場合すぐ切り替えられるよう、自動学習と判定方式を設定から変えられるようにする。
 - 変更前チェックポイント: 当初の計画用に`9e3ee46 chore: checkpoint before automatic dictionary learning`、初版計画を`0aa5a2f docs: plan dictionary learning from submitted corrections`として保存。実装前には改訂計画のコミット後、別途ソース変更直前のチェックポイントを作成する。
@@ -365,3 +365,13 @@
 - UIAのイベント登録・解除と操作は専用MTAスレッドへ集約する: https://learn.microsoft.com/en-us/windows/win32/winauto/uiauto-threading
 - TextPatternの本文変更イベント: https://learn.microsoft.com/en-us/dotnet/api/system.windows.automation.textpattern.textchangedevent
 - 低レベルキーボードフックは短時間で復帰し、入力を次のフックへ渡す: https://learn.microsoft.com/en-us/previous-versions/windows/desktop/legacy/ms644985(v=vs.85)
+
+### 実装結果
+
+- 自動学習は既定ON、判定方式は既定で精度優先。設定のスイッチで機能全体を止められ、速度優先へ切り替えると追加のOpenCode判定を使わずローカルの限定候補だけを登録する。
+- 音声入力文の貼り付け後、対象ウィンドウの編集欄だけをメモリ上で追跡する。Enter/Ctrl+Enterまたは関連する送信ボタンの操作と、送信後の欄の変化が確認できた場合に限り差分を調べる。曖昧な入力欄、選択文モード、音声送信コマンド、送信未確認の場合は登録しない。
+- 設定モデルと整形プロンプトから別表記欄・旧表記データを除去。既存設定の`PreferredSpelling`は保持し、旧`Alternatives`プロパティの値は読まず、次回保存で項目ごと取り除く。辞書に保存・利用するのは送信された訂正後の正しい表記だけ。
+- 差分判定は訂正後の語句だけを保存候補にする。速度優先の候補判定は限定的で、曖昧な日本語訂正を見送る場合がある。精度優先では修正送信に最大1回の一括OpenCode判定を行い、再試行なし・最大2回/分に制限。次の録音開始時は保留中の判定をキャンセルする。
+- コミット: 計画改訂`885c543`、実装直前チェックポイント`d2a6b38`。実装コミットはこの結果記録を含む。
+- Release buildとwin-x64 self-contained publish成功（0エラー、NU1900はNuGet脆弱性フィード接続警告）。発行物と`dist/Better Flow.exe`は82,431,195 bytes、SHA-256 `3028E88D5FF3034B5D72F822D6BC58FE72525DBFC316E2658FB4EEC5CB488532`で一致。更新前EXEは`artifacts/BetterFlow-before-canonical-dictionary-learning-20261014.exe`へ退避。更新時に実行パスが一致するアプリプロセスのみを停止。
+- 実行時のCodex/Chrome入力欄UI Automation・送信検知、実マイク、OpenCode候補精度と遅延は未確認。テストスイートは実行していない。

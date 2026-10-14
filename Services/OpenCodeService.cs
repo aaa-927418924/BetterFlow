@@ -121,6 +121,41 @@ internal sealed class OpenCodeService : IDisposable
         GenerateTextAsync(providerId, modelId, TranscriptRewritePrompt.SystemMessage,
             TranscriptRewritePrompt.CreateUserMessage(transcript, dictionary), cancellationToken);
 
+    public async Task<IReadOnlyList<int>> ReviewDictionaryCorrectionsAsync(
+        IReadOnlyList<DictionaryTermChange> changes,
+        string providerId,
+        string modelId,
+        CancellationToken cancellationToken = default)
+    {
+        if (changes.Count == 0) return Array.Empty<int>();
+        var candidates = changes.Take(20).Select((change, index) => new
+        {
+            index,
+            before = change.PreviousText,
+            after = change.CorrectSpelling
+        }).ToArray();
+        const string systemMessage = "あなたは、ユーザーが送信前に直した音声入力から、再利用できる用語の表記訂正だけを判定します。候補はbeforeとafterの両方がユーザー本文に実在する変更です。固有名詞・製品名・専門用語・綴りの訂正だと高い確信がある候補だけ承認し、文章の意味変更、数値・日付・意図・文体の変更、単なる追加削除は承認しないでください。辞書へ保存するのはafter側の正しい表記だけです。before側の誤表記を辞書へ保存する提案は決してしないでください。候補にない文字列を作らないでください。出力はJSONオブジェクトだけにし、形式は{\"approved\":[{\"index\":0,\"confidence\":0.95}]}です。確信できない場合はapprovedを空配列にしてください。";
+        var userMessage = "次の候補を確認し、繰り返し使う用語の表記訂正だと判断できるものだけ承認してください。JSONのbefore/afterは判定専用の一時データです。\n" +
+                          JsonSerializer.Serialize(new { changes = candidates }, ContextJsonOptions);
+        var response = await GenerateTextAsync(providerId, modelId, systemMessage, userMessage, cancellationToken);
+        using var document = JsonDocument.Parse(ExtractJsonObject(response));
+        if (!document.RootElement.TryGetProperty("approved", out var approved) ||
+            approved.ValueKind != JsonValueKind.Array)
+            return Array.Empty<int>();
+
+        var result = new HashSet<int>();
+        foreach (var item in approved.EnumerateArray())
+        {
+            if (!item.TryGetProperty("index", out var indexElement) || !indexElement.TryGetInt32(out var index) ||
+                index < 0 || index >= candidates.Length ||
+                !item.TryGetProperty("confidence", out var confidenceElement) ||
+                !confidenceElement.TryGetDouble(out var confidence) || confidence < 0.9 || confidence > 1.0)
+                continue;
+            result.Add(index);
+        }
+        return result.Order().ToArray();
+    }
+
     public Task<string> EditSelectedTextAsync(string selectedText, string instruction, string providerId, string modelId,
         CancellationToken cancellationToken = default) =>
         GenerateTextAsync(providerId, modelId, SelectionEditPrompt.SystemMessage,

@@ -47,6 +47,10 @@ public partial class MainWindow : System.Windows.Window
     private CancellationTokenSource? _transcriptPreviewCancellation;
     private Task? _transcriptPreviewTask;
     private long _transcriptPreviewSession;
+    private AutoDictionaryLearningMonitor? _autoDictionaryLearningMonitor;
+    private CancellationTokenSource? _dictionaryLearningCancellation;
+    private readonly Queue<DateTimeOffset> _dictionaryReviewRequests = new();
+    private readonly object _dictionaryReviewRequestLock = new();
     private CancellationTokenSource? _selectedTextQuestionCancellation;
     private GptLiveQuestionSession? _gptLiveQuestionSession;
     private readonly List<(string Question, string Answer)> _selectedTextQuestionHistory = new();
@@ -91,6 +95,7 @@ public partial class MainWindow : System.Windows.Window
         NormalizeAiSettings();
         InitializeOpenCodeModelUi();
         RefreshCorrectionDictionaryItems();
+        InitializeDictionaryLearningUi();
         InitializeSelectedTextAnswerModeUi();
         InitializeMicrophoneDeviceUi();
         InitializeTrayIcon();
@@ -382,6 +387,7 @@ public partial class MainWindow : System.Windows.Window
             ? System.Windows.Visibility.Visible
             : System.Windows.Visibility.Collapsed;
         CorrectionDictionarySettingsPanel.IsEnabled = _asr is not null && !_isBusy && !IsAnyRecording;
+        UpdateDictionaryLearningUi();
         UpdateSelectedTextAnswerModeDisplay();
     }
 
@@ -547,12 +553,23 @@ public partial class MainWindow : System.Windows.Window
             shouldSaveSettings = true;
         }
 
+        if (_settings.DictionaryLearningMode is not ("precision" or "speed"))
+        {
+            _settings.DictionaryLearningMode = "precision";
+            shouldSaveSettings = true;
+        }
+
+        if (_settings.LegacyDictionaryAlternativesPresent)
+        {
+            _settings.LegacyDictionaryAlternativesPresent = false;
+            shouldSaveSettings = true;
+        }
+
         _settings.CorrectionDictionary = (_settings.CorrectionDictionary ?? new List<CorrectionDictionaryEntry>())
             .Where(entry => entry is not null)
             .Select(entry => new CorrectionDictionaryEntry
             {
-                PreferredSpelling = CleanDictionaryField(entry.PreferredSpelling, 100),
-                Alternatives = NormalizeDictionaryAlternatives(entry.Alternatives)
+                PreferredSpelling = CleanDictionaryField(entry.PreferredSpelling, 100)
             })
             .Where(entry => !string.IsNullOrWhiteSpace(entry.PreferredSpelling))
             .GroupBy(entry => entry.PreferredSpelling, StringComparer.OrdinalIgnoreCase)
@@ -657,12 +674,212 @@ public partial class MainWindow : System.Windows.Window
         CorrectionDictionaryItems.ItemsSource = _settings.CorrectionDictionary.ToArray();
     }
 
+    private bool _loadingDictionaryLearningUi;
+
+    private void InitializeDictionaryLearningUi()
+    {
+        _loadingDictionaryLearningUi = true;
+        try
+        {
+            AutoDictionaryLearningToggle.IsChecked = _settings.AutoLearnDictionaryEnabled;
+            DictionaryLearningModeCombo.SelectedItem = DictionaryLearningModeCombo.Items
+                .OfType<System.Windows.Controls.ComboBoxItem>()
+                .FirstOrDefault(item => string.Equals(item.Tag as string, _settings.DictionaryLearningMode,
+                    StringComparison.Ordinal));
+        }
+        finally { _loadingDictionaryLearningUi = false; }
+        UpdateDictionaryLearningUi();
+    }
+
+    private void UpdateDictionaryLearningUi()
+    {
+        AutoDictionaryLearningToggle.IsChecked = _settings.AutoLearnDictionaryEnabled;
+        AutoDictionaryLearningToggle.IsEnabled = _asr is not null && !_isBusy && !IsAnyRecording;
+        DictionaryLearningModeCombo.IsEnabled = _asr is not null && _settings.AutoLearnDictionaryEnabled &&
+                                                !_isBusy && !IsAnyRecording;
+        AutoDictionaryLearningDescription.Text = !_settings.AutoLearnDictionaryEnabled
+            ? "自動登録はオフです。"
+            : _settings.DictionaryLearningMode == "speed"
+                ? "ローカルで確実に分かる単語だけを登録します。"
+                : _settings.AiModeEnabled && _openCodeReady
+                    ? "修正がある送信だけ、選択モデルで候補を判定します。"
+                    : "AIモードOFFまたはモデル未準備時はローカル判定になります。";
+    }
+
+    private void StartAutoDictionaryLearningMonitor(string pastedText)
+    {
+        _autoDictionaryLearningMonitor?.Dispose();
+        _autoDictionaryLearningMonitor = AutoDictionaryLearningMonitor.TryStart(_pasteTarget, pastedText);
+        if (_autoDictionaryLearningMonitor is not null)
+            _autoDictionaryLearningMonitor.SubmissionConfirmed += AutoDictionaryLearningMonitor_SubmissionConfirmed;
+    }
+
+    private void AutoDictionaryLearningMonitor_SubmissionConfirmed(
+        object? sender,
+        DictionaryCorrectionSubmission submission)
+    {
+        Dispatcher.BeginInvoke(new Action(() =>
+        {
+            if (sender is AutoDictionaryLearningMonitor monitor)
+            {
+                monitor.SubmissionConfirmed -= AutoDictionaryLearningMonitor_SubmissionConfirmed;
+                if (ReferenceEquals(_autoDictionaryLearningMonitor, monitor))
+                    _autoDictionaryLearningMonitor = null;
+                monitor.Dispose();
+            }
+            if (!_closing) _ = LearnDictionaryCorrectionAsync(submission);
+        }));
+    }
+
+    private async Task LearnDictionaryCorrectionAsync(DictionaryCorrectionSubmission submission)
+    {
+        if (!_settings.AutoLearnDictionaryEnabled || _closing) return;
+        var changes = DictionaryCorrectionCandidates.ExtractChanges(
+            submission.OriginalText, submission.CorrectedText);
+        if (changes.Count == 0) return;
+
+        var cancellation = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token);
+        var previousCancellation = _dictionaryLearningCancellation;
+        _dictionaryLearningCancellation = cancellation;
+        previousCancellation?.Cancel();
+        try
+        {
+            IReadOnlyList<string> approvedTerms;
+            var canUseModel = _settings.DictionaryLearningMode == "precision" &&
+                              _settings.AiModeEnabled && _openCodeReady && _openCode.IsRunning;
+            if (canUseModel)
+            {
+                if (!TryReserveDictionaryReviewRequest()) return;
+                var indexes = await _openCode.ReviewDictionaryCorrectionsAsync(
+                    changes, _settings.OpenCodeModelProviderId, _settings.OpenCodeModelId, cancellation.Token);
+                approvedTerms = indexes
+                    .Where(index => index >= 0 && index < changes.Count)
+                    .Select(index => changes[index].CorrectSpelling)
+                    .ToArray();
+            }
+            else
+            {
+                approvedTerms = DictionaryCorrectionCandidates.SelectFastCandidates(changes);
+            }
+
+            cancellation.Token.ThrowIfCancellationRequested();
+            var addedCount = AddLearnedDictionaryTerms(approvedTerms);
+            if (addedCount > 0)
+                CorrectionDictionaryStatus.Text = addedCount == 1
+                    ? "送信した修正から正しい表記を1件登録しました。"
+                    : $"送信した修正から正しい表記を{addedCount}件登録しました。";
+        }
+        catch (OperationCanceledException) when (cancellation.IsCancellationRequested) { }
+        catch (Exception)
+        {
+            // Dictionary learning is best-effort and must not affect voice entry or sending.
+        }
+        finally
+        {
+            if (ReferenceEquals(_dictionaryLearningCancellation, cancellation))
+                _dictionaryLearningCancellation = null;
+            cancellation.Dispose();
+        }
+    }
+
+    private bool TryReserveDictionaryReviewRequest()
+    {
+        lock (_dictionaryReviewRequestLock)
+        {
+            var now = DateTimeOffset.UtcNow;
+            while (_dictionaryReviewRequests.Count > 0 &&
+                   now - _dictionaryReviewRequests.Peek() >= TimeSpan.FromMinutes(1))
+                _dictionaryReviewRequests.Dequeue();
+            if (_dictionaryReviewRequests.Count >= 2) return false;
+            _dictionaryReviewRequests.Enqueue(now);
+            return true;
+        }
+    }
+
+    private int AddLearnedDictionaryTerms(IEnumerable<string> terms)
+    {
+        if (!_settings.AutoLearnDictionaryEnabled) return 0;
+        var candidates = terms.Select(term => CleanDictionaryField(term, 100))
+            .Where(term => term.Length >= 2 && term.Any(char.IsLetterOrDigit))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Where(term => !_settings.CorrectionDictionary.Any(entry =>
+                string.Equals(entry.PreferredSpelling, term, StringComparison.OrdinalIgnoreCase)))
+            .Take(Math.Max(0, 100 - _settings.CorrectionDictionary.Count))
+            .ToArray();
+        if (candidates.Length == 0) return 0;
+
+        var previous = CloneCorrectionDictionary();
+        _settings.CorrectionDictionary.AddRange(candidates.Select(term =>
+            new CorrectionDictionaryEntry { PreferredSpelling = term }));
+        try
+        {
+            _settingsStore.Save(_settings);
+            RefreshCorrectionDictionaryItems();
+            return candidates.Length;
+        }
+        catch
+        {
+            _settings.CorrectionDictionary = previous;
+            RefreshCorrectionDictionaryItems();
+            return 0;
+        }
+    }
+
+    private void AutoDictionaryLearningToggle_Click(object sender, System.Windows.RoutedEventArgs e)
+    {
+        if (_loadingDictionaryLearningUi) return;
+        var previous = _settings.AutoLearnDictionaryEnabled;
+        _settings.AutoLearnDictionaryEnabled = AutoDictionaryLearningToggle.IsChecked == true;
+        try
+        {
+            _settingsStore.Save(_settings);
+            CorrectionDictionaryStatus.Text = _settings.AutoLearnDictionaryEnabled
+                ? "正しい表記の自動登録をオンにしました。"
+                : "自動登録を停止しました。";
+        }
+        catch (Exception ex)
+        {
+            _settings.AutoLearnDictionaryEnabled = previous;
+            AutoDictionaryLearningToggle.IsChecked = previous;
+            CorrectionDictionaryStatus.Text = "設定を保存できませんでした。 " + ex.Message;
+        }
+        UpdateDictionaryLearningUi();
+    }
+
+    private void DictionaryLearningModeCombo_SelectionChanged(object sender,
+        System.Windows.Controls.SelectionChangedEventArgs e)
+    {
+        if (_loadingDictionaryLearningUi || DictionaryLearningModeCombo.SelectedItem is not
+            System.Windows.Controls.ComboBoxItem item || item.Tag is not string mode || mode is not ("precision" or "speed"))
+            return;
+
+        var previous = _settings.DictionaryLearningMode;
+        _settings.DictionaryLearningMode = mode;
+        try
+        {
+            _settingsStore.Save(_settings);
+            CorrectionDictionaryStatus.Text = mode == "speed"
+                ? "速度優先の判定を保存しました。"
+                : "精度優先の判定を保存しました。";
+        }
+        catch (Exception ex)
+        {
+            _settings.DictionaryLearningMode = previous;
+            _loadingDictionaryLearningUi = true;
+            DictionaryLearningModeCombo.SelectedItem = DictionaryLearningModeCombo.Items
+                .OfType<System.Windows.Controls.ComboBoxItem>()
+                .FirstOrDefault(candidate => string.Equals(candidate.Tag as string, previous, StringComparison.Ordinal));
+            _loadingDictionaryLearningUi = false;
+            CorrectionDictionaryStatus.Text = "判定方法を保存できませんでした。 " + ex.Message;
+        }
+        UpdateDictionaryLearningUi();
+    }
+
     private void AddCorrectionDictionaryEntry_Click(object sender, System.Windows.RoutedEventArgs e)
     {
         if (_isBusy || IsAnyRecording) return;
 
         var preferred = CleanDictionaryField(DictionaryPreferredSpellingBox.Text, 100);
-        var alternatives = NormalizeDictionaryAlternatives(DictionaryAlternativesBox.Text);
         if (preferred.Length == 0)
         {
             CorrectionDictionaryStatus.Text = "正しい表記を入力してください。";
@@ -682,18 +899,13 @@ public partial class MainWindow : System.Windows.Window
         {
             _settings.CorrectionDictionary.Add(new CorrectionDictionaryEntry
             {
-                PreferredSpelling = preferred,
-                Alternatives = alternatives
+                PreferredSpelling = preferred
             });
         }
         else
         {
-            existing.PreferredSpelling = preferred;
-            existing.Alternatives = NormalizeDictionaryAlternatives(
-                string.Join('、', new[] { existing.Alternatives, alternatives }.Where(value => value.Length > 0)));
             if (previous.Any(entry => string.Equals(entry.PreferredSpelling, existing.PreferredSpelling,
-                    StringComparison.Ordinal) &&
-                string.Equals(entry.Alternatives, existing.Alternatives, StringComparison.Ordinal)))
+                    StringComparison.Ordinal)))
             {
                 CorrectionDictionaryStatus.Text = "この単語はすでに登録されています。";
                 return;
@@ -703,7 +915,6 @@ public partial class MainWindow : System.Windows.Window
         if (!PersistCorrectionDictionary(previous, existing is null ? "辞書に登録しました。" : "辞書を更新しました。"))
             return;
         DictionaryPreferredSpellingBox.Clear();
-        DictionaryAlternativesBox.Clear();
     }
 
     private void RemoveCorrectionDictionaryEntry_Click(object sender, System.Windows.RoutedEventArgs e)
@@ -739,23 +950,9 @@ public partial class MainWindow : System.Windows.Window
     private List<CorrectionDictionaryEntry> CloneCorrectionDictionary() => _settings.CorrectionDictionary
         .Select(entry => new CorrectionDictionaryEntry
         {
-            PreferredSpelling = entry.PreferredSpelling,
-            Alternatives = entry.Alternatives
+            PreferredSpelling = entry.PreferredSpelling
         })
         .ToList();
-
-    private static string NormalizeDictionaryAlternatives(string? value)
-    {
-        var normalized = CleanDictionaryField(value, 400)
-            .Replace("\r", "、", StringComparison.Ordinal)
-            .Replace("\n", "、", StringComparison.Ordinal);
-        var alternatives = normalized
-            .Split(['、', ',', '，', ';', '；'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-            .Where(part => part.Length > 0)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .Take(12);
-        return string.Join('、', alternatives);
-    }
 
     private static string CleanDictionaryField(string? value, int maxLength)
     {
@@ -927,6 +1124,8 @@ public partial class MainWindow : System.Windows.Window
 
     private async Task RecordButton_Click()
     {
+        _dictionaryLearningCancellation?.Cancel();
+
         if (_selectedTextQuestionSessionActive)
         {
             await StopSelectedTextQuestionSessionAsync();
@@ -1827,6 +2026,8 @@ public partial class MainWindow : System.Windows.Window
 
             cancellationToken.ThrowIfCancellationRequested();
             var pasted = PasteAndShow(text, resultStatus);
+            if (pasted && !sendAfterPaste && _settings.AutoLearnDictionaryEnabled)
+                StartAutoDictionaryLearningMonitor(text);
             if (sendCommandMonitorUnavailable)
                 RuntimeStatus.Text += " 音声の送信指示を待機できなかったため、Enterは送信していません。";
             if (sendAfterPaste)
@@ -2263,6 +2464,8 @@ public partial class MainWindow : System.Windows.Window
         _closing = true;
         _lifetime.Cancel();
         CancelTranscriptPreview();
+        _autoDictionaryLearningMonitor?.Dispose();
+        _dictionaryLearningCancellation?.Cancel();
         _selectionEditCancellation?.Cancel();
         _selectedTextQuestionCancellation?.Cancel();
         SystemEvents.SessionEnding -= SystemEvents_SessionEnding;

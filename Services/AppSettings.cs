@@ -11,6 +11,11 @@ internal sealed class AppSettings
     public string OpenCodeModelProviderId { get; set; } = "opencode";
     public string OpenCodeModelId { get; set; } = "muse-spark-1.3-contributor-free";
     public List<CorrectionDictionaryEntry> CorrectionDictionary { get; set; } = new();
+    public bool AutoLearnDictionaryEnabled { get; set; } = true;
+    public string DictionaryLearningMode { get; set; } = "precision";
+
+    [JsonIgnore]
+    public bool LegacyDictionaryAlternativesPresent { get; set; }
     public string MicrophoneDeviceId { get; set; } = AudioInputDeviceOption.SystemDefaultId;
     public uint ShortcutModifiers { get; set; }
     public uint ShortcutVirtualKey { get; set; } = HotkeyBinding.RightAltVirtualKey;
@@ -27,12 +32,9 @@ internal sealed class AppSettings
 internal sealed class CorrectionDictionaryEntry
 {
     public string PreferredSpelling { get; set; } = string.Empty;
-    public string Alternatives { get; set; } = string.Empty;
 
     [JsonIgnore]
-    public string Summary => string.IsNullOrWhiteSpace(Alternatives)
-        ? PreferredSpelling
-        : $"{PreferredSpelling}  ←  {Alternatives}";
+    public string Summary => PreferredSpelling;
 }
 
 internal sealed class SettingsStore
@@ -44,8 +46,14 @@ internal sealed class SettingsStore
             if (!File.Exists(AppPaths.SettingsFile))
                 return new AppSettings();
 
-            return System.Text.Json.JsonSerializer.Deserialize<AppSettings>(
-                       File.ReadAllText(AppPaths.SettingsFile)) ?? new AppSettings();
+            var json = File.ReadAllText(AppPaths.SettingsFile);
+            var settings = System.Text.Json.JsonSerializer.Deserialize<AppSettings>(json) ?? new AppSettings();
+            using var document = System.Text.Json.JsonDocument.Parse(json);
+            settings.LegacyDictionaryAlternativesPresent = document.RootElement.TryGetProperty(
+                "CorrectionDictionary", out var dictionary) && dictionary.ValueKind == System.Text.Json.JsonValueKind.Array &&
+                dictionary.EnumerateArray().Any(entry => entry.ValueKind == System.Text.Json.JsonValueKind.Object &&
+                    entry.TryGetProperty("Alternatives", out _));
+            return settings;
         }
         catch
         {
