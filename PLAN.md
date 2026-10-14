@@ -273,3 +273,10 @@
 - 診断: `selection-edit-diagnostics.jsonl`へ選択内容・音声を保存せず、段階、UIA要素種別/フォーカス属性、選択状態、SendInput件数、Win32エラー番号だけを記録する。ログは128KBでクリアして上限を保つ。
 - 合成テスト: WPF TextBoxで選択をいったん解除したあと、固定文を2回連続置換。本文と各置換後の全選択を確認し成功。WebView2 textareaでも初回・連続置換の両方で本文と選択範囲を確認し成功。実際のCodex/Chrome画面、マイク入力、OpenCode生成は未確認。
 - Release build/publish成功。NuGet脆弱性フィードへ接続できない`NU1900`警告のみ。`artifacts/publish-selection-range-final-20261014/BetterFlow.exe`と`dist/Better Flow.exe`は82,411,974 bytes、SHA-256 `791E70EDF77822C903D79EA1A08DCEEF78879B9E3FDA65CBF19CF91B01A141F0`で一致。変更前EXEを`artifacts/BetterFlow-before-selection-range-fix-20261014.exe`、最終ビルド直前の中間EXEを`artifacts/BetterFlow-before-caret-relative-reselection-20261014.exe`へ保存。配布EXEのプロセスは実パスを確認して停止した。
+
+## 質問モード回答の選択・コピー対応（チェックポイント、2026-10-14）
+
+- 要件: 質問モードの回答全文をユーザーが選択し、通常のコピー操作でテキストとしてコピーできるようにする。回答内容は編集不可にする。
+- 調査: AnswerWindow.xamlは回答をTextBlockで描画し、回答ウィンドウにはWS_EX_NOACTIVATEを設定している。TextBlockはテキスト範囲の選択に対応せず、現状のウィンドウ設定も入力フォーカスを取れない。
+- 実装方針: 回答表示を読み取り専用かつ折り返し可能な選択テキストコントロールへ変更し、回答ウィンドウは表示時に背面アプリのフォーカスを奪わず、ユーザーがクリックした際は選択・コピー操作が可能な設定にする。回答ストリーミング、スクロール、表示タイミングは維持する。
+- このチェックポイントはソース変更前の状態を記録する。
