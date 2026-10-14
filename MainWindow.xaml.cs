@@ -725,11 +725,16 @@ public partial class MainWindow : System.Windows.Window
         CorrectionDictionaryStatus.Text = "音声入力した文章を送信するまで監視しています。";
     }
 
-    private void AutoDictionaryLearningMonitor_StatusChanged(string message)
+    private void AutoDictionaryLearningMonitor_StatusChanged(
+        object? sender,
+        DictionaryLearningStatusUpdate update)
     {
         Dispatcher.BeginInvoke(new Action(() =>
         {
-            if (!_closing) CorrectionDictionaryStatus.Text = message;
+            if (!_closing && sender is AutoDictionaryLearningMonitor monitor &&
+                ReferenceEquals(_autoDictionaryLearningMonitor, monitor) &&
+                string.Equals(update.MonitorId, monitor.MonitorId, StringComparison.Ordinal))
+                CorrectionDictionaryStatus.Text = update.Message;
         }));
     }
 

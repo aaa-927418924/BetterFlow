@@ -1,6 +1,8 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
+using System.Security.Cryptography;
+using System.Text;
 using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Automation.Text;
@@ -12,6 +14,8 @@ internal sealed record DictionaryCorrectionSubmission(
     string CorrectedText,
     string MonitorId,
     long CandidateId);
+
+internal sealed record DictionaryLearningStatusUpdate(string MonitorId, string Message);
 
 internal sealed class AutoDictionaryLearningMonitor : IDisposable
 {
@@ -30,7 +34,10 @@ internal sealed class AutoDictionaryLearningMonitor : IDisposable
     private const int SnapshotFreshnessMs = 1_500;
     private const int RecentPreClearSnapshotMs = 500;
     private const int TrackedEditorFocusFreshnessMs = 1_000;
+    private const int SubmissionRecoveryWindowMs = 8_000;
     private const int MaxPlaceholderLength = 128;
+    private const int MaxAutomationSearchNodes = 2_000;
+    private const int MaxAutomationTreeDepth = 32;
 
     private static readonly HashSet<string> KnownComposerPlaceholders = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -54,12 +61,14 @@ internal sealed class AutoDictionaryLearningMonitor : IDisposable
     };
 
     private readonly IntPtr _targetWindow;
+    private readonly int _targetProcessId;
     private readonly string _pastedText;
     private readonly CancellationTokenSource _cancellation = new();
     private readonly CancellationToken _token;
-    private readonly SemaphoreSlim _submitSignal = new(0, 1);
+    private readonly SemaphoreSlim _monitorWakeSignal = new(0, 1);
     private readonly object _snapshotLock = new();
     private readonly ConcurrentQueue<SubmitCandidate> _pendingSubmissions = new();
+    private readonly ConcurrentQueue<AutomationNotice> _automationNotices = new();
     private readonly string _monitorId = Guid.NewGuid().ToString("N")[..8];
     private readonly TaskCompletionSource<bool> _readySignal = new(
         TaskCreationOptions.RunContinuationsAsynchronously);
@@ -69,10 +78,9 @@ internal sealed class AutoDictionaryLearningMonitor : IDisposable
     private string _prefix = string.Empty;
     private string _suffix = string.Empty;
     private string _originalSegment = string.Empty;
-    private string _initialEditorText = string.Empty;
-    private string? _editorRuntimeId;
-    private EditorFingerprint? _editorFingerprint;
-    private readonly HashSet<string> _editorPlaceholderLabels = new(StringComparer.OrdinalIgnoreCase);
+    private EditorBinding? _editorBinding;
+    private EditorFingerprint? _trackedEditorIdentity;
+    private Dictionary<string, string> _baselineTextElementDigests = new(StringComparer.Ordinal);
     private EditorSnapshot _snapshot = EditorSnapshot.Unreadable;
     private EditorSnapshot _lastValidSnapshot = EditorSnapshot.Unreadable;
     private SubmitCandidate? _preparedApplicationSubmit;
@@ -84,21 +92,30 @@ internal sealed class AutoDictionaryLearningMonitor : IDisposable
     private long _lastSignalTimestamp;
     private string _lastSignalSource = string.Empty;
     private int _submissionCompleted;
+    private long _pendingSubmissionId;
+    private long _pendingSubmissionTimestamp;
+    private int _focusNoticePending;
     private int _deduplicatedSignalCount;
     private int _initialized;
     private int _disposed;
     private long _trackedEditorFocusTimestamp;
+    private long _nextEditorGeneration;
+    private int _trackingState = (int)EditorTrackingState.Starting;
 
     private AutoDictionaryLearningMonitor(IntPtr targetWindow, string pastedText)
     {
         _targetWindow = targetWindow;
+        GetWindowThreadProcessId(targetWindow, out var processId);
+        _targetProcessId = unchecked((int)processId);
         _pastedText = NormalizeLineEndings(pastedText);
         _token = _cancellation.Token;
         _keyboardProc = KeyboardHookCallback;
     }
 
     public event EventHandler<DictionaryCorrectionSubmission>? SubmissionConfirmed;
-    public event Action<string>? StatusChanged;
+    public event EventHandler<DictionaryLearningStatusUpdate>? StatusChanged;
+
+    public string MonitorId => _monitorId;
 
     public async Task<bool> WaitUntilReadyAsync(TimeSpan timeout, CancellationToken cancellationToken)
     {
@@ -149,10 +166,17 @@ internal sealed class AutoDictionaryLearningMonitor : IDisposable
         var valid = false;
         lock (_snapshotLock)
         {
+            if (_preparedApplicationSubmit is { } previous)
+                ClearPendingSubmission(previous.Id);
             _preparedApplicationSubmit = null;
             candidate = CreateCandidateLocked("application-send", DateTimeOffset.UtcNow);
             valid = candidate.IsValid;
-            if (valid) _preparedApplicationSubmit = candidate;
+            if (valid)
+            {
+                _preparedApplicationSubmit = candidate;
+                Interlocked.Exchange(ref _pendingSubmissionId, candidate.Id);
+                Interlocked.Exchange(ref _pendingSubmissionTimestamp, Stopwatch.GetTimestamp());
+            }
         }
 
         if (!valid)
@@ -177,8 +201,11 @@ internal sealed class AutoDictionaryLearningMonitor : IDisposable
         }
 
         if (candidate is not null)
+        {
+            Interlocked.CompareExchange(ref _pendingSubmissionId, 0, candidate.Id);
             Log("application_submit_cancelled",
                 $"send-input-failed;{SnapshotDescription(candidate.Snapshot)}", 0, candidate.Id);
+        }
     }
 
     public static AutoDictionaryLearningMonitor? TryStart(IntPtr targetWindow, string pastedText)
@@ -222,147 +249,297 @@ internal sealed class AutoDictionaryLearningMonitor : IDisposable
             _snapshot = EditorSnapshot.Unreadable;
             _lastValidSnapshot = EditorSnapshot.Unreadable;
             _preparedApplicationSubmit = null;
+            Volatile.Write(ref _editorBinding, null);
+            _trackedEditorIdentity = null;
+            Interlocked.Exchange(ref _pendingSubmissionId, 0);
+            Interlocked.Exchange(ref _pendingSubmissionTimestamp, 0);
+            Interlocked.Exchange(ref _focusNoticePending, 0);
+            Volatile.Write(ref _baselineTextElementDigests, new Dictionary<string, string>(StringComparer.Ordinal));
         }
         while (_pendingSubmissions.TryDequeue(out _)) { }
-        _submitSignal.Dispose();
+        while (_automationNotices.TryDequeue(out _)) { }
+        _monitorWakeSignal.Dispose();
         _cancellation.Dispose();
     }
 
     private async Task MonitorAsync()
     {
-        AutomationElement? editor = null;
-        TextPattern? textPattern = null;
-        ValuePattern? valuePattern = null;
         AutomationElement? root = null;
         AutomationEventHandler? invokedHandler = null;
+        AutomationFocusChangedEventHandler? focusChangedHandler = null;
+        EditorBinding? eventBinding = null;
         AutomationEventHandler? textChangedHandler = null;
         AutomationPropertyChangedEventHandler? valueChangedHandler = null;
-        var editorEventsAttached = false;
         var token = _token;
+        var monitorToken = token;
+        var recoveryStartedAt = 0L;
+        var lastRebindDiagnosticKey = string.Empty;
+        var lastRebindDiagnosticAt = 0L;
 
-        void AttachEditorEvents(AutomationElement target)
+        void LogRebindFailure(string stage, string detail)
         {
-            textChangedHandler ??= (_, _) =>
-            {
-                var currentEditor = editor;
-                if (currentEditor is not null)
-                    RefreshSnapshot(currentEditor, textPattern, valuePattern);
-            };
-            valueChangedHandler ??= (_, _) =>
-            {
-                var currentEditor = editor;
-                if (currentEditor is not null)
-                    RefreshSnapshot(currentEditor, textPattern, valuePattern);
-            };
-            try { Automation.AddAutomationEventHandler(TextPattern.TextChangedEvent, target,
-                TreeScope.Element, textChangedHandler); }
-            catch (Exception ex) when (IsAutomationFailure(ex) || ex is ObjectDisposedException) { }
-            if (valuePattern is not null)
-            {
-                try { Automation.AddAutomationPropertyChangedEventHandler(target, TreeScope.Element,
-                    valueChangedHandler, ValuePattern.ValueProperty); }
-                catch (Exception ex) when (IsAutomationFailure(ex) || ex is ObjectDisposedException) { }
-            }
+            var reasonKey = detail.Split(';', 2)[0];
+            var key = stage + ":" + reasonKey;
+            var now = Stopwatch.GetTimestamp();
+            if (string.Equals(lastRebindDiagnosticKey, key, StringComparison.Ordinal) &&
+                lastRebindDiagnosticAt != 0 &&
+                Stopwatch.GetElapsedTime(lastRebindDiagnosticAt, now) < TimeSpan.FromSeconds(2))
+                return;
+            lastRebindDiagnosticKey = key;
+            lastRebindDiagnosticAt = now;
+            Log(stage, detail);
         }
 
-        void DetachEditorEvents(AutomationElement target)
+        void QueueAutomationNotice(AutomationNotice notice)
         {
+            if (Volatile.Read(ref _disposed) != 0) return;
+            _automationNotices.Enqueue(notice);
+            try
+            {
+                if (_monitorWakeSignal.CurrentCount == 0) _monitorWakeSignal.Release();
+            }
+            catch (ObjectDisposedException) { }
+            catch (SemaphoreFullException) { }
+        }
+
+        void DetachEditorEvents()
+        {
+            if (eventBinding is null) return;
             if (textChangedHandler is not null)
             {
-                try { Automation.RemoveAutomationEventHandler(TextPattern.TextChangedEvent, target, textChangedHandler); }
+                try
+                {
+                    Automation.RemoveAutomationEventHandler(TextPattern.TextChangedEvent,
+                        eventBinding.Element, textChangedHandler);
+                }
                 catch (Exception ex) when (IsAutomationFailure(ex) || ex is ObjectDisposedException) { }
             }
             if (valueChangedHandler is not null)
             {
-                try { Automation.RemoveAutomationPropertyChangedEventHandler(target, valueChangedHandler); }
+                try
+                {
+                    Automation.RemoveAutomationPropertyChangedEventHandler(eventBinding.Element,
+                        valueChangedHandler);
+                }
                 catch (Exception ex) when (IsAutomationFailure(ex) || ex is ObjectDisposedException) { }
             }
+            eventBinding = null;
+            textChangedHandler = null;
+            valueChangedHandler = null;
         }
 
-        bool TryRebindEditor(bool reportFailure = true)
+        void AttachEditorEvents(EditorBinding binding)
         {
-            if (editor is null ||
-                (string.IsNullOrWhiteSpace(_editorRuntimeId) && _editorFingerprint is null))
+            if (eventBinding?.Generation == binding.Generation) return;
+            DetachEditorEvents();
+            var generation = binding.Generation;
+            textChangedHandler = (_, _) =>
+                QueueAutomationNotice(new AutomationNotice(AutomationNoticeKind.EditorChanged, generation));
+            valueChangedHandler = (_, _) =>
+                QueueAutomationNotice(new AutomationNotice(AutomationNoticeKind.EditorChanged, generation));
+            try
             {
-                if (reportFailure) Log("editor_rebind_rejected", "tracked-editor-identity-unavailable");
+                Automation.AddAutomationEventHandler(TextPattern.TextChangedEvent, binding.Element,
+                    TreeScope.Element, textChangedHandler);
+            }
+            catch (Exception ex) when (IsAutomationFailure(ex) || ex is ObjectDisposedException) { }
+            if (binding.ValuePattern is not null)
+            {
+                try
+                {
+                    Automation.AddAutomationPropertyChangedEventHandler(binding.Element, TreeScope.Element,
+                        valueChangedHandler, ValuePattern.ValueProperty);
+                }
+                catch (Exception ex) when (IsAutomationFailure(ex) || ex is ObjectDisposedException) { }
+            }
+            eventBinding = binding;
+        }
+
+        bool TryRebindEditor(out string reason)
+        {
+            var identity = _trackedEditorIdentity;
+            if (identity is null)
+            {
+                reason = "tracked-editor-identity-unavailable";
                 return false;
             }
 
-            var replacement = FindFocusedEditor(_targetWindow, out var replacementTextPattern,
-                out var replacementValuePattern);
+            var priorBinding = Volatile.Read(ref _editorBinding);
+            var lastValidSnapshot = _lastValidSnapshot;
+            var candidates = FindMatchingEditorCandidates(_targetWindow, identity,
+                priorBinding?.DocumentRoot, lastValidSnapshot.FullText,
+                HasPendingSubmissionIntent(),
+                out var examined, out var rejectionCounts, out var focusedEditorFound);
+            if (candidates.Count == 0)
+            {
+                reason = "no-matching-editor";
+                LogRebindFailure("editor_rebind_failed",
+                    $"reason={reason};focus={(focusedEditorFound ? "editable-found" : "none")};examined={examined};rejected={FormatRejectionCounts(rejectionCounts)}");
+                return false;
+            }
+
+            var ordered = candidates.OrderByDescending(candidate => candidate.Score).ToArray();
+            if (ordered.Length > 1 && ordered[0].Score - ordered[1].Score < 20)
+            {
+                reason = "ambiguous-matching-editors";
+                LogRebindFailure("editor_rebind_rejected",
+                    $"reason={reason};focus={(focusedEditorFound ? "editable-found" : "none")};candidate-count={ordered.Length};score-gap={ordered[0].Score - ordered[1].Score};examined={examined}");
+                return false;
+            }
+
+            var match = ordered[0];
+            var previous = Volatile.Read(ref _editorBinding);
+            var sameRuntimeId = previous?.RuntimeId is not null &&
+                                string.Equals(previous.RuntimeId, match.Fingerprint.RuntimeId, StringComparison.Ordinal);
+            var sameElement = previous is not null && AreSameAutomationElement(previous.Element, match.Element);
+            var generation = sameElement
+                ? previous!.Generation
+                : Interlocked.Increment(ref _nextEditorGeneration);
+            var replacement = CreateEditorBinding(match.Element, match.TextPattern, match.ValuePattern,
+                generation, match.Fingerprint);
             if (replacement is null)
             {
-                if (reportFailure) Log("editor_rebind_failed", "focused-editor-not-found");
+                reason = "replacement-fingerprint-unavailable";
+                LogRebindFailure("editor_rebind_rejected", $"reason={reason};examined={examined}");
                 return false;
             }
 
-            var replacementRuntimeId = GetRuntimeId(replacement);
-            var sameRuntimeId = replacementRuntimeId is not null &&
-                                string.Equals(_editorRuntimeId, replacementRuntimeId, StringComparison.Ordinal);
-            var sameFingerprint = !sameRuntimeId && MatchesEditorFingerprint(replacement);
-            if (!sameRuntimeId && !sameFingerprint)
-            {
-                if (reportFailure)
-                    Log("editor_rebind_rejected", replacementRuntimeId is null
-                        ? "replacement-runtime-id-unavailable"
-                        : "editor-fingerprint-mismatch");
-                return false;
-            }
-
-            var previousEditor = editor;
-            if (editorEventsAttached) DetachEditorEvents(previousEditor);
-            CaptureEditorPlaceholderLabels(replacement, _initialEditorText);
-            editor = replacement;
-            textPattern = replacementTextPattern;
-            valuePattern = replacementValuePattern;
-            _editorRuntimeId = replacementRuntimeId;
-            if (editorEventsAttached) AttachEditorEvents(replacement);
-            Log("editor_rebound", sameRuntimeId ? "same-runtime-id" : "same-editor-fingerprint");
+            Volatile.Write(ref _editorBinding, replacement);
+            if (!sameElement) AttachEditorEvents(replacement);
+            reason = sameRuntimeId
+                ? sameElement ? "same-element-pattern-refresh" : "same-runtime-id-new-element"
+                : "same-document-structure";
+            if (!sameElement)
+                Log("editor_rebound",
+                    $"reason={reason};focus={(match.IsFocused ? "tracked-candidate" : "not-focused")};bounds={DescribeBoundsEvidence(identity.Bounds, match.Fingerprint.Bounds)};generation={replacement.Generation};score={match.Score};candidate-count={ordered.Length};examined={examined}");
             return true;
         }
 
         bool TryReadCurrentEditor(out string text, out string readState)
         {
             text = string.Empty;
-            readState = "editor-not-bound";
-            if (editor is null) return false;
-            if (TryReadText(editor, textPattern, valuePattern, out text, out readState)) return true;
-            if (!IsRecoverableEditorFailure(readState) || !TryRebindEditor()) return false;
-            var reboundReadState = "editor-not-bound";
-            if (editor is not null && TryReadText(editor, textPattern, valuePattern, out text, out reboundReadState))
+            var binding = Volatile.Read(ref _editorBinding);
+            readState = binding is null ? "editor-not-bound" : "unreadable";
+            if (binding is null) return false;
+            if (TryReadText(binding.Element, binding.TextPattern, binding.ValuePattern, out text, out readState))
+                return true;
+
+            var firstReadState = readState;
+            if (!TryRebindEditor(out var rebindReason))
             {
-                readState = $"rebound-same-editor;{reboundReadState}";
+                readState = $"{firstReadState};rebind={rebindReason}";
+                return false;
+            }
+
+            binding = Volatile.Read(ref _editorBinding);
+            var reboundReadState = binding is null ? "editor-not-bound" : "unreadable";
+            if (binding is not null &&
+                TryReadText(binding.Element, binding.TextPattern, binding.ValuePattern, out text, out reboundReadState))
+            {
+                readState = $"rebound:{rebindReason};{reboundReadState}";
                 return true;
             }
-            readState = $"rebind-read-failed:{reboundReadState}";
+            readState = $"rebind-read-failed:{rebindReason};{reboundReadState}";
             return false;
         }
 
-        (AutomationElement Element, TextPattern? TextPattern, ValuePattern? ValuePattern) GetCurrentEditorAccess() =>
-            (editor!, textPattern, valuePattern);
+        EditorAccess? GetCurrentEditorAccess()
+        {
+            var binding = Volatile.Read(ref _editorBinding);
+            return binding is null ? null : new EditorAccess(binding.Element, binding.TextPattern,
+                binding.ValuePattern, binding.Generation, binding.RuntimeId, binding.Fingerprint.DocumentRuntimeId);
+        }
+
+        void DrainAutomationNotices()
+        {
+            while (_automationNotices.TryDequeue(out var notice))
+            {
+                if (notice.Kind == AutomationNoticeKind.Invoked)
+                {
+                    if (notice.Element is not null && IsSendButton(notice.Element))
+                        SignalSubmit("send-button");
+                    continue;
+                }
+
+                if (notice.Kind == AutomationNoticeKind.EditorChanged)
+                {
+                    var currentGeneration = Volatile.Read(ref _editorBinding)?.Generation ?? 0;
+                    if (notice.Generation != currentGeneration)
+                        Log("editor_event_ignored", $"reason=stale-generation;event-generation={notice.Generation};current-generation={currentGeneration}");
+                }
+                else if (notice.Kind == AutomationNoticeKind.FocusChanged)
+                {
+                    Interlocked.Exchange(ref _focusNoticePending, 0);
+                    if (notice.Element is not null && IsWithinWindow(notice.Element, _targetWindow))
+                    {
+                        try
+                        {
+                            if (_targetProcessId == 0 || notice.Element.Current.ProcessId == _targetProcessId)
+                            {
+                                var binding = Volatile.Read(ref _editorBinding);
+                                if (binding is not null) UpdateTrackedEditorFocus(binding.Element);
+                            }
+                        }
+                        catch (Exception ex) when (IsAutomationFailure(ex) || ex is ObjectDisposedException) { }
+                    }
+                }
+            }
+        }
+
+        void SetTrackingState(EditorTrackingState state, string reason)
+        {
+            var previous = (EditorTrackingState)Interlocked.Exchange(ref _trackingState, (int)state);
+            if (previous == state) return;
+            Log("editor_tracking_state", $"from={previous};to={state};reason={reason}");
+            switch (state)
+            {
+                case EditorTrackingState.Reacquiring:
+                    StatusChanged?.Invoke(this, new DictionaryLearningStatusUpdate(_monitorId,
+                        "入力欄を再確認しています。自動登録の監視は続いています。"));
+                    break;
+                case EditorTrackingState.Suspended:
+                    StatusChanged?.Invoke(this, new DictionaryLearningStatusUpdate(_monitorId,
+                        "入力欄を一時的に確認できません。復旧を待っています。"));
+                    break;
+                case EditorTrackingState.Tracking when previous is EditorTrackingState.Reacquiring or EditorTrackingState.Suspended:
+                    StatusChanged?.Invoke(this, new DictionaryLearningStatusUpdate(_monitorId,
+                        "入力欄の追跡が復旧し、自動登録の監視を続けています。"));
+                    break;
+            }
+        }
 
         try
         {
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(token);
             timeout.CancelAfter(TimeSpan.FromMinutes(MaxMonitorMinutes));
-            var monitorToken = timeout.Token;
+            monitorToken = timeout.Token;
 
-            for (var attempt = 0; attempt < 15 && editor is null; attempt++)
+            for (var attempt = 0; attempt < 15 && Volatile.Read(ref _editorBinding) is null; attempt++)
             {
                 monitorToken.ThrowIfCancellationRequested();
-                editor = FindFocusedEditor(_targetWindow, out textPattern, out valuePattern);
-                if (editor is null)
+                var focused = FindFocusedEditor(_targetWindow, out var textPattern, out var valuePattern);
+                if (focused is not null)
+                {
+                    var binding = CreateEditorBinding(focused, textPattern, valuePattern,
+                        Interlocked.Increment(ref _nextEditorGeneration));
+                    if (binding is not null)
+                    {
+                        Volatile.Write(ref _editorBinding, binding);
+                        _trackedEditorIdentity = binding.Fingerprint;
+                        AttachEditorEvents(binding);
+                    }
+                }
+                if (Volatile.Read(ref _editorBinding) is null)
                     await Task.Delay(TimeSpan.FromMilliseconds(100), monitorToken).ConfigureAwait(false);
             }
 
-            if (editor is null)
+            var initialBinding = Volatile.Read(ref _editorBinding);
+            if (initialBinding is null)
             {
                 ReportStatus("editor_not_found", "入力欄を読み取れず、自動登録の監視を開始できませんでした。");
                 return;
             }
-            _editorRuntimeId = GetRuntimeId(editor);
-            _editorFingerprint = CaptureEditorFingerprint(editor);
-            Log("editor_bound", _editorRuntimeId is null ? "runtime-id-unavailable" : "runtime-id-captured");
+            Log("editor_bound", initialBinding.RuntimeId is null ? "runtime-id-unavailable" : "runtime-id-captured");
             var initialText = string.Empty;
             var insertedStart = -1;
             var pasteReadAttempts = 0;
@@ -405,43 +582,56 @@ internal sealed class AutoDictionaryLearningMonitor : IDisposable
 
             lock (_snapshotLock)
             {
-                _initialEditorText = initialText;
                 _prefix = initialText[..insertedStart];
                 _suffix = initialText[(insertedStart + _pastedText.Length)..];
                 _originalSegment = _pastedText;
                 SetSnapshotLocked(initialText, _pastedText, SnapshotState.Valid, "initial-paste");
             }
-            CaptureEditorPlaceholderLabels(editor, initialText);
+            Volatile.Write(ref _baselineTextElementDigests,
+                CaptureReadOnlyTextElementDigests(initialBinding.DocumentRoot, initialBinding.RuntimeId));
             Volatile.Write(ref _initialized, 1);
-            UpdateTrackedEditorFocus(editor);
+            UpdateTrackedEditorFocus(initialBinding.Element);
             ReportStatus("tracking_started", "音声入力した文章を送信するまで監視しています。");
-
-            editorEventsAttached = true;
-            AttachEditorEvents(editor);
 
             try
             {
                 root = AutomationElement.FromHandle(_targetWindow);
-                invokedHandler = OnAutomationEvent;
+                invokedHandler = (sender, _) =>
+                {
+                    if (sender is AutomationElement element)
+                        QueueAutomationNotice(new AutomationNotice(AutomationNoticeKind.Invoked, 0, element));
+                };
                 Automation.AddAutomationEventHandler(InvokePattern.InvokedEvent, root,
                     TreeScope.Descendants, invokedHandler);
             }
             catch (Exception ex) when (IsAutomationFailure(ex)) { }
 
+            focusChangedHandler = (sender, _) =>
+            {
+                if (sender is not AutomationElement element || Volatile.Read(ref _disposed) != 0) return;
+                if (Interlocked.Exchange(ref _focusNoticePending, 1) == 0)
+                    QueueAutomationNotice(new AutomationNotice(AutomationNoticeKind.FocusChanged, 0, element));
+            };
+            try { Automation.AddAutomationFocusChangedEventHandler(focusChangedHandler); }
+            catch (Exception ex) when (IsAutomationFailure(ex) || ex is ObjectDisposedException) { }
+
             _readySignal.TrySetResult(true);
 
             while (!monitorToken.IsCancellationRequested)
             {
-                await Task.Delay(TimeSpan.FromMilliseconds(500), monitorToken).ConfigureAwait(false);
+                await _monitorWakeSignal.WaitAsync(TimeSpan.FromMilliseconds(500), monitorToken).ConfigureAwait(false);
+                DrainAutomationNotices();
                 if (Volatile.Read(ref _disposed) != 0) return;
 
-                while (_submitSignal.Wait(0)) { }
                 var deduplicatedCount = Interlocked.Exchange(ref _deduplicatedSignalCount, 0);
                 if (deduplicatedCount > 0)
                     Log("submit_signal_deduplicated", "repeat-or-cross-source", deduplicatedCount);
                 if (TryReadCurrentEditor(out var currentText, out var readState))
                 {
-                    UpdateTrackedEditorFocus(editor);
+                    recoveryStartedAt = 0;
+                    SetTrackingState(EditorTrackingState.Tracking, "editor-readable");
+                    var currentBinding = Volatile.Read(ref _editorBinding);
+                    UpdateTrackedEditorFocus(currentBinding?.Element);
                     currentText = NormalizeLineEndings(currentText);
                     if (currentText.Length > MaxDocumentLength)
                     {
@@ -462,24 +652,28 @@ internal sealed class AutoDictionaryLearningMonitor : IDisposable
                 }
                 else
                 {
-                    var changed = SetSnapshotState(null, null, SnapshotState.ReadFailed, readState);
-                    if (changed)
-                        Log("editor_read_failed", $"{readState};version={_snapshot.Version}");
-                    UpdateTrackedEditorFocus(null);
-                    if (IsRecoverableEditorFailure(readState))
-                    {
-                        ReportStatus("editor_rebind_unavailable",
-                            "入力欄を安全に再確認できず、自動登録の監視を終了しました。次の音声入力から再開します。",
-                            readState);
-                        return;
-                    }
+                    if (recoveryStartedAt == 0) recoveryStartedAt = Stopwatch.GetTimestamp();
+                    var recoveryDuration = Stopwatch.GetElapsedTime(recoveryStartedAt);
+                    var nextState = recoveryDuration >= TimeSpan.FromSeconds(2)
+                        ? EditorTrackingState.Suspended
+                        : EditorTrackingState.Reacquiring;
+                    SetTrackingState(nextState, readState);
                 }
 
                 while (_pendingSubmissions.TryDequeue(out var candidate))
                 {
-                    await ProcessSubmissionCandidateAsync(candidate, GetCurrentEditorAccess,
-                        () => TryRebindEditor(reportFailure: false), monitorToken).ConfigureAwait(false);
-                    if (Volatile.Read(ref _submissionCompleted) != 0) return;
+                    var retry = await ProcessSubmissionCandidateAsync(candidate, GetCurrentEditorAccess,
+                        () => TryRebindEditor(out _), monitorToken).ConfigureAwait(false);
+                    if (retry)
+                    {
+                        _pendingSubmissions.Enqueue(candidate);
+                        break;
+                    }
+                    if (Volatile.Read(ref _submissionCompleted) != 0)
+                    {
+                        SetTrackingState(EditorTrackingState.Submitted, "submission-confirmed");
+                        return;
+                    }
                 }
             }
         }
@@ -493,7 +687,7 @@ internal sealed class AutoDictionaryLearningMonitor : IDisposable
         }
         catch (Exception ex) when (IsAutomationFailure(ex) || ex is ObjectDisposedException)
         {
-            ReportStatus("monitor_exception", "入力欄の追跡中にエラーが発生し、監視を終了しました。", ex.GetType().Name);
+            ReportStatus("monitor_exception", "入力欄の監視中に回復できないエラーが発生しました。", ex.GetType().Name);
         }
         finally
         {
@@ -503,29 +697,30 @@ internal sealed class AutoDictionaryLearningMonitor : IDisposable
                 try { Automation.RemoveAutomationEventHandler(InvokePattern.InvokedEvent, root, invokedHandler); }
                 catch (Exception ex) when (IsAutomationFailure(ex) || ex is ObjectDisposedException) { }
             }
-            if (editorEventsAttached && editor is not null) DetachEditorEvents(editor);
+            if (focusChangedHandler is not null)
+            {
+                try { Automation.RemoveAutomationFocusChangedEventHandler(focusChangedHandler); }
+                catch (Exception ex) when (IsAutomationFailure(ex) || ex is ObjectDisposedException) { }
+            }
+            DetachEditorEvents();
             if (Volatile.Read(ref _disposed) == 0) Dispose();
         }
     }
 
-    private void OnAutomationEvent(object sender, AutomationEventArgs args)
+    private static bool IsSendButton(AutomationElement element)
     {
-        if (Volatile.Read(ref _initialized) == 0 || Volatile.Read(ref _disposed) != 0 ||
-            sender is not AutomationElement element)
-            return;
-
         try
         {
             var current = element.Current;
-            if (current.ControlType != ControlType.Button || !current.IsEnabled) return;
+            if (current.ControlType != ControlType.Button || !current.IsEnabled) return false;
             var name = current.Name ?? string.Empty;
-            if (name.Contains("送信", StringComparison.OrdinalIgnoreCase) ||
-                name.Contains("send", StringComparison.OrdinalIgnoreCase) ||
-                name.Contains("submit", StringComparison.OrdinalIgnoreCase) ||
-                name.Contains("投稿", StringComparison.OrdinalIgnoreCase))
-                SignalSubmit("send-button");
+            return name.Contains("送信", StringComparison.OrdinalIgnoreCase) ||
+                   name.Contains("send", StringComparison.OrdinalIgnoreCase) ||
+                   name.Contains("submit", StringComparison.OrdinalIgnoreCase) ||
+                   name.Contains("投稿", StringComparison.OrdinalIgnoreCase);
         }
         catch (Exception ex) when (IsAutomationFailure(ex) || ex is ObjectDisposedException) { }
+        return false;
     }
 
     private IntPtr KeyboardHookCallback(int code, IntPtr wParam, IntPtr lParam)
@@ -615,18 +810,20 @@ internal sealed class AutoDictionaryLearningMonitor : IDisposable
     private void EnqueueSubmission(SubmitCandidate candidate)
     {
         if (Volatile.Read(ref _disposed) != 0) return;
+        Interlocked.Exchange(ref _pendingSubmissionId, candidate.Id);
+        Interlocked.Exchange(ref _pendingSubmissionTimestamp, Stopwatch.GetTimestamp());
         _pendingSubmissions.Enqueue(candidate);
         try
         {
-            if (_submitSignal.CurrentCount == 0) _submitSignal.Release();
+            if (_monitorWakeSignal.CurrentCount == 0) _monitorWakeSignal.Release();
         }
         catch (ObjectDisposedException) { }
         catch (SemaphoreFullException) { }
     }
 
-    private async Task ProcessSubmissionCandidateAsync(
+    private async Task<bool> ProcessSubmissionCandidateAsync(
         SubmitCandidate candidate,
-        Func<(AutomationElement Element, TextPattern? TextPattern, ValuePattern? ValuePattern)> getEditorAccess,
+        Func<EditorAccess?> getEditorAccess,
         Func<bool> tryRebindEditor,
         CancellationToken cancellationToken)
     {
@@ -639,7 +836,8 @@ internal sealed class AutoDictionaryLearningMonitor : IDisposable
         {
             Log("submit_snapshot_invalid",
                 $"source={candidate.Source};{SnapshotDescription(snapshot)}", 0, candidate.Id);
-            return;
+            ClearPendingSubmission(candidate.Id);
+            return false;
         }
 
         var correction = !string.Equals(snapshot.Segment, _originalSegment, StringComparison.Ordinal);
@@ -656,19 +854,23 @@ internal sealed class AutoDictionaryLearningMonitor : IDisposable
             {
                 Log("submit_candidate_superseded", $"source={candidate.Source};newer-candidate-exists",
                     confirmAttempt, candidate.Id);
-                return;
+                return false;
             }
-            // Reacquire the currently focused editor before reading after submit. Web apps
-            // can replace the contenteditable node while keeping the same visible composer.
-            _ = tryRebindEditor();
             var editorAccess = getEditorAccess();
-            if (!IsSameTrackedEditor(editorAccess.Element))
+            if (editorAccess is null || !IsSameTrackedEditor(editorAccess.Element))
             {
-                if (tryRebindEditor()) editorAccess = getEditorAccess();
-                if (!IsSameTrackedEditor(editorAccess.Element))
+                if (!tryRebindEditor())
                 {
                     confirmationReadFailureCount++;
-                    Log("submit_confirmation_editor_mismatch", "target-or-editor-identity-changed",
+                    Log("submit_confirmation_editor_mismatch", "reason=rebind-unavailable",
+                        confirmationReadFailureCount, candidate.Id);
+                    continue;
+                }
+                editorAccess = getEditorAccess();
+                if (editorAccess is null || !IsSameTrackedEditor(editorAccess.Element))
+                {
+                    confirmationReadFailureCount++;
+                    Log("submit_confirmation_editor_mismatch", "reason=target-or-editor-identity-changed",
                         confirmationReadFailureCount, candidate.Id);
                     continue;
                 }
@@ -676,10 +878,10 @@ internal sealed class AutoDictionaryLearningMonitor : IDisposable
             if (!TryReadText(editorAccess.Element, editorAccess.TextPattern, editorAccess.ValuePattern,
                     out var afterSubmit, out var readState))
             {
-                if (IsRecoverableEditorFailure(readState) && tryRebindEditor())
+                if (tryRebindEditor())
                 {
                     editorAccess = getEditorAccess();
-                    if (!IsSameTrackedEditor(editorAccess.Element))
+                    if (editorAccess is null || !IsSameTrackedEditor(editorAccess.Element))
                     {
                         confirmationReadFailureCount++;
                         clearEvidence = "rebound-editor-identity-mismatch";
@@ -708,7 +910,8 @@ internal sealed class AutoDictionaryLearningMonitor : IDisposable
             {
                 ReportStatus("post_submit_text_too_long", "送信後の入力欄が長いため、登録を見送りました。",
                     $"candidate={candidate.Id};read={readState}", confirmationReadCount);
-                return;
+                ClearPendingSubmission(candidate.Id);
+                return false;
             }
 
             var editorChanged = !string.Equals(afterSubmit, snapshot.FullText, StringComparison.Ordinal);
@@ -717,6 +920,24 @@ internal sealed class AutoDictionaryLearningMonitor : IDisposable
             observedClearedText |= contentCleared;
             if (!editorChanged || !contentCleared) continue;
 
+            var editorWasRecreated = snapshot.EditorRuntimeId is null || editorAccess.RuntimeId is null ||
+                                     !string.Equals(snapshot.EditorRuntimeId, editorAccess.RuntimeId,
+                                         StringComparison.Ordinal);
+            var requiresOutgoingTextEvidence = editorWasRecreated ||
+                                               string.Equals(_trackedEditorIdentity?.FrameworkId, "Chrome",
+                                                   StringComparison.OrdinalIgnoreCase);
+            if (requiresOutgoingTextEvidence)
+            {
+                if (!HasNewOutgoingTextEvidence(snapshot.FullText, out var outgoingEvidence))
+                {
+                    clearEvidence = $"editor-recreated;{outgoingEvidence}";
+                    Log("submit_confirmation_outgoing_text_missing", clearEvidence,
+                        confirmationReadCount, candidate.Id);
+                    continue;
+                }
+                evidence = $"{evidence};{outgoingEvidence}";
+            }
+
             clearEvidence = evidence;
             var accepted = false;
             lock (_snapshotLock)
@@ -724,6 +945,7 @@ internal sealed class AutoDictionaryLearningMonitor : IDisposable
                 if (_submissionCompleted == 0 && _latestCandidateId == candidate.Id)
                 {
                     _submissionCompleted = 1;
+                    ClearPendingSubmission(candidate.Id);
                     accepted = true;
                 }
             }
@@ -731,7 +953,7 @@ internal sealed class AutoDictionaryLearningMonitor : IDisposable
             {
                 Log("submit_candidate_superseded", "newer-candidate-arrived-before-confirmation",
                     confirmationReadCount, candidate.Id);
-                return;
+                return false;
             }
 
             Log("submission_confirmed",
@@ -741,14 +963,23 @@ internal sealed class AutoDictionaryLearningMonitor : IDisposable
             {
                 ReportStatus("submitted_without_correction", "手修正が見つからなかったため、辞書は変更していません。",
                     $"candidate={candidate.Id};evidence={clearEvidence}", confirmationReadCount, candidate.Id);
-                return;
+                return false;
             }
 
             ReportStatus("submission_ready_for_learning", "送信を確認しました。修正候補を判定しています。",
                 $"candidate={candidate.Id};evidence={clearEvidence}", confirmationReadCount, candidate.Id);
             SubmissionConfirmed?.Invoke(this,
                 new DictionaryCorrectionSubmission(_originalSegment, snapshot.Segment, _monitorId, candidate.Id));
-            return;
+            return false;
+        }
+
+        if (candidate.Id == Volatile.Read(ref _latestCandidateId) &&
+            DateTimeOffset.UtcNow - candidate.SignalTime < TimeSpan.FromMilliseconds(SubmissionRecoveryWindowMs))
+        {
+            Log("submit_confirmation_deferred",
+                $"reason={(confirmationReadCount == 0 ? "editor-temporarily-unreadable" : "send-state-not-settled")};reads={confirmationReadCount};failures={confirmationReadFailureCount};age-ms={(long)(DateTimeOffset.UtcNow - candidate.SignalTime).TotalMilliseconds}",
+                confirmationReadCount + confirmationReadFailureCount, candidate.Id);
+            return true;
         }
 
         var reason = confirmationReadCount == 0
@@ -759,18 +990,36 @@ internal sealed class AutoDictionaryLearningMonitor : IDisposable
                     ? "tracked-text-retained-or-range-lost"
                     : "inconsistent-editor-state";
         var finalEditorAccess = getEditorAccess();
-        var providerState = DescribeTextProviders(finalEditorAccess.Element, finalEditorAccess.TextPattern,
-            finalEditorAccess.ValuePattern, snapshot.FullText);
+        var providerState = finalEditorAccess is null
+            ? "editor=unbound"
+            : DescribeTextProviders(finalEditorAccess.Element, finalEditorAccess.TextPattern,
+                finalEditorAccess.ValuePattern, snapshot.FullText);
         ReportStatus("submission_not_confirmed", "送信後の入力欄の変化を確認できず、登録を見送りました。",
             $"candidate={candidate.Id};source={candidate.Source};reason={reason};{SnapshotDescription(snapshot)};{providerState};last-read={clearEvidence}",
             confirmationReadCount + confirmationReadFailureCount, candidate.Id);
+        ClearPendingSubmission(candidate.Id);
+        return false;
+    }
+
+    private bool HasPendingSubmissionIntent()
+    {
+        if (Interlocked.Read(ref _pendingSubmissionId) == 0) return false;
+        var timestamp = Interlocked.Read(ref _pendingSubmissionTimestamp);
+        return timestamp != 0 &&
+               Stopwatch.GetElapsedTime(timestamp) <= TimeSpan.FromMilliseconds(SubmissionRecoveryWindowMs);
+    }
+
+    private void ClearPendingSubmission(long candidateId)
+    {
+        if (Interlocked.CompareExchange(ref _pendingSubmissionId, 0, candidateId) == candidateId)
+            Interlocked.Exchange(ref _pendingSubmissionTimestamp, 0);
     }
 
     private void ReportStatus(string stage, string message, string detail = "none", int count = 0,
         long? candidateId = null)
     {
         Log(stage, detail, count, candidateId);
-        StatusChanged?.Invoke(message);
+        StatusChanged?.Invoke(this, new DictionaryLearningStatusUpdate(_monitorId, message));
     }
 
     private bool TryExtractSegment(string fullText, out string segment)
@@ -784,33 +1033,6 @@ internal sealed class AutoDictionaryLearningMonitor : IDisposable
         if (end < _prefix.Length) return false;
         segment = fullText[_prefix.Length..end];
         return true;
-    }
-
-    private void RefreshSnapshot(
-        AutomationElement editor,
-        TextPattern? textPattern,
-        ValuePattern? valuePattern)
-    {
-        if (Volatile.Read(ref _disposed) != 0) return;
-        if (!TryReadText(editor, textPattern, valuePattern, out var currentText, out var readState))
-        {
-            if (SetSnapshotState(null, null, SnapshotState.ReadFailed, readState))
-                Log("editor_read_failed", $"{readState};version={_snapshot.Version}");
-            return;
-        }
-        currentText = NormalizeLineEndings(currentText);
-        if (currentText.Length > MaxDocumentLength)
-        {
-            SetSnapshotState(currentText, string.Empty, SnapshotState.TooLong, $"length={currentText.Length}");
-            return;
-        }
-        if (!TryExtractSegment(currentText, out var segment))
-        {
-            if (SetSnapshotState(currentText, string.Empty, SnapshotState.RangeLost, "tracked-range-not-found"))
-                ReportStatus("tracked_range_lost", "入力欄の文章構成が変わり、音声入力部分を追跡できなくなりました。");
-            return;
-        }
-        SetSnapshot(currentText, segment);
     }
 
     private void SetSnapshot(string fullText, string segment)
@@ -838,11 +1060,19 @@ internal sealed class AutoDictionaryLearningMonitor : IDisposable
 
     private void SetSnapshotLocked(string fullText, string segment, SnapshotState state, string readState)
     {
+        var binding = Volatile.Read(ref _editorBinding);
+        var editorRuntimeId = binding?.RuntimeId;
+        var documentRuntimeId = binding?.Fingerprint.DocumentRuntimeId;
+        var editorGeneration = binding?.Generation ?? 0;
         var contentChanged = _snapshot.State != state || _snapshot.ReadState != readState ||
                              !string.Equals(_snapshot.FullText, fullText, StringComparison.Ordinal) ||
-                             !string.Equals(_snapshot.Segment, segment, StringComparison.Ordinal);
+                             !string.Equals(_snapshot.Segment, segment, StringComparison.Ordinal) ||
+                             !string.Equals(_snapshot.EditorRuntimeId, editorRuntimeId, StringComparison.Ordinal) ||
+                             !string.Equals(_snapshot.DocumentRuntimeId, documentRuntimeId, StringComparison.Ordinal) ||
+                             _snapshot.EditorGeneration != editorGeneration;
         var version = contentChanged ? ++_snapshotVersion : _snapshot.Version;
-        _snapshot = new EditorSnapshot(version, Stopwatch.GetTimestamp(), fullText, segment, state, readState);
+        _snapshot = new EditorSnapshot(version, Stopwatch.GetTimestamp(), fullText, segment, state, readState,
+            editorRuntimeId, documentRuntimeId, editorGeneration);
         if (state == SnapshotState.Valid) _lastValidSnapshot = _snapshot;
     }
 
@@ -850,7 +1080,11 @@ internal sealed class AutoDictionaryLearningMonitor : IDisposable
     {
         var snapshot = _snapshot;
         var usedRecentPreClearSnapshot = false;
-        if (source == "send-button" && snapshot.State == SnapshotState.EmptySegment &&
+        var currentFieldCleared = snapshot.State == SnapshotState.EmptySegment ||
+                                  snapshot.State == SnapshotState.RangeLost &&
+                                  (string.IsNullOrWhiteSpace(snapshot.FullText) ||
+                                   IsComposerPlaceholder(snapshot.FullText));
+        if (source == "send-button" && currentFieldCleared &&
             _lastValidSnapshot.State == SnapshotState.Valid &&
             GetSnapshotAgeMilliseconds(_lastValidSnapshot) <= RecentPreClearSnapshotMs)
         {
@@ -868,7 +1102,7 @@ internal sealed class AutoDictionaryLearningMonitor : IDisposable
         DictionaryLearningDiagnosticLog.Write(stage, detail, count, _monitorId, candidateId);
 
     private static string SnapshotDescription(EditorSnapshot snapshot) =>
-        $"version={snapshot.Version};state={snapshot.State};age-ms={GetSnapshotAgeMilliseconds(snapshot)};full-length={snapshot.FullText.Length};segment-length={snapshot.Segment.Length};read={snapshot.ReadState}";
+        $"version={snapshot.Version};state={snapshot.State};age-ms={GetSnapshotAgeMilliseconds(snapshot)};full-length={snapshot.FullText.Length};segment-length={snapshot.Segment.Length};editor-generation={snapshot.EditorGeneration};read={snapshot.ReadState}";
 
     private static long GetSnapshotAgeMilliseconds(EditorSnapshot snapshot)
     {
@@ -905,41 +1139,289 @@ internal sealed class AutoDictionaryLearningMonitor : IDisposable
     private bool IsSameTrackedEditor(AutomationElement editor)
     {
         if (!IsWithinWindow(editor, _targetWindow)) return false;
-        var currentId = GetRuntimeId(editor);
-        if (currentId is not null && string.Equals(currentId, _editorRuntimeId, StringComparison.Ordinal))
-            return true;
-        return MatchesEditorFingerprint(editor);
+        var expected = _trackedEditorIdentity;
+        var current = CaptureEditorFingerprint(editor);
+        var binding = Volatile.Read(ref _editorBinding);
+        return expected is not null && current is not null &&
+               IsWithinDocumentScope(editor, expected.DocumentRuntimeId, binding?.DocumentRoot) &&
+               TryMatchEditorFingerprint(expected, current, out _, out _);
     }
 
-    private bool MatchesEditorFingerprint(AutomationElement editor)
+    private static bool IsWithinDocumentScope(
+        AutomationElement element,
+        string? expectedDocumentRuntimeId,
+        AutomationElement? documentRoot)
     {
-        if (_editorFingerprint is not { } expected || !IsWithinWindow(editor, _targetWindow)) return false;
-        var current = CaptureEditorFingerprint(editor);
-        if (current is null || current.ProcessId != expected.ProcessId ||
-            current.Node.ControlTypeId != expected.Node.ControlTypeId)
+        if (expectedDocumentRuntimeId is not null)
+            return string.Equals(GetDocumentRuntimeId(element), expectedDocumentRuntimeId, StringComparison.Ordinal);
+        if (documentRoot is null) return false;
+
+        var walker = TreeWalker.ControlViewWalker;
+        try
+        {
+            var current = walker.GetParent(element);
+            for (var depth = 0; current is not null && depth < 16; depth++)
+            {
+                if (Automation.Compare(current, documentRoot)) return true;
+                current = walker.GetParent(current);
+            }
+        }
+        catch (Exception ex) when (IsAutomationFailure(ex) || ex is ObjectDisposedException) { }
+        return false;
+    }
+
+    private IReadOnlyList<EditorCandidate> FindMatchingEditorCandidates(
+        IntPtr targetWindow,
+        EditorFingerprint expected,
+        AutomationElement? trackedDocumentRoot,
+        string previousText,
+        bool allowClearedText,
+        out int examined,
+        out Dictionary<string, int> rejectionCounts,
+        out bool focusedEditorFound)
+    {
+        examined = 0;
+        focusedEditorFound = false;
+        var rejections = new Dictionary<string, int>(StringComparer.Ordinal);
+        rejectionCounts = rejections;
+        var matches = new List<EditorCandidate>();
+        var visitedIds = new HashSet<string>(StringComparer.Ordinal);
+        var visitedNoId = new HashSet<int>();
+        var elements = new List<(AutomationElement Element, TextPattern? Text, ValuePattern? Value)>();
+
+        void Add(AutomationElement element, TextPattern? textPattern, ValuePattern? valuePattern)
+        {
+            string? runtimeId = GetRuntimeId(element);
+            if (runtimeId is not null)
+            {
+                if (!visitedIds.Add(runtimeId)) return;
+            }
+            else if (!visitedNoId.Add(element.GetHashCode()))
+            {
+                return;
+            }
+            elements.Add((element, textPattern, valuePattern));
+        }
+
+        var focused = FindFocusedEditor(targetWindow, out var focusedText, out var focusedValue);
+        if (focused is not null)
+        {
+            focusedEditorFound = true;
+            Add(focused, focusedText, focusedValue);
+        }
+
+        var hasDocumentScope = trackedDocumentRoot is not null || expected.DocumentRuntimeId is not null;
+        if (trackedDocumentRoot is not null || expected.DocumentRuntimeId is not null)
+        {
+            try
+            {
+                var root = trackedDocumentRoot ?? AutomationElement.FromHandle(targetWindow);
+                foreach (var element in EnumerateWindowElements(root, MaxAutomationSearchNodes,
+                             MaxAutomationTreeDepth))
+                {
+                    examined++;
+                    if (!TryGetEditableTextPatterns(element, out var textPattern, out var valuePattern)) continue;
+                    Add(element, textPattern, valuePattern);
+                }
+            }
+            catch (Exception ex) when (IsAutomationFailure(ex) || ex is ObjectDisposedException)
+            {
+                rejections[trackedDocumentRoot is null ? "window-tree-unavailable" : "document-scope-unavailable"] = 1;
+            }
+        }
+        else if (focused is not null)
+            rejections["document-anchor-unavailable"] = 1;
+
+        foreach (var candidate in elements)
+        {
+            if (!IsWithinWindow(candidate.Element, targetWindow))
+            {
+                Increment("outside-target-window");
+                continue;
+            }
+            if (!IsWithinDocumentScope(candidate.Element, expected.DocumentRuntimeId, trackedDocumentRoot))
+            {
+                Increment("document-scope-mismatch");
+                continue;
+            }
+            var fingerprint = CaptureEditorFingerprint(candidate.Element);
+            if (fingerprint is null)
+            {
+                Increment("fingerprint-unavailable");
+                continue;
+            }
+            var sameRuntimeId = expected.RuntimeId is not null &&
+                                string.Equals(expected.RuntimeId, fingerprint.RuntimeId, StringComparison.Ordinal);
+            if (!hasDocumentScope && !sameRuntimeId)
+            {
+                Increment("document-anchor-unavailable");
+                continue;
+            }
+            if (!TryMatchEditorFingerprint(expected, fingerprint, out var score, out var reason))
+            {
+                Increment(reason);
+                continue;
+            }
+            if (!sameRuntimeId)
+            {
+                if (!TryReadText(candidate.Element, candidate.Text, candidate.Value,
+                        out var currentText, out var candidateReadState))
+                {
+                    Increment($"candidate-text-unreadable:{candidateReadState}");
+                    continue;
+                }
+                currentText = NormalizeLineEndings(currentText);
+                var continuity = HasMeaningfulTextContinuity(previousText, currentText);
+                var isExpectedClear = allowClearedText &&
+                                      (string.IsNullOrWhiteSpace(currentText) || IsComposerPlaceholder(currentText));
+                if (!continuity && !isExpectedClear)
+                {
+                    Increment("content-continuity-mismatch");
+                    continue;
+                }
+                if (continuity) score += 40;
+            }
+            var isFocused = focused is not null &&
+                            string.Equals(GetRuntimeId(focused), fingerprint.RuntimeId, StringComparison.Ordinal);
+            matches.Add(new EditorCandidate(candidate.Element, candidate.Text, candidate.Value, fingerprint,
+                score, isFocused));
+        }
+        return matches;
+
+        void Increment(string reason)
+        {
+            rejections.TryGetValue(reason, out var count);
+            rejections[reason] = count + 1;
+        }
+    }
+
+    private bool HasMeaningfulTextContinuity(string previousText, string currentText)
+    {
+        previousText = NormalizeLineEndings(previousText);
+        currentText = NormalizeLineEndings(currentText);
+        if (previousText.Length == 0 || currentText.Length == 0) return false;
+        if (string.Equals(previousText, currentText, StringComparison.Ordinal))
+            return true;
+        var shorterLength = Math.Min(previousText.Length, currentText.Length);
+        if (shorterLength < 4) return false;
+        if (previousText.Contains(currentText, StringComparison.Ordinal) ||
+            currentText.Contains(previousText, StringComparison.Ordinal))
+            return true;
+
+        var stablePrefix = 0;
+        while (stablePrefix < previousText.Length && stablePrefix < currentText.Length &&
+               previousText[stablePrefix] == currentText[stablePrefix])
+            stablePrefix++;
+
+        var stableSuffix = 0;
+        while (stableSuffix < previousText.Length - stablePrefix &&
+               stableSuffix < currentText.Length - stablePrefix &&
+               previousText[^(stableSuffix + 1)] == currentText[^(stableSuffix + 1)])
+            stableSuffix++;
+
+        var sharedContext = stablePrefix + stableSuffix;
+        var requiredContext = Math.Min(12, Math.Max(3, shorterLength / 3));
+        return sharedContext >= requiredContext;
+    }
+
+    private static string FormatRejectionCounts(IReadOnlyDictionary<string, int> rejectionCounts) =>
+        rejectionCounts.Count == 0
+            ? "none"
+            : string.Join(",", rejectionCounts.OrderBy(pair => pair.Key, StringComparer.Ordinal)
+                .Select(pair => $"{pair.Key}:{pair.Value}"));
+
+    private static bool TryMatchEditorFingerprint(
+        EditorFingerprint expected,
+        EditorFingerprint current,
+        out int score,
+        out string reason)
+    {
+        score = 0;
+        if (current.ProcessId != expected.ProcessId)
+        {
+            reason = "process-id-mismatch";
             return false;
+        }
+        if (current.ControlTypeId != expected.ControlTypeId)
+        {
+            reason = "control-type-mismatch";
+            return false;
+        }
+        if (expected.FrameworkId.Length > 0 &&
+            !string.Equals(expected.FrameworkId, current.FrameworkId, StringComparison.Ordinal))
+        {
+            reason = "framework-mismatch";
+            return false;
+        }
+        if (expected.DocumentRuntimeId is not null &&
+            !string.Equals(expected.DocumentRuntimeId, current.DocumentRuntimeId, StringComparison.Ordinal))
+        {
+            reason = "document-anchor-mismatch";
+            return false;
+        }
 
-        var sameAutomationId = expected.Node.AutomationId.Length > 0 &&
-                               string.Equals(expected.Node.AutomationId, current.Node.AutomationId,
+        var sameRuntimeId = expected.RuntimeId is not null &&
+                            string.Equals(expected.RuntimeId, current.RuntimeId, StringComparison.Ordinal);
+        var sameAutomationId = expected.StableAutomationId.Length > 0 &&
+                               string.Equals(expected.StableAutomationId, current.StableAutomationId,
                                    StringComparison.Ordinal);
-        var sameClassAndFramework = expected.Node.ClassName.Length > 0 &&
-                                    expected.Node.FrameworkId.Length > 0 &&
-                                    string.Equals(expected.Node.ClassName, current.Node.ClassName,
-                                        StringComparison.Ordinal) &&
-                                    string.Equals(expected.Node.FrameworkId, current.Node.FrameworkId,
-                                        StringComparison.Ordinal);
-        if (!sameAutomationId && !sameClassAndFramework) return false;
+        var sharedClassTokenCount = expected.StableClassTokens.Intersect(current.StableClassTokens,
+            StringComparer.OrdinalIgnoreCase).Count();
+        var ancestorMatches = CountOrderedAncestorMatches(expected.Ancestors, current.Ancestors);
+        if (!sameRuntimeId && !sameAutomationId && sharedClassTokenCount == 0)
+        {
+            reason = "editor-class-token-mismatch";
+            return false;
+        }
+        if (!sameRuntimeId && expected.DocumentRuntimeId is null &&
+            !(sameAutomationId || ancestorMatches >= 2))
+        {
+            reason = "ancestor-structure-mismatch";
+            return false;
+        }
 
-        var matchingAncestor = expected.Ancestors.Any(oldAncestor => current.Ancestors.Any(newAncestor =>
-            oldAncestor.ControlTypeId == newAncestor.ControlTypeId &&
-            ((oldAncestor.AutomationId.Length > 0 &&
-              string.Equals(oldAncestor.AutomationId, newAncestor.AutomationId, StringComparison.Ordinal)) ||
-             (oldAncestor.ClassName.Length > 0 && oldAncestor.FrameworkId.Length > 0 &&
-              string.Equals(oldAncestor.ClassName, newAncestor.ClassName, StringComparison.Ordinal) &&
-              string.Equals(oldAncestor.FrameworkId, newAncestor.FrameworkId, StringComparison.Ordinal)))));
-        if (!sameAutomationId && !matchingAncestor) return false;
+        score = (sameRuntimeId ? 10_000 : 0) +
+                (expected.DocumentRuntimeId is not null ? 100 : 0) +
+                (sameAutomationId ? 50 : 0) +
+                (sharedClassTokenCount * 20) +
+                (ancestorMatches * 8) +
+                GetBoundsProximityScore(expected.Bounds, current.Bounds);
+        reason = "matched";
+        return true;
+    }
 
-        return AreBoundsNear(expected.Bounds, current.Bounds, sameAutomationId && matchingAncestor);
+    private static int CountOrderedAncestorMatches(
+        IReadOnlyList<EditorNodeFingerprint> expected,
+        IReadOnlyList<EditorNodeFingerprint> current)
+    {
+        var matches = 0;
+        var currentStart = 0;
+        foreach (var expectedNode in expected)
+        {
+            for (var index = currentStart; index < current.Count; index++)
+            {
+                var currentNode = current[index];
+                if (expectedNode.ControlTypeId != currentNode.ControlTypeId) continue;
+                if (expectedNode.StableAutomationId.Length > 0 &&
+                    string.Equals(expectedNode.StableAutomationId, currentNode.StableAutomationId,
+                        StringComparison.Ordinal))
+                {
+                    matches++;
+                    currentStart = index + 1;
+                    break;
+                }
+                if (expectedNode.FrameworkId.Length > 0 &&
+                    !string.Equals(expectedNode.FrameworkId, currentNode.FrameworkId, StringComparison.Ordinal))
+                    continue;
+                if (!expectedNode.StableClassTokens.Intersect(currentNode.StableClassTokens,
+                        StringComparer.OrdinalIgnoreCase).Any())
+                    continue;
+                matches++;
+                currentStart = index + 1;
+                break;
+            }
+        }
+        return matches;
     }
 
     private static EditorFingerprint? CaptureEditorFingerprint(AutomationElement editor)
@@ -947,21 +1429,25 @@ internal sealed class AutoDictionaryLearningMonitor : IDisposable
         try
         {
             var current = editor.Current;
-            var ancestors = new List<EditorNodeFingerprint>(4);
+            var ancestors = new List<EditorNodeFingerprint>(8);
+            string? documentRuntimeId = null;
             var walker = TreeWalker.ControlViewWalker;
             var parent = walker.GetParent(editor);
-            for (var depth = 0; parent is not null && depth < 4; depth++)
+            for (var depth = 0; parent is not null && depth < 16; depth++)
             {
                 var parentInfo = parent.Current;
+                var parentRuntimeId = GetRuntimeId(parent);
                 ancestors.Add(new EditorNodeFingerprint(parentInfo.ControlType.Id,
-                    parentInfo.AutomationId ?? string.Empty, parentInfo.ClassName ?? string.Empty,
-                    parentInfo.FrameworkId ?? string.Empty));
+                    parentInfo.FrameworkId ?? string.Empty, GetStableAutomationId(parentInfo.AutomationId),
+                    GetStableClassTokens(parentInfo.ClassName), parentRuntimeId));
+                if (parentInfo.ControlType == ControlType.Document && documentRuntimeId is null)
+                    documentRuntimeId = parentRuntimeId;
                 parent = walker.GetParent(parent);
             }
 
-            return new EditorFingerprint(current.ProcessId,
-                new EditorNodeFingerprint(current.ControlType.Id, current.AutomationId ?? string.Empty,
-                    current.ClassName ?? string.Empty, current.FrameworkId ?? string.Empty),
+            return new EditorFingerprint(current.ProcessId, current.ControlType.Id,
+                current.FrameworkId ?? string.Empty, GetStableAutomationId(current.AutomationId),
+                GetStableClassTokens(current.ClassName), GetRuntimeId(editor), documentRuntimeId,
                 ancestors.ToArray(), current.BoundingRectangle);
         }
         catch (Exception ex) when (IsAutomationFailure(ex) || ex is ObjectDisposedException)
@@ -970,48 +1456,297 @@ internal sealed class AutoDictionaryLearningMonitor : IDisposable
         }
     }
 
-    private static bool AreBoundsNear(Rect original, Rect current, bool hasStrongAncestor)
+    private static string? GetDocumentRuntimeId(AutomationElement element)
+    {
+        var walker = TreeWalker.ControlViewWalker;
+        try
+        {
+            var parent = walker.GetParent(element);
+            for (var depth = 0; parent is not null && depth < 16; depth++)
+            {
+                if (parent.Current.ControlType == ControlType.Document)
+                    return GetRuntimeId(parent);
+                parent = walker.GetParent(parent);
+            }
+        }
+        catch (Exception ex) when (IsAutomationFailure(ex) || ex is ObjectDisposedException) { }
+        return null;
+    }
+
+    private static int GetBoundsProximityScore(Rect original, Rect current)
     {
         if (original.IsEmpty || current.IsEmpty || original.Width <= 0 || original.Height <= 0 ||
             current.Width <= 0 || current.Height <= 0)
-            return hasStrongAncestor;
-        if (original.IntersectsWith(current)) return true;
-
+            return 0;
+        if (original.IntersectsWith(current)) return 5;
         var centerXDistance = Math.Abs(original.Left + original.Width / 2 - current.Left - current.Width / 2);
         var centerYDistance = Math.Abs(original.Top + original.Height / 2 - current.Top - current.Height / 2);
-        var maxWidth = Math.Max(original.Width, current.Width);
-        var maxHeight = Math.Max(original.Height, current.Height);
-        return centerXDistance <= Math.Max(180, maxWidth * 0.75) &&
-               centerYDistance <= Math.Max(180, maxHeight * 1.5);
+        return centerXDistance <= Math.Max(300, Math.Max(original.Width, current.Width)) &&
+               centerYDistance <= Math.Max(240, Math.Max(original.Height, current.Height) * 2)
+            ? 1
+            : 0;
     }
 
-    private void CaptureEditorPlaceholderLabels(AutomationElement editor, string initialText)
+    private static string DescribeBoundsEvidence(Rect original, Rect current)
     {
+        if (original.IsEmpty || current.IsEmpty || original.Width <= 0 || original.Height <= 0 ||
+            current.Width <= 0 || current.Height <= 0)
+            return "unavailable";
+        if (original.IntersectsWith(current)) return "overlap";
+        return GetBoundsProximityScore(original, current) > 0 ? "near" : "far";
+    }
+
+    private static string GetStableAutomationId(string? automationId)
+    {
+        if (string.IsNullOrWhiteSpace(automationId) || automationId.Length > 64 ||
+            Guid.TryParse(automationId, out _) || automationId.Any(char.IsWhiteSpace))
+            return string.Empty;
+        var compact = automationId.Replace("-", string.Empty, StringComparison.Ordinal)
+            .Replace("_", string.Empty, StringComparison.Ordinal);
+        if (compact.Length >= 16 && compact.All(Uri.IsHexDigit)) return string.Empty;
+        return automationId;
+    }
+
+    private static string[] GetStableClassTokens(string? className)
+    {
+        if (string.IsNullOrWhiteSpace(className)) return Array.Empty<string>();
+        return className.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries)
+            .Where(token => token.Length <= 80 &&
+                            !token.Contains("focus", StringComparison.OrdinalIgnoreCase) &&
+                            !token.Contains("active", StringComparison.OrdinalIgnoreCase) &&
+                            !Guid.TryParse(token, out _))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+    }
+
+    private static EditorBinding? CreateEditorBinding(
+        AutomationElement element,
+        TextPattern? textPattern,
+        ValuePattern? valuePattern,
+        long generation,
+        EditorFingerprint? fingerprint = null)
+    {
+        fingerprint ??= CaptureEditorFingerprint(element);
+        return fingerprint is null
+            ? null
+            : new EditorBinding(element, textPattern, valuePattern, fingerprint.RuntimeId, fingerprint,
+                FindDocumentAncestor(element), generation);
+    }
+
+    private static AutomationElement? FindDocumentAncestor(AutomationElement element)
+    {
+        var walker = TreeWalker.ControlViewWalker;
         try
         {
-            var current = editor.Current;
-            AddPlaceholderLabel(current.Name, initialText);
-            AddPlaceholderLabel(current.HelpText, initialText);
+            var parent = walker.GetParent(element);
+            for (var depth = 0; parent is not null && depth < 16; depth++)
+            {
+                if (parent.Current.ControlType == ControlType.Document) return parent;
+                parent = walker.GetParent(parent);
+            }
         }
         catch (Exception ex) when (IsAutomationFailure(ex) || ex is ObjectDisposedException) { }
+        return null;
     }
 
-    private void AddPlaceholderLabel(string? value, string initialText)
+    private static IReadOnlyList<AutomationElement> EnumerateWindowElements(
+        AutomationElement root,
+        int maximumNodes,
+        int maximumDepth)
     {
-        if (string.IsNullOrWhiteSpace(value)) return;
-        var normalized = NormalizePlaceholderText(value);
-        if (normalized.Length is < 3 or > MaxPlaceholderLength ||
-            normalized.Contains('\n') || initialText.Contains(normalized, StringComparison.OrdinalIgnoreCase) ||
-            normalized.Contains(initialText, StringComparison.OrdinalIgnoreCase))
-            return;
-        _editorPlaceholderLabels.Add(normalized);
+        var walker = TreeWalker.ControlViewWalker;
+        var pending = new Stack<(AutomationElement Element, int Depth)>();
+        var result = new List<AutomationElement>(Math.Min(maximumNodes, 512));
+        try
+        {
+            var firstChild = walker.GetFirstChild(root);
+            var siblings = new List<AutomationElement>();
+            for (var child = firstChild; child is not null && siblings.Count < maximumNodes;)
+            {
+                siblings.Add(child);
+                try { child = walker.GetNextSibling(child); }
+                catch (Exception ex) when (IsAutomationFailure(ex) || ex is ObjectDisposedException) { break; }
+            }
+            for (var index = siblings.Count - 1; index >= 0; index--)
+                pending.Push((siblings[index], 1));
+        }
+        catch (Exception ex) when (IsAutomationFailure(ex) || ex is ObjectDisposedException)
+        {
+            return result;
+        }
+
+        while (pending.Count > 0 && result.Count < maximumNodes)
+        {
+            var (element, depth) = pending.Pop();
+            result.Add(element);
+            if (depth >= maximumDepth) continue;
+            try
+            {
+                var child = walker.GetFirstChild(element);
+                var siblings = new List<AutomationElement>();
+                while (child is not null && result.Count + pending.Count + siblings.Count < maximumNodes)
+                {
+                    siblings.Add(child);
+                    try { child = walker.GetNextSibling(child); }
+                    catch (Exception ex) when (IsAutomationFailure(ex) || ex is ObjectDisposedException) { break; }
+                }
+                for (var index = siblings.Count - 1; index >= 0; index--)
+                    pending.Push((siblings[index], depth + 1));
+            }
+            catch (Exception ex) when (IsAutomationFailure(ex) || ex is ObjectDisposedException) { }
+        }
+        return result;
     }
 
-    private bool IsComposerPlaceholder(string fullText)
+    private static bool TryGetEditableTextPatterns(
+        AutomationElement element,
+        out TextPattern? textPattern,
+        out ValuePattern? valuePattern)
+    {
+        textPattern = null;
+        valuePattern = null;
+        try
+        {
+            var current = element.Current;
+            if (current.IsPassword || !current.IsEnabled || current.IsOffscreen) return false;
+            var hasText = element.TryGetCurrentPattern(TextPattern.Pattern, out var textValue) &&
+                          textValue is TextPattern;
+            var hasEditableValue = element.TryGetCurrentPattern(ValuePattern.Pattern, out var value) &&
+                                   value is ValuePattern pattern && !pattern.Current.IsReadOnly;
+            if (!hasText || (!hasEditableValue && current.ControlType != ControlType.Edit)) return false;
+            textPattern = (TextPattern)textValue!;
+            valuePattern = hasEditableValue ? (ValuePattern)value! : null;
+            return true;
+        }
+        catch (Exception ex) when (IsAutomationFailure(ex) || ex is ObjectDisposedException)
+        {
+            return false;
+        }
+    }
+
+    private static Dictionary<string, string> CaptureReadOnlyTextElementDigests(
+        AutomationElement? documentRoot,
+        string? trackedEditorRuntimeId)
+    {
+        var result = new Dictionary<string, string>(StringComparer.Ordinal);
+        if (documentRoot is null) return result;
+        try
+        {
+            foreach (var element in EnumerateWindowElements(documentRoot, MaxAutomationSearchNodes,
+                         MaxAutomationTreeDepth))
+            {
+                try
+                {
+                    var current = element.Current;
+                    if (current.IsOffscreen) continue;
+                    if (current.ControlType != ControlType.Text &&
+                        current.ControlType != ControlType.Group &&
+                        current.ControlType != ControlType.ListItem &&
+                        current.ControlType != ControlType.Custom)
+                        continue;
+                    var runtimeId = GetRuntimeId(element);
+                    if (runtimeId is null || string.Equals(runtimeId, trackedEditorRuntimeId, StringComparison.Ordinal))
+                        continue;
+                    if (element.TryGetCurrentPattern(ValuePattern.Pattern, out var value) &&
+                        value is ValuePattern valuePattern && !valuePattern.Current.IsReadOnly)
+                        continue;
+                    var renderedText = ReadRenderedTextForEvidence(element, current);
+                    if (renderedText.Length <= MaxDocumentLength)
+                        result[runtimeId] = ComputeTextDigest(renderedText);
+                }
+                catch (Exception ex) when (IsAutomationFailure(ex) || ex is ObjectDisposedException) { }
+            }
+        }
+        catch (Exception ex) when (IsAutomationFailure(ex) || ex is ObjectDisposedException) { }
+        return result;
+    }
+
+    private bool HasNewOutgoingTextEvidence(string expectedText, out string evidence)
+    {
+        var normalizedExpected = NormalizePlaceholderText(expectedText);
+        var currentBinding = Volatile.Read(ref _editorBinding);
+        var baselineDigests = Volatile.Read(ref _baselineTextElementDigests);
+        if (normalizedExpected.Length < 2)
+        {
+            evidence = "submitted-text-too-short";
+            return false;
+        }
+        if (currentBinding?.DocumentRoot is null)
+        {
+            evidence = "tracked-document-anchor-unavailable";
+            return false;
+        }
+
+        try
+        {
+            foreach (var element in EnumerateWindowElements(currentBinding.DocumentRoot, MaxAutomationSearchNodes,
+                         MaxAutomationTreeDepth))
+            {
+                try
+                {
+                    var current = element.Current;
+                    if (current.IsOffscreen) continue;
+                    if (current.ControlType != ControlType.Text &&
+                        current.ControlType != ControlType.Group &&
+                        current.ControlType != ControlType.ListItem &&
+                        current.ControlType != ControlType.Custom)
+                        continue;
+                    var runtimeId = GetRuntimeId(element);
+                    if (runtimeId is null ||
+                        string.Equals(runtimeId, currentBinding?.RuntimeId, StringComparison.Ordinal))
+                        continue;
+                    if (element.TryGetCurrentPattern(ValuePattern.Pattern, out var value) &&
+                        value is ValuePattern valuePattern && !valuePattern.Current.IsReadOnly)
+                        continue;
+
+                    var renderedText = ReadRenderedTextForEvidence(element, current);
+                    if (renderedText.Length > MaxDocumentLength) continue;
+                    var digest = ComputeTextDigest(renderedText);
+                    if (baselineDigests.TryGetValue(runtimeId, out var baselineDigest) &&
+                        string.Equals(digest, baselineDigest, StringComparison.Ordinal))
+                        continue;
+                    if (string.Equals(NormalizePlaceholderText(renderedText), normalizedExpected,
+                            StringComparison.OrdinalIgnoreCase))
+                    {
+                        evidence = "new-readonly-text-node-contains-submitted-correction";
+                        return true;
+                    }
+                }
+                catch (Exception ex) when (IsAutomationFailure(ex) || ex is ObjectDisposedException) { }
+            }
+        }
+        catch (Exception ex) when (IsAutomationFailure(ex) || ex is ObjectDisposedException) { }
+
+        evidence = "no-new-exact-outgoing-text-node";
+        return false;
+    }
+
+    private static string ReadRenderedTextForEvidence(
+        AutomationElement element,
+        AutomationElement.AutomationElementInformation current)
+    {
+        var renderedText = current.Name ?? string.Empty;
+        if (renderedText.Length > 0) return renderedText;
+        if (!element.TryGetCurrentPattern(TextPattern.Pattern, out var textValue) ||
+            textValue is not TextPattern textPattern)
+            return string.Empty;
+        try { return textPattern.DocumentRange.GetText(MaxDocumentLength + 1); }
+        catch (Exception ex) when (IsAutomationFailure(ex) || ex is ObjectDisposedException) { return string.Empty; }
+    }
+
+    private static string ComputeTextDigest(string value) =>
+        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(NormalizeLineEndings(value))));
+
+    private static bool AreSameAutomationElement(AutomationElement left, AutomationElement right)
+    {
+        try { return Automation.Compare(left, right); }
+        catch (Exception ex) when (IsAutomationFailure(ex) || ex is ObjectDisposedException) { return false; }
+    }
+
+    private static bool IsComposerPlaceholder(string fullText)
     {
         if (fullText.Length > MaxPlaceholderLength) return false;
-        var normalized = NormalizePlaceholderText(fullText);
-        return KnownComposerPlaceholders.Contains(normalized) || _editorPlaceholderLabels.Contains(normalized);
+        return KnownComposerPlaceholders.Contains(NormalizePlaceholderText(fullText));
     }
 
     private static string NormalizePlaceholderText(string value) =>
@@ -1020,20 +1755,72 @@ internal sealed class AutoDictionaryLearningMonitor : IDisposable
 
     private sealed record EditorNodeFingerprint(
         int ControlTypeId,
-        string AutomationId,
-        string ClassName,
-        string FrameworkId);
+        string FrameworkId,
+        string StableAutomationId,
+        string[] StableClassTokens,
+        string? RuntimeId);
 
     private sealed record EditorFingerprint(
         int ProcessId,
-        EditorNodeFingerprint Node,
+        int ControlTypeId,
+        string FrameworkId,
+        string StableAutomationId,
+        string[] StableClassTokens,
+        string? RuntimeId,
+        string? DocumentRuntimeId,
         EditorNodeFingerprint[] Ancestors,
         Rect Bounds);
+
+    private sealed record EditorBinding(
+        AutomationElement Element,
+        TextPattern? TextPattern,
+        ValuePattern? ValuePattern,
+        string? RuntimeId,
+        EditorFingerprint Fingerprint,
+        AutomationElement? DocumentRoot,
+        long Generation);
+
+    private sealed record EditorCandidate(
+        AutomationElement Element,
+        TextPattern? TextPattern,
+        ValuePattern? ValuePattern,
+        EditorFingerprint Fingerprint,
+        int Score,
+        bool IsFocused);
+
+    private sealed record EditorAccess(
+        AutomationElement Element,
+        TextPattern? TextPattern,
+        ValuePattern? ValuePattern,
+        long Generation,
+        string? RuntimeId,
+        string? DocumentRuntimeId);
+
+    private sealed record AutomationNotice(
+        AutomationNoticeKind Kind,
+        long Generation,
+        AutomationElement? Element = null);
+
+    private enum AutomationNoticeKind
+    {
+        EditorChanged,
+        FocusChanged,
+        Invoked
+    }
+
+    private enum EditorTrackingState
+    {
+        Starting,
+        Tracking,
+        Reacquiring,
+        Suspended,
+        Submitted
+    }
 
     private void UpdateTrackedEditorFocus(AutomationElement? editor)
     {
         long focusedAt = 0;
-        if (editor is not null && !string.IsNullOrWhiteSpace(_editorRuntimeId))
+        if (editor is not null && _trackedEditorIdentity is not null)
         {
             try
             {
@@ -1079,18 +1866,9 @@ internal sealed class AutoDictionaryLearningMonitor : IDisposable
             var walker = TreeWalker.ControlViewWalker;
             for (var depth = 0; element is not null && depth < 64 && IsWithinWindow(element, targetWindow); depth++)
             {
-                if (!element.Current.IsPassword && element.Current.IsEnabled)
+                if (TryGetEditableTextPatterns(element, out textPattern, out valuePattern))
                 {
-                    var hasText = element.TryGetCurrentPattern(TextPattern.Pattern, out var textValue) &&
-                                  textValue is TextPattern;
-                    var hasEditableValue = element.TryGetCurrentPattern(ValuePattern.Pattern, out var value) &&
-                                           value is ValuePattern pattern && !pattern.Current.IsReadOnly;
-                    if (hasText && (hasEditableValue || element.Current.ControlType == ControlType.Edit))
-                    {
-                        textPattern = (TextPattern)textValue!;
-                        valuePattern = hasEditableValue ? (ValuePattern)value! : null;
-                        return element;
-                    }
+                    return element;
                 }
                 element = walker.GetParent(element);
             }
@@ -1228,10 +2006,6 @@ internal sealed class AutoDictionaryLearningMonitor : IDisposable
         exception is ElementNotAvailableException or InvalidOperationException or COMException or
             UnauthorizedAccessException or ArgumentException;
 
-    private static bool IsRecoverableEditorFailure(string readState) =>
-        readState.Contains(nameof(ElementNotAvailableException), StringComparison.Ordinal) ||
-        readState.Contains(nameof(ObjectDisposedException), StringComparison.Ordinal);
-
     private enum SnapshotState
     {
         Unreadable,
@@ -1248,7 +2022,10 @@ internal sealed class AutoDictionaryLearningMonitor : IDisposable
         string FullText,
         string Segment,
         SnapshotState State,
-        string ReadState)
+        string ReadState,
+        string? EditorRuntimeId = null,
+        string? DocumentRuntimeId = null,
+        long EditorGeneration = 0)
     {
         public static EditorSnapshot Unreadable { get; } =
             new(0, 0, string.Empty, string.Empty, SnapshotState.Unreadable, "not-initialized");
@@ -1288,6 +2065,9 @@ internal sealed class AutoDictionaryLearningMonitor : IDisposable
 
     [DllImport("user32.dll")]
     private static extern IntPtr GetForegroundWindow();
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern uint GetWindowThreadProcessId(IntPtr window, out uint processId);
 
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     private static extern IntPtr GetModuleHandle(string? moduleName);
