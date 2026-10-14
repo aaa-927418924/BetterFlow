@@ -11,7 +11,6 @@
             <Grid>
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto" />
-                    <RowDefinition Height="Auto" />
                     <RowDefinition Height="*" />
                 </Grid.RowDefinitions>
                 <DockPanel Grid.Row="0" LastChildFill="True">
@@ -19,13 +18,20 @@
                             Style="{StaticResource WindowControlButtonStyle}"
                             Click="CloseButton_Click" ToolTip="回答を閉じる"
                             AutomationProperties.Name="回答を閉じる" />
-                    <TextBlock x:Name="AnswerTitle" Text="回答" FontSize="16" FontWeight="SemiBold"
-                               VerticalAlignment="Center" Margin="0,0,12,0" />
+                    <Viewbox Width="42" Height="40" Stretch="Uniform" VerticalAlignment="Center"
+                             Margin="0,0,12,0" AutomationProperties.Name="Better Flow">
+                        <Canvas Width="82" Height="77">
+                            <Border Width="82" Height="77" Background="White" CornerRadius="28" />
+                            <Rectangle Canvas.Left="35" Canvas.Top="15" Width="11" Height="46"
+                                       RadiusX="5.5" RadiusY="5.5" Fill="#2B2B2B" />
+                            <Rectangle Canvas.Left="17" Canvas.Top="18" Width="11" Height="41"
+                                       RadiusX="5.5" RadiusY="5.5" Fill="#2B2B2B" />
+                            <Rectangle Canvas.Left="53" Canvas.Top="24" Width="11" Height="29"
+                                       RadiusX="5.5" RadiusY="5.5" Fill="#2B2B2B" />
+                        </Canvas>
+                    </Viewbox>
                 </DockPanel>
-                <TextBlock x:Name="AnswerStatus" Grid.Row="1" Text=""
-                           FontSize="11" Foreground="{StaticResource MutedBrush}"
-                           Margin="0,8,0,10" AutomationProperties.LiveSetting="Polite" />
-                <ScrollViewer x:Name="AnswerScrollViewer" Grid.Row="2"
+                <ScrollViewer x:Name="AnswerScrollViewer" Grid.Row="1" Margin="0,14,0,0"
                               VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
                               CanContentScroll="False" ScrollChanged="AnswerScrollViewer_ScrollChanged">
                     <TextBlock x:Name="AnswerContent" Text="" FontSize="15" LineHeight="23"

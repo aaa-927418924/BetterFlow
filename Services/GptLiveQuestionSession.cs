@@ -31,6 +31,9 @@ internal sealed class GptLiveQuestionSession : IAsyncDisposable
     private string _selectedText = string.Empty;
     private string _activeAssistantText = string.Empty;
     private string _lastUserTranscript = string.Empty;
+    private string _pendingUserTranscript = string.Empty;
+    private DateTimeOffset _lastUserTranscriptAt;
+    private readonly HashSet<string> _reportedUserTranscriptIds = new(StringComparer.Ordinal);
     private bool _disposed;
 
     public GptLiveQuestionSession(GptLiveAuthService auth)
@@ -267,19 +270,31 @@ internal sealed class GptLiveQuestionSession : IAsyncDisposable
                 _sessionStarted.TrySetResult();
                 break;
             case "input_transcript.added":
+                if (TryGetTranscript(liveEvent, out var interimTranscript))
+                    _pendingUserTranscript = interimTranscript.Trim();
+                _statusHandler?.Invoke("GPT Liveが質問を認識しています…");
+                break;
             case "conversation.item.input_audio_transcription.completed":
-                if (TryGetTranscript(liveEvent, out var inputText)) ReportQuestion(inputText);
+                if (TryGetTranscript(liveEvent, out var inputText))
+                    ReportQuestion(inputText, GetTranscriptEventId(liveEvent));
+                else if (!string.IsNullOrWhiteSpace(_pendingUserTranscript))
+                    ReportQuestion(_pendingUserTranscript, GetTranscriptEventId(liveEvent));
                 break;
             case "turn.done":
                 if (liveEvent.TryGetProperty("turn", out var turn) && turn.ValueKind == JsonValueKind.Object)
                 {
                     var role = ReadString(turn, "role");
                     var transcript = ReadString(turn, "transcript");
-                    if (role == "user" && !string.IsNullOrWhiteSpace(transcript)) ReportQuestion(transcript);
+                    if (role == "user" && !string.IsNullOrWhiteSpace(transcript))
+                        ReportQuestion(transcript, GetTranscriptEventId(liveEvent));
+                    else if (role == "user" && !string.IsNullOrWhiteSpace(_pendingUserTranscript))
+                        ReportQuestion(_pendingUserTranscript, GetTranscriptEventId(liveEvent));
                     else if (role == "assistant" && !string.IsNullOrWhiteSpace(transcript)) SetAssistantText(transcript);
                 }
                 break;
             case "session.input_transcript.delta":
+                if (ReadString(liveEvent, "delta") is { Length: > 0 } transcriptDelta)
+                    _pendingUserTranscript += transcriptDelta;
                 _statusHandler?.Invoke("GPT Liveが質問を認識しています…");
                 break;
             case "session.output_transcript.delta":
@@ -305,14 +320,44 @@ internal sealed class GptLiveQuestionSession : IAsyncDisposable
         }
     }
 
-    private void ReportQuestion(string text)
+    private void ReportQuestion(string text, string? eventId = null)
     {
         text = text.Trim();
-        if (string.IsNullOrWhiteSpace(text) || string.Equals(text, _lastUserTranscript, StringComparison.Ordinal)) return;
+        if (string.IsNullOrWhiteSpace(text)) return;
+        var reportedAt = DateTimeOffset.UtcNow;
+        if (!string.IsNullOrWhiteSpace(eventId))
+        {
+            if (!_reportedUserTranscriptIds.Add(eventId))
+            {
+                _pendingUserTranscript = string.Empty;
+                return;
+            }
+        }
+        if (string.Equals(text, _lastUserTranscript, StringComparison.Ordinal) &&
+            reportedAt - _lastUserTranscriptAt < TimeSpan.FromSeconds(2))
+        {
+            _pendingUserTranscript = string.Empty;
+            return;
+        }
+
         _lastUserTranscript = text;
+        _lastUserTranscriptAt = reportedAt;
+        _pendingUserTranscript = string.Empty;
         _activeAssistantText = string.Empty;
         _questionHandler?.Invoke(text);
         _statusHandler?.Invoke("GPT Liveが回答しています…");
+    }
+
+    private static string? GetTranscriptEventId(JsonElement element)
+    {
+        if (ReadString(element, "item_id") is { Length: > 0 } itemId) return itemId;
+        if (element.TryGetProperty("item", out var item) && item.ValueKind == JsonValueKind.Object &&
+            ReadString(item, "id") is { Length: > 0 } nestedItemId)
+            return nestedItemId;
+        if (element.TryGetProperty("turn", out var turn) && turn.ValueKind == JsonValueKind.Object &&
+            ReadString(turn, "id") is { Length: > 0 } turnId)
+            return turnId;
+        return ReadString(element, "id");
     }
 
     private void AppendAssistantText(string delta)

@@ -13,6 +13,7 @@ public partial class AnswerWindow : System.Windows.Window
     private const long WsExNoActivate = 0x08000000L;
     private bool _followOutput = true;
     private string _conversationText = string.Empty;
+    private string _pendingQuestion = string.Empty;
     private string _currentAssistantText = string.Empty;
 
     public AnswerWindow()
@@ -21,17 +22,16 @@ public partial class AnswerWindow : System.Windows.Window
         SourceInitialized += (_, _) => MakeNonActivating();
     }
 
-    public void BeginAnswer(string status)
+    public void ResetConversation()
     {
         RunOnUi(() =>
         {
             _followOutput = true;
-            AnswerTitle.Text = "回答";
             _conversationText = string.Empty;
+            _pendingQuestion = string.Empty;
             _currentAssistantText = string.Empty;
             AnswerContent.Text = string.Empty;
-            AnswerStatus.Text = status;
-            ShowAboveIndicator();
+            Hide();
         });
     }
 
@@ -40,27 +40,10 @@ public partial class AnswerWindow : System.Windows.Window
         RunOnUi(() =>
         {
             _followOutput = true;
-            if (_currentAssistantText.Length > 0)
-                _conversationText += _currentAssistantText;
-            if (_conversationText.Length > 0)
-                _conversationText += "\n\n";
-            _conversationText += $"あなた: {question}\n\n回答: ";
+            CommitCurrentTurnCore();
+            _pendingQuestion = question.Trim();
             _currentAssistantText = string.Empty;
-            AnswerContent.Text = _conversationText;
-            AnswerStatus.Text = "GPT Liveが回答しています…";
-            ShowAboveIndicator();
-            AnswerScrollViewer.ScrollToEnd();
-        });
-    }
-
-    public void SetResponseText(string text)
-    {
-        RunOnUi(() =>
-        {
-            _conversationText = text;
-            _currentAssistantText = string.Empty;
-            AnswerContent.Text = _conversationText;
-            if (_followOutput) AnswerScrollViewer.ScrollToEnd();
+            RefreshAnswerText();
         });
     }
 
@@ -69,17 +52,58 @@ public partial class AnswerWindow : System.Windows.Window
         RunOnUi(() =>
         {
             _currentAssistantText = text;
-            AnswerContent.Text = _conversationText + _currentAssistantText;
-            if (_followOutput) AnswerScrollViewer.ScrollToEnd();
+            RefreshAnswerText();
+            if (!string.IsNullOrWhiteSpace(text)) ShowAboveIndicator();
         });
     }
 
-    public void SetStatus(string status)
+    public void CommitCurrentTurn()
     {
-        RunOnUi(() => AnswerStatus.Text = status);
+        RunOnUi(() =>
+        {
+            CommitCurrentTurnCore();
+            RefreshAnswerText();
+        });
+    }
+
+    public void DiscardCurrentTurn()
+    {
+        RunOnUi(() =>
+        {
+            _pendingQuestion = string.Empty;
+            _currentAssistantText = string.Empty;
+            RefreshAnswerText();
+            if (string.IsNullOrWhiteSpace(_conversationText)) Hide();
+        });
     }
 
     public void HideAnswer() => RunOnUi(Hide);
+
+    private void CommitCurrentTurnCore()
+    {
+        if (!string.IsNullOrWhiteSpace(_currentAssistantText))
+        {
+            if (_conversationText.Length > 0) _conversationText += "\n\n";
+            if (_pendingQuestion.Length > 0)
+                _conversationText += $"あなた: {_pendingQuestion}\n\n回答: ";
+            _conversationText += _currentAssistantText.Trim();
+        }
+        _pendingQuestion = string.Empty;
+        _currentAssistantText = string.Empty;
+    }
+
+    private void RefreshAnswerText()
+    {
+        var currentTurn = string.IsNullOrWhiteSpace(_currentAssistantText)
+            ? string.Empty
+            : (_pendingQuestion.Length > 0
+                ? $"あなた: {_pendingQuestion}\n\n回答: {_currentAssistantText}"
+                : _currentAssistantText);
+        AnswerContent.Text = _conversationText.Length > 0 && currentTurn.Length > 0
+            ? _conversationText + "\n\n" + currentTurn
+            : _conversationText + currentTurn;
+        if (_followOutput) AnswerScrollViewer.ScrollToEnd();
+    }
 
     private void ShowAboveIndicator()
     {

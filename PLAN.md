@@ -30,6 +30,9 @@
 - 任意でGPT Live音声会話を選べる。ChatGPTサブスクリプションOAuthとWebRTCを用い、選択文を参考コンテキストとして渡し、回答音声と同じ会話の回答文字列を表示する。会話はショートカットで開始・停止する。OAuth情報はDPAPI保護、WebView2 Runtimeが不足する場合は署名を検証して導入する。入力欄の文章編集はOpenCodeのまま維持する。
 - 回答ウィンドウは下部インジケーターの上に表示し、スクロール可能なテキストと設定画面共通のスクロールバーを使う。角丸はインジケーターと同じ19px。テキスト回答とGPT Live回答の両方をストリーミング表示する。
 - 実装状態: UI Automationの選択範囲を編集可能入力と通常テキストへ分類し、設定の回答方式を保存。OpenCode回答は選択文を未信頼資料として扱う専用プロンプトとSSE逐次更新を追加。GPT LiveはOAuth/WebView2/WebRTCセッションを任意モードとして再導入し、会話音声・発話テキスト・回答文字列の表示、同じショートカットでの終了を接続した。Release buildは警告0・エラー0。単体EXE発行とdist差し替えに成功し、`artifacts/publish-selected-text-qa/BetterFlow.exe` と `dist/Better Flow.exe` は82,400,260 bytes、SHA-256 `F6FAB1C2A4173736282F56EF0DBA41B36D77B7AF3953C41306748C627C42B032`で一致。更新前EXEは`artifacts/BetterFlow-before-selected-text-qa-20261014.exe`へ保存。実UI、OpenCode生成、ChatGPT OAuth/WebRTC、マイク、音声再生は未確認。テストスイートは実行していない。
+- 質問セッションの録音方針: OpenCode質問モードは編集モードと同じSilero VADで無音区間を確定し、回答後も録音を続けて次の質問を受け付ける。前の質問・回答も次の質問の文脈へ渡す。GPT Liveモードではこれまで通りローカルVADを使わず、GPT Live側の音声ターン検出を維持する。
+- 回答UIと音声イベント: 回答パネル上部の「回答」見出しとステータス行を外し、音声レベルに反応しない静止ベクターアイコンを置く。最初の空でないassistant出力が届くまで初回パネルを表示しない。OpenCodeのストリームはassistant message IDに紐づくtext partだけを表示し、質問・選択文などの送信内容を出さない。GPT Liveは途中の文字起こしイベントを確定回答にせず、completed/turn.doneの発話単位で一度だけ会話へ追加する。
+- 実施結果: 変更前に`cb66094 feat: add selected-text question modes`をチェックポイントとして作成。OpenCode質問のSilero VAD連続処理、選択文と会話履歴を含む回答、応答開始までのパネル遅延表示、assistant message IDによる出力限定、GPT Liveの途中文字起こし抑制と重複抑制を実装。GPT LiveはWebRTC側の既存発話ターン処理を維持し、Silero VADを追加していない。Release build/publish成功（0エラー、NuGet脆弱性フィード取得不可のNU1900警告1件）。`artifacts/publish-selected-text-question-flow-20261014/BetterFlow.exe`と`dist/Better Flow.exe`は82,401,843 bytes、SHA-256 `3E93C5612856FF51602A936F9674668E2554D8B72DA3B0953E45641F15206C8F`で一致。更新前EXEは`artifacts/BetterFlow-before-question-flow-20261014.exe`へ保存。テストスイートと実UI・マイク・OpenCode/GPT Live実会話は未確認。
 
 ## 音声認識モデル選定根拠
 

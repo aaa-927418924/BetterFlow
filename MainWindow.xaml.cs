@@ -44,8 +44,9 @@ public partial class MainWindow : System.Windows.Window
     private CancellationTokenSource? _audioProcessingCancellation;
     private CancellationTokenSource? _selectedTextQuestionCancellation;
     private GptLiveQuestionSession? _gptLiveQuestionSession;
-    private SelectionEditContext? _pendingSelectedTextQuestion;
-    private bool _selectedTextQuestionProcessing;
+    private readonly List<(string Question, string Answer)> _selectedTextQuestionHistory = new();
+    private bool _selectedTextQuestionSessionActive;
+    private bool _selectedTextQuestionSessionStopping;
     private bool _gptLiveQuestionActive;
     private bool _loadingSelectedTextAnswerModeUi;
     private bool _selectionEditSessionActive;
@@ -144,6 +145,11 @@ public partial class MainWindow : System.Windows.Window
 
     private async void ActionButton_Click(object sender, System.Windows.RoutedEventArgs e)
     {
+        if (_selectedTextQuestionSessionActive)
+        {
+            await StopSelectedTextQuestionSessionAsync();
+            return;
+        }
         if (_selectionEditSessionActive)
         {
             await CancelAudioProcessingAsync();
@@ -787,15 +793,15 @@ public partial class MainWindow : System.Windows.Window
 
     private async Task RecordButton_Click()
     {
-        if (_gptLiveQuestionActive)
+        if (_selectedTextQuestionSessionActive)
         {
-            await StopGptLiveSelectedTextQuestionAsync();
+            await StopSelectedTextQuestionSessionAsync();
             return;
         }
 
-        if (_pendingSelectedTextQuestion is not null && _recorder.IsRecording)
+        if (_gptLiveQuestionActive)
         {
-            await StopAndProcessSelectedTextQuestionAsync();
+            await StopGptLiveSelectedTextQuestionAsync();
             return;
         }
 
@@ -878,22 +884,30 @@ public partial class MainWindow : System.Windows.Window
 
     private void BeginSelectedTextQuestionRecording(SelectionEditContext context)
     {
+        var selectedInput = MicrophoneDeviceCombo.SelectedItem as AudioInputDeviceOption;
+        var cancellation = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token);
         try
         {
-            var selectedInput = MicrophoneDeviceCombo.SelectedItem as AudioInputDeviceOption;
-            _pendingSelectedTextQuestion = context;
-            StartRecorderWithFallback(_recorder.Start, selectedInput);
+            StartRecorderWithFallback(_continuousRecorder.Start, selectedInput);
+            _selectedTextQuestionCancellation = cancellation;
+            _selectedTextQuestionHistory.Clear();
+            _selectedTextQuestionSessionActive = true;
+            _selectedTextQuestionSessionStopping = false;
+            _answerWindow.ResetConversation();
             _activationSoundPlayer.Play();
-            _answerWindow.BeginAnswer("質問を録音中です。もう一度ショートカットを押して回答を開始します。");
-            ActionButton.Content = "質問を停止して回答";
-            RuntimeStatus.Text = "選択した文章への質問を録音しています…";
-            _indicator.ShowStatus("質問録音中");
+            ActionButton.Content = "質問セッションを終了";
+            RuntimeStatus.Text = "選択した文章について話してください。発話の区切りを検出すると回答します。ショートカットで終了できます。";
+            _indicator.ShowStatus("質問できます");
             UpdateAiModeDisplay();
+            _ = ProcessSelectedTextQuestionSessionAsync(context, cancellation);
         }
         catch
         {
-            _pendingSelectedTextQuestion = null;
-            _answerWindow.HideAnswer();
+            if (ReferenceEquals(_selectedTextQuestionCancellation, cancellation))
+                _selectedTextQuestionCancellation = null;
+            _selectedTextQuestionSessionActive = false;
+            _selectedTextQuestionSessionStopping = false;
+            cancellation.Dispose();
             throw;
         }
     }
@@ -917,7 +931,7 @@ public partial class MainWindow : System.Windows.Window
         _gptLiveQuestionSession = session;
         _gptLiveQuestionActive = true;
         _activationSoundPlayer.Play();
-        _answerWindow.BeginAnswer("GPT Liveへ接続しています…");
+        _answerWindow.ResetConversation();
         RuntimeStatus.Text = "GPT Liveの音声会話を準備しています…";
         _indicator.ShowStatus("GPT Live接続中");
         UpdateAiModeDisplay();
@@ -938,7 +952,6 @@ public partial class MainWindow : System.Windows.Window
                 message => DispatchQuestionUi(() =>
                 {
                     if (_closing) return;
-                    _answerWindow.SetStatus(message);
                     _indicator.ShowStatus(GetGptLiveIndicatorText(message));
                     RuntimeStatus.Text = message;
                 }),
@@ -951,18 +964,17 @@ public partial class MainWindow : System.Windows.Window
                     if (!_closing) _answerWindow.SetCurrentAssistantText(answer);
                 },
                 cancellation.Token);
-            if (!_closing) _answerWindow.SetStatus("音声会話を終了しました。");
+            if (!_closing) DispatchQuestionUi(_answerWindow.CommitCurrentTurn);
         }
         catch (OperationCanceledException) when (cancellation.IsCancellationRequested || _closing)
         {
-            if (!_closing) _answerWindow.SetStatus("音声会話を終了しました。");
+            if (!_closing) DispatchQuestionUi(_answerWindow.CommitCurrentTurn);
         }
         catch (Exception ex)
         {
             if (!_closing)
             {
                 var message = ex.GetBaseException().Message;
-                _answerWindow.SetStatus("GPT Liveに接続できませんでした。 " + message);
                 RuntimeStatus.Text = "GPT Liveに接続できませんでした。 " + message;
                 _indicator.ShowStatus("Live接続失敗", TimeSpan.FromSeconds(1));
             }
@@ -995,6 +1007,18 @@ public partial class MainWindow : System.Windows.Window
         }
     }
 
+    private async Task StopSelectedTextQuestionSessionAsync()
+    {
+        if (!_selectedTextQuestionSessionActive && !_continuousRecorder.IsRecording) return;
+
+        _selectedTextQuestionSessionStopping = true;
+        _indicator.ShowStatus("質問を終了中");
+        _selectedTextQuestionCancellation?.Cancel();
+        try { await _continuousRecorder.StopAsync(CancellationToken.None); }
+        catch { }
+        _continuousRecorder.DiscardPendingUtterances();
+    }
+
     private static string GetGptLiveIndicatorText(string message)
     {
         if (message.Contains("失敗", StringComparison.Ordinal) || message.Contains("できません", StringComparison.Ordinal))
@@ -1017,6 +1041,12 @@ public partial class MainWindow : System.Windows.Window
 
     private async Task CancelAudioProcessingAsync()
     {
+        if (_selectedTextQuestionSessionActive)
+        {
+            await StopSelectedTextQuestionSessionAsync();
+            return;
+        }
+
         if (_selectionEditSessionActive)
         {
             _selectionEditSessionStopping = true;
@@ -1031,15 +1061,7 @@ public partial class MainWindow : System.Windows.Window
         if (_audioProcessingCancellation is not { IsCancellationRequested: false } audioCancellation)
             return;
 
-        if (_selectedTextQuestionProcessing)
-        {
-            _indicator.ShowStatus("回答をキャンセル中");
-            _answerWindow.SetStatus("回答をキャンセルしています…");
-        }
-        else
-        {
-            _indicator.ShowStatus("キャンセル中");
-        }
+        _indicator.ShowStatus("キャンセル中");
         audioCancellation.Cancel();
     }
 
@@ -1350,93 +1372,127 @@ public partial class MainWindow : System.Windows.Window
                string.Equals(compact, "undo", StringComparison.OrdinalIgnoreCase);
     }
 
-    private async Task StopAndProcessSelectedTextQuestionAsync()
+    private async Task ProcessSelectedTextQuestionSessionAsync(
+        SelectionEditContext selectedText,
+        CancellationTokenSource cancellation)
     {
-        if (_pendingSelectedTextQuestion is not { } selectedText || !_recorder.IsRecording) return;
-
-        var processingCancellation = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token);
-        _audioProcessingCancellation = processingCancellation;
-        var cancellationToken = processingCancellation.Token;
-        _selectedTextQuestionProcessing = true;
-        _isBusy = true;
-        UpdateAiModeDisplay();
-        ActionButton.IsEnabled = false;
-        ActionButton.Content = "選択文への回答を準備しています…";
-        RuntimeStatus.Text = "音声を文字起こししています…";
-        _answerWindow.SetStatus("質問を文字起こししています…");
-        _indicator.ShowStatus("質問認識中");
-        float[]? samples = null;
+        var cancellationToken = cancellation.Token;
+        var failed = false;
         try
         {
-            samples = await _recorder.StopAsync(cancellationToken);
-            var question = await Task.Run(() => _asr!.Transcribe(samples), cancellationToken);
-            cancellationToken.ThrowIfCancellationRequested();
-            Array.Clear(samples);
-            samples = null;
-            question = TranscriptFormatter.NormalizeTranscript(question);
-            if (!TranscriptFormatter.HasMeaningfulText(question))
-                throw new InvalidDataException("質問を認識できませんでした。マイクを確認して、もう一度お試しください。");
-
-            RuntimeStatus.Text = "OpenCodeを準備しています…";
-            _answerWindow.SetStatus("OpenCodeモデルへ質問を送信しています…");
-            _indicator.ShowStatus("OpenCode接続中");
-            if (!_openCode.IsRunning) await EnsureOpenCodeReadyAsync(cancellationToken);
-            var model = GetSelectedOpenCodeModel();
-            var providerId = model?.ProviderId ?? _settings.OpenCodeModelProviderId;
-            var modelId = model?.ModelId ?? _settings.OpenCodeModelId;
-            if (string.IsNullOrWhiteSpace(providerId) || string.IsNullOrWhiteSpace(modelId))
-                throw new InvalidOperationException("設定からOpenCodeモデルを選択してください。");
-
-            RuntimeStatus.Text = "選択した文章を参考に回答を生成しています…";
-            _answerWindow.SetStatus("回答を生成しています…");
-            _indicator.ShowStatus("回答中");
-            var answer = await _openCode.AnswerSelectedTextAsync(
-                selectedText.CurrentText,
-                question,
-                providerId,
-                modelId,
-                onTextUpdate: _answerWindow.SetResponseText,
-                cancellationToken: cancellationToken);
-            cancellationToken.ThrowIfCancellationRequested();
-            if (!TranscriptFormatter.HasMeaningfulText(answer))
-                throw new InvalidDataException("モデルから回答が返りませんでした。選択中の文章は変更していません。");
-
-            _answerWindow.SetResponseText(answer.Trim());
-            _answerWindow.SetStatus("回答しました。");
-            RuntimeStatus.Text = "選択した文章への回答を表示しました。";
-            _indicator.ShowStatus("回答完了", TimeSpan.FromSeconds(1));
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-            if (!_closing)
+            await foreach (var samples in _continuousRecorder.ReadUtterancesAsync(cancellationToken))
             {
-                _answerWindow.HideAnswer();
-                _indicator.ShowStatus("キャンセルしました", TimeSpan.FromSeconds(1));
-                RuntimeStatus.Text = "選択文への質問をキャンセルしました。";
+                _isBusy = true;
+                UpdateAiModeDisplay();
+                ActionButton.Content = "質問に回答しています…";
+                RuntimeStatus.Text = "発話を文字起こししています…";
+                _indicator.ShowStatus("質問認識中");
+                try
+                {
+                    var question = await Task.Run(() => _asr!.Transcribe(samples), cancellationToken);
+                    cancellationToken.ThrowIfCancellationRequested();
+                    question = TranscriptFormatter.NormalizeTranscript(question);
+                    if (!TranscriptFormatter.HasMeaningfulText(question))
+                    {
+                        RuntimeStatus.Text = "発話を認識できませんでした。続けて話してください。";
+                        _indicator.ShowStatus("質問できます");
+                        continue;
+                    }
+
+                    RuntimeStatus.Text = "OpenCodeを準備しています…";
+                    _indicator.ShowStatus("OpenCode接続中");
+                    if (!_openCode.IsRunning) await EnsureOpenCodeReadyAsync(cancellationToken);
+                    cancellationToken.ThrowIfCancellationRequested();
+                    var model = GetSelectedOpenCodeModel();
+                    var providerId = model?.ProviderId ?? _settings.OpenCodeModelProviderId;
+                    var modelId = model?.ModelId ?? _settings.OpenCodeModelId;
+                    if (string.IsNullOrWhiteSpace(providerId) || string.IsNullOrWhiteSpace(modelId))
+                        throw new InvalidOperationException("設定からOpenCodeモデルを選択してください。");
+
+                    _answerWindow.BeginConversationTurn(question);
+                    RuntimeStatus.Text = "選択した文章とこれまでの会話を参考に回答しています…";
+                    _indicator.ShowStatus("回答中");
+                    var answer = await _openCode.AnswerSelectedTextAsync(
+                        selectedText.CurrentText,
+                        question,
+                        providerId,
+                        modelId,
+                        onTextUpdate: _answerWindow.SetCurrentAssistantText,
+                        cancellationToken: cancellationToken,
+                        conversationHistory: _selectedTextQuestionHistory.ToArray());
+                    cancellationToken.ThrowIfCancellationRequested();
+                    if (!TranscriptFormatter.HasMeaningfulText(answer))
+                        throw new InvalidDataException("モデルから回答が返りませんでした。選択中の文章は変更していません。");
+
+                    answer = answer.Trim();
+                    _answerWindow.SetCurrentAssistantText(answer);
+                    _answerWindow.CommitCurrentTurn();
+                    _selectedTextQuestionHistory.Add((question, answer));
+                    RuntimeStatus.Text = "回答しました。続けて質問できます。";
+                    _indicator.ShowStatus("質問できます");
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    _answerWindow.DiscardCurrentTurn();
+                    break;
+                }
+                catch (Exception ex)
+                {
+                    _answerWindow.DiscardCurrentTurn();
+                    if (!_closing)
+                    {
+                        var message = ex.GetBaseException().Message;
+                        RuntimeStatus.Text = "選択文への回答に失敗しました。 " + message;
+                        _indicator.ShowStatus("回答失敗", TimeSpan.FromSeconds(1));
+                    }
+                }
+                finally
+                {
+                    Array.Clear(samples);
+                    _isBusy = false;
+                    ActionButton.Content = _selectedTextQuestionSessionStopping
+                        ? "質問を終了しています…"
+                        : "質問セッションを終了";
+                    UpdateAiModeDisplay();
+                }
             }
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { }
         catch (Exception ex)
         {
+            failed = true;
             if (!_closing)
             {
-                var message = ex.GetBaseException().Message;
-                _answerWindow.SetStatus("回答できませんでした。 " + message);
-                RuntimeStatus.Text = "選択文への回答に失敗しました。 " + message;
-                _indicator.ShowStatus("回答失敗", TimeSpan.FromSeconds(1));
+                RuntimeStatus.Text = "連続音声の処理を終了しました。 " + ex.GetBaseException().Message;
+                _indicator.ShowStatus("質問処理失敗", TimeSpan.FromSeconds(1));
             }
         }
         finally
         {
-            if (samples is not null) Array.Clear(samples);
-            if (ReferenceEquals(_audioProcessingCancellation, processingCancellation))
-                _audioProcessingCancellation = null;
-            processingCancellation.Dispose();
-            _pendingSelectedTextQuestion = null;
-            _selectedTextQuestionProcessing = false;
+            if (_continuousRecorder.IsRecording)
+            {
+                try { await _continuousRecorder.StopAsync(CancellationToken.None); }
+                catch { }
+            }
+            _continuousRecorder.DiscardPendingUtterances();
+            _answerWindow.CommitCurrentTurn();
+
+            var wasCanceled = !_closing && cancellationToken.IsCancellationRequested;
+            _selectedTextQuestionSessionActive = false;
+            _selectedTextQuestionSessionStopping = false;
+            _selectedTextQuestionHistory.Clear();
             _isBusy = false;
-            ActionButton.IsEnabled = true;
-            ActionButton.Content = "録音を開始";
-            UpdateAiModeDisplay();
+            if (ReferenceEquals(_selectedTextQuestionCancellation, cancellation))
+                _selectedTextQuestionCancellation = null;
+            cancellation.Dispose();
+            ActionButton.Content = _asr is null ? "Setup" : "録音を開始";
+            if (!_closing)
+            {
+                if (failed) { }
+                else if (wasCanceled) _indicator.ShowStatus("質問終了", TimeSpan.FromSeconds(1));
+                else _indicator.HideStatus();
+                UpdateAiModeDisplay();
+            }
         }
     }
 
