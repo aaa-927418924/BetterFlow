@@ -19,6 +19,7 @@ public partial class MainWindow : System.Windows.Window
     private readonly GptLiveAuthService _gptLiveAuth = new();
     private readonly ActivationSoundPlayer _activationSoundPlayer = new();
     private readonly IndicatorWindow _indicator;
+    private readonly TranscriptPreviewWindow _transcriptPreviewWindow;
     private readonly UndoWindow _undoWindow;
     private readonly AnswerWindow _answerWindow;
     private readonly bool _startHiddenInTray;
@@ -42,6 +43,10 @@ public partial class MainWindow : System.Windows.Window
     private bool _loadingMicrophoneDeviceUi;
     private bool _openCodeReady;
     private CancellationTokenSource? _audioProcessingCancellation;
+    private Task? _sendCommandListenerTask;
+    private CancellationTokenSource? _transcriptPreviewCancellation;
+    private Task? _transcriptPreviewTask;
+    private long _transcriptPreviewSession;
     private CancellationTokenSource? _selectedTextQuestionCancellation;
     private GptLiveQuestionSession? _gptLiveQuestionSession;
     private readonly List<(string Question, string Answer)> _selectedTextQuestionHistory = new();
@@ -68,6 +73,7 @@ public partial class MainWindow : System.Windows.Window
     {
         InitializeComponent();
         _indicator = new IndicatorWindow();
+        _transcriptPreviewWindow = new TranscriptPreviewWindow();
         _answerWindow = new AnswerWindow();
         _recorder.AudioLevelChanged += _indicator.SetAudioLevel;
         _continuousRecorder.AudioLevelChanged += _indicator.SetAudioLevel;
@@ -869,6 +875,7 @@ public partial class MainWindow : System.Windows.Window
 
                 var selectedInput = MicrophoneDeviceCombo.SelectedItem as AudioInputDeviceOption;
                 StartRecorderWithFallback(_recorder.Start, selectedInput);
+                StartTranscriptPreview();
                 _activationSoundPlayer.Play();
                 ActionButton.Content = "録音を停止して変換";
                 RuntimeStatus.Text = "録音中 · もう一度ショートカットで停止";
@@ -1114,6 +1121,97 @@ public partial class MainWindow : System.Windows.Window
                     new AggregateException(selectedDeviceError, fallbackError));
             }
         }
+    }
+
+    private void StartTranscriptPreview()
+    {
+        if (_asr is null) return;
+
+        var session = Interlocked.Increment(ref _transcriptPreviewSession);
+        var cancellation = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token);
+        _transcriptPreviewCancellation = cancellation;
+        _transcriptPreviewTask = RunTranscriptPreviewAsync(session, cancellation.Token);
+    }
+
+    private async Task RunTranscriptPreviewAsync(long session, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await Task.Delay(TimeSpan.FromSeconds(1), cancellationToken).ConfigureAwait(false);
+            while (!cancellationToken.IsCancellationRequested)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (!_recorder.TryGetRecordingSnapshot(out var snapshot))
+                {
+                    await Task.Delay(TimeSpan.FromMilliseconds(250), cancellationToken).ConfigureAwait(false);
+                    continue;
+                }
+
+                var inferenceTimer = System.Diagnostics.Stopwatch.StartNew();
+                try
+                {
+                    var recognizer = _asr;
+                    if (recognizer is null) return;
+                    var transcript = await Task.Run(() => recognizer.Transcribe(snapshot), cancellationToken)
+                        .ConfigureAwait(false);
+                    cancellationToken.ThrowIfCancellationRequested();
+                    transcript = TranscriptFormatter.NormalizeTranscript(transcript);
+                    if (TranscriptFormatter.HasMeaningfulText(transcript))
+                    {
+                        _ = Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Background,
+                            new Action(() =>
+                            {
+                                if (session == Interlocked.Read(ref _transcriptPreviewSession) &&
+                                    _recorder.IsRecording && !_closing)
+                                    _transcriptPreviewWindow.ShowPreview(transcript);
+                            }));
+                    }
+                }
+                finally
+                {
+                    inferenceTimer.Stop();
+                    Array.Clear(snapshot);
+                }
+
+                var nextDelay = TimeSpan.FromMilliseconds(Math.Clamp(
+                    inferenceTimer.Elapsed.TotalMilliseconds * 2, 1500, 10000));
+                await Task.Delay(nextDelay, cancellationToken).ConfigureAwait(false);
+            }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { }
+        catch
+        {
+            // Preview is best-effort. The final full-recording decode remains authoritative.
+        }
+    }
+
+    private async Task StopTranscriptPreviewAsync()
+    {
+        var cancellation = _transcriptPreviewCancellation;
+        var task = _transcriptPreviewTask;
+        CancelTranscriptPreview();
+
+        if (task is not null)
+        {
+            try { await task; }
+            catch (OperationCanceledException) { }
+            catch { }
+        }
+
+        if (ReferenceEquals(_transcriptPreviewCancellation, cancellation))
+        {
+            _transcriptPreviewCancellation = null;
+            _transcriptPreviewTask = null;
+            cancellation?.Dispose();
+        }
+    }
+
+    private void CancelTranscriptPreview()
+    {
+        var cancellation = _transcriptPreviewCancellation;
+        if (cancellation is null) return;
+        Interlocked.Increment(ref _transcriptPreviewSession);
+        cancellation.Cancel();
     }
 
     private async Task StopSelectionEditSessionAsync()
@@ -1514,9 +1612,15 @@ public partial class MainWindow : System.Windows.Window
         RuntimeStatus.Text = "音声をPC内で文字起こししています…";
         _indicator.ShowStatus("認識中");
         float[]? samples = null;
+        Task? sendCommandListenerTask = null;
+        var sendCommandDetected = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var sendCommandMonitorUnavailable = false;
+        var sendAfterPaste = false;
         try
         {
+            CancelTranscriptPreview();
             samples = await _recorder.StopAsync(cancellationToken);
+            await StopTranscriptPreviewAsync();
             var transcript = await Task.Run(() => _asr!.Transcribe(samples), cancellationToken);
             cancellationToken.ThrowIfCancellationRequested();
             Array.Clear(samples);
@@ -1524,6 +1628,15 @@ public partial class MainWindow : System.Windows.Window
             transcript = TranscriptFormatter.NormalizeTranscript(transcript);
             if (!TranscriptFormatter.HasMeaningfulText(transcript))
                 throw new InvalidDataException("文字起こし結果が空、または句読点・記号だけでした。マイクを確認して、もう一度お試しください。");
+
+            if (_settings.AiModeEnabled && VoiceCommandParser.TryRemoveSendDirective(transcript, out var transcriptWithoutCommand))
+            {
+                sendAfterPaste = true;
+                transcript = transcriptWithoutCommand;
+                if (!TranscriptFormatter.HasMeaningfulText(transcript))
+                    throw new InvalidDataException("送信コマンドの前に文章がありません。入力欄は変更していません。");
+            }
+            _transcriptPreviewWindow.ShowPreview(transcript);
 
             string text;
             string resultStatus;
@@ -1537,13 +1650,37 @@ public partial class MainWindow : System.Windows.Window
             {
                 RuntimeStatus.Text = "OpenCodeを準備しています…";
                 _indicator.ShowStatus("整形中");
+                if (!sendAfterPaste)
+                {
+                    try
+                    {
+                        var selectedInput = MicrophoneDeviceCombo.SelectedItem as AudioInputDeviceOption;
+                        StartRecorderWithFallback(_continuousRecorder.Start, selectedInput);
+                        sendCommandListenerTask = MonitorSendVoiceCommandsAsync(sendCommandDetected, cancellationToken);
+                        _sendCommandListenerTask = sendCommandListenerTask;
+                        RuntimeStatus.Text = "OpenCodeの選択モデルで文章を整えています。音声で送信を指示できます。";
+                    }
+                    catch
+                    {
+                        sendCommandMonitorUnavailable = true;
+                    }
+                }
                 try
                 {
-                    RuntimeStatus.Text = "OpenCodeの選択モデルで文章を整えています…";
+                    if (sendCommandListenerTask is null && !sendAfterPaste)
+                        RuntimeStatus.Text = "OpenCodeの選択モデルで文章を整えています…";
                     if (!_openCode.IsRunning) await EnsureOpenCodeReadyAsync(cancellationToken);
                     var response = await _openCode.RewriteAsync(
                         transcript, _settings.OpenCodeModelProviderId, _settings.OpenCodeModelId, cancellationToken);
                     cancellationToken.ThrowIfCancellationRequested();
+                    if (sendCommandListenerTask is not null)
+                    {
+                        await StopSendCommandMonitorAsync(sendCommandListenerTask);
+                        if (ReferenceEquals(_sendCommandListenerTask, sendCommandListenerTask))
+                            _sendCommandListenerTask = null;
+                        sendCommandListenerTask = null;
+                        sendAfterPaste = sendCommandDetected.Task.IsCompletedSuccessfully && sendCommandDetected.Task.Result;
+                    }
                     text = response.Trim();
                     if (!TranscriptFormatter.HasMeaningfulText(text))
                         throw new InvalidDataException("モデルから文字として使える回答が返りませんでした。入力欄は変更していません。");
@@ -1560,7 +1697,32 @@ public partial class MainWindow : System.Windows.Window
             }
 
             cancellationToken.ThrowIfCancellationRequested();
-            PasteAndShow(text, resultStatus);
+            var pasted = PasteAndShow(text, resultStatus);
+            if (sendCommandMonitorUnavailable)
+                RuntimeStatus.Text += " 音声の送信指示を待機できなかったため、Enterは送信していません。";
+            if (sendAfterPaste)
+            {
+                if (!pasted)
+                {
+                    _indicator.ShowStatus("送信できません", TimeSpan.FromSeconds(1));
+                    return;
+                }
+
+                await Task.Delay(TimeSpan.FromMilliseconds(150), cancellationToken);
+                cancellationToken.ThrowIfCancellationRequested();
+                if (PasteService.SendEnter(_pasteTarget))
+                {
+                    RuntimeStatus.Text = "文章を入力欄へ貼り付けて送信しました。";
+                    _indicator.ShowStatus("送信しました", TimeSpan.FromSeconds(1));
+                }
+                else
+                {
+                    RuntimeStatus.Text = "文章は貼り付けましたが、入力欄のフォーカスを確認できず送信していません。";
+                    _indicator.ShowStatus("送信未完了", TimeSpan.FromSeconds(1));
+                }
+                return;
+            }
+
             _indicator.ShowStatus("完了", TimeSpan.FromSeconds(1));
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -1577,6 +1739,14 @@ public partial class MainWindow : System.Windows.Window
         }
         finally
         {
+            if (_continuousRecorder.IsRecording || sendCommandListenerTask is not null)
+            {
+                await StopSendCommandMonitorAsync(sendCommandListenerTask);
+                if (ReferenceEquals(_sendCommandListenerTask, sendCommandListenerTask))
+                    _sendCommandListenerTask = null;
+            }
+            await StopTranscriptPreviewAsync();
+            if (!_closing) _transcriptPreviewWindow.HidePreview();
             if (samples is not null) Array.Clear(samples);
             if (ReferenceEquals(_audioProcessingCancellation, processingCancellation))
                 _audioProcessingCancellation = null;
@@ -1600,7 +1770,56 @@ public partial class MainWindow : System.Windows.Window
         return "AI変換失敗";
     }
 
-    private void PasteAndShow(string text, string successStatus)
+    private async Task MonitorSendVoiceCommandsAsync(
+        TaskCompletionSource<bool> sendCommandDetected,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            await foreach (var utterance in _continuousRecorder.ReadUtterancesAsync(cancellationToken)
+                               .ConfigureAwait(false))
+            {
+                try
+                {
+                    if (sendCommandDetected.Task.IsCompleted) continue;
+                    var recognizer = _asr;
+                    if (recognizer is null) return;
+                    var recognized = await Task.Run(() => recognizer.Transcribe(utterance), cancellationToken)
+                        .ConfigureAwait(false);
+                    cancellationToken.ThrowIfCancellationRequested();
+                    recognized = TranscriptFormatter.NormalizeTranscript(recognized);
+                    if (VoiceCommandParser.IsStandaloneSendDirective(recognized))
+                        sendCommandDetected.TrySetResult(true);
+                }
+                finally
+                {
+                    Array.Clear(utterance);
+                }
+            }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { }
+        catch
+        {
+            // Voice command monitoring is best-effort and does not fail the text rewrite.
+        }
+    }
+
+    private async Task StopSendCommandMonitorAsync(Task? monitorTask)
+    {
+        if (_continuousRecorder.IsRecording)
+        {
+            try { await _continuousRecorder.StopAsync(CancellationToken.None); }
+            catch { }
+        }
+
+        if (monitorTask is not null)
+        {
+            try { await monitorTask; }
+            catch { }
+        }
+    }
+
+    private bool PasteAndShow(string text, string successStatus)
     {
         try
         {
@@ -1608,10 +1827,12 @@ public partial class MainWindow : System.Windows.Window
             RuntimeStatus.Text = paste == PasteResult.Pasted
                 ? successStatus
                 : successStatus + " 自動貼り付けを確認できないため、結果はクリップボードにコピーしました。必要ならCtrl+Vで入力してください。";
+            return paste == PasteResult.Pasted;
         }
         catch (Exception ex)
         {
             RuntimeStatus.Text = "自動貼り付けまたはクリップボードへのコピーに失敗しました。 " + ex.Message;
+            return false;
         }
     }
 
@@ -1912,16 +2133,20 @@ public partial class MainWindow : System.Windows.Window
 
         _closing = true;
         _lifetime.Cancel();
+        CancelTranscriptPreview();
         _selectionEditCancellation?.Cancel();
         _selectedTextQuestionCancellation?.Cancel();
         SystemEvents.SessionEnding -= SystemEvents_SessionEnding;
         _hotkey.Dispose();
         _source?.RemoveHook(WindowMessageHook);
         _indicator.Close();
+        _transcriptPreviewWindow.Close();
         _undoWindow.Close();
         _answerWindow.Close();
         _recorder.Dispose();
+        try { _transcriptPreviewTask?.GetAwaiter().GetResult(); } catch { }
         _continuousRecorder.Dispose();
+        try { _sendCommandListenerTask?.GetAwaiter().GetResult(); } catch { }
         _activationSoundPlayer.Dispose();
         _asr?.Dispose();
         _openCode.Dispose();

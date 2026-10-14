@@ -8,6 +8,7 @@ internal static class PasteService
     private const uint KeyUp = 0x0002;
     private const ushort VirtualKeyControl = 0x11;
     private const ushort VirtualKeyV = 0x56;
+    private const ushort VirtualKeyReturn = 0x0D;
 
     public static IntPtr GetForegroundWindowHandle() => GetForegroundWindow();
 
@@ -54,6 +55,22 @@ internal static class PasteService
                 lastError);
         }
         return new PasteAttemptResult(PasteResult.CopiedOnly, 0, 4, null);
+    }
+
+    public static bool SendEnter(IntPtr targetWindow)
+    {
+        if (targetWindow == IntPtr.Zero || GetForegroundWindow() != targetWindow)
+            return false;
+
+        var inputs = new[]
+        {
+            CreateKeyInput(VirtualKeyReturn),
+            CreateKeyInput(VirtualKeyReturn, keyUp: true)
+        };
+        var sent = SendInput((uint)inputs.Length, inputs, Marshal.SizeOf<NativeInput>());
+        if (sent < (uint)inputs.Length)
+            SendInput(1, [CreateKeyInput(VirtualKeyReturn, keyUp: true)], Marshal.SizeOf<NativeInput>());
+        return sent == (uint)inputs.Length;
     }
 
     private static NativeInput CreateKeyInput(ushort virtualKey, bool keyUp = false) => new()
