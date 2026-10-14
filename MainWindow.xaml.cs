@@ -1487,11 +1487,27 @@ public partial class MainWindow : System.Windows.Window
 
     private void NormalizeSpeechRecognitionModelSetting()
     {
-        if (_settings.SpeechRecognitionModelId is AsrService.WhisperLargeV3TurboModelId or AsrService.ParakeetJapaneseModelId)
-            return;
+        const int currentPreferenceVersion = 1;
+        var isKnownModel = _settings.SpeechRecognitionModelId is
+            AsrService.WhisperLargeV3TurboModelId or AsrService.ParakeetJapaneseModelId;
+        var migratePreviousWhisperDefault = _settings.SpeechRecognitionModelPreferenceVersion < currentPreferenceVersion &&
+                                            _settings.SpeechRecognitionModelId == AsrService.WhisperLargeV3TurboModelId;
+        var changed = false;
 
-        _settings.SpeechRecognitionModelId = AsrService.ParakeetJapaneseModelId;
-        _settingsStore.Save(_settings);
+        if (!isKnownModel || migratePreviousWhisperDefault)
+        {
+            _settings.SpeechRecognitionModelId = AsrService.ParakeetJapaneseModelId;
+            changed = true;
+        }
+
+        if (_settings.SpeechRecognitionModelPreferenceVersion < currentPreferenceVersion)
+        {
+            _settings.SpeechRecognitionModelPreferenceVersion = currentPreferenceVersion;
+            changed = true;
+        }
+
+        if (changed)
+            _settingsStore.Save(_settings);
     }
 
     private void InitializeSpeechRecognitionModelUi()

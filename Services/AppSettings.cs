@@ -11,6 +11,7 @@ internal sealed class AppSettings
     public string OpenCodeModelProviderId { get; set; } = "opencode";
     public string OpenCodeModelId { get; set; } = "muse-spark-1.3-contributor-free";
     public string SpeechRecognitionModelId { get; set; } = AsrService.ParakeetJapaneseModelId;
+    public int SpeechRecognitionModelPreferenceVersion { get; set; }
     public List<CorrectionDictionaryEntry> CorrectionDictionary { get; set; } = new();
     public List<DictionaryLearningEvidence> PendingDictionaryLearning { get; set; } = new();
     public List<string> SuppressedAutomaticDictionaryTerms { get; set; } = new();

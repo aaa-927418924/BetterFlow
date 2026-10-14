@@ -565,7 +565,7 @@
 ## Parakeetを音声認識の既定に戻す（2026-10-15）
 
 - 目的: Whisper Large V3 Turboは速度面で試用に合わなかったため、Parakeet 0.6B日本語を既定に戻す。Whisperは設定画面から選べる追加オプションとして残す。
-- 変更: 新規設定の初期値と、不明なモデルIDを補正するfallbackをParakeetにする。既知のモデルID（Parakeet/Whisper）はそのまま尊重し、ユーザーが設定画面で選んだモデルの再起動後の維持を壊さない。選択UI、モデル別ダウンロード/ロード処理、保存済みParakeetデータは変更しない。
+- 変更: 新規設定の初期値と、不明なモデルIDを補正するfallbackをParakeetにする。以前の版でWhisperが既定値として保存されていた設定は一度だけParakeetへ移行し、設定バージョンを記録する。移行後にユーザーが選ぶWhisper/Parakeetは再起動後も維持する。選択UI、モデル別ダウンロード/ロード処理、保存済みParakeetデータは変更しない。
 - 確認: 差分確認とRelease build/publishを行い、単体EXEを更新して発行物とのSHA-256一致を確認する。実音声の速度・精度比較は行わない。
 - Git: この計画を先にコミットし、その後に既定値のみを変更する。
-- 実装結果（分類: 既定モデル変更、出典: `Services/AppSettings.cs`、`MainWindow.xaml.cs`、`README.md`、Release build/publish、確認日: 2026-10-15 Asia/Tokyo、信頼度: ソース・ビルド・配布一致は高、実音声の速度/精度は未確認、情報区分: ローカル確認・未確認事項）: 新規/無効な設定の既定をParakeet 0.6B日本語へ戻し、Whisperは設定から選べるままにした。保存済みの有効なモデル選択は維持する。`dotnet build`とRelease単体EXE発行は成功（0エラー、NU1900はNuGet脆弱性情報サービスへの接続警告）。`dist/Better Flow.exe`は82,480,662 bytes、SHA-256 `381CA7DA49A5A70154F2BB85DD896B1DDE16F6A0030C6872F072E3D862DC99E9`で、発行物と一致。置換前Whisper版は`artifacts/BetterFlow-before-parakeet-default-20261015.exe`に退避。実音声比較は行っていない。
+- 実装結果（分類: 既定モデル変更、出典: `Services/AppSettings.cs`、`MainWindow.xaml.cs`、`README.md`、Release build/publish、確認日: 2026-10-15 Asia/Tokyo、信頼度: ソース・ビルド・配布一致は高、実音声の速度/精度は未確認、情報区分: ローカル確認・未確認事項）: 新規/無効な設定の既定をParakeet 0.6B日本語へ戻した。以前の版が既定として保存したWhisperは設定バージョンで初回だけParakeetへ移行し、移行後にユーザーが設定画面で選んだモデルは再起動後も維持する。Whisperは設定から選べる。`dotnet build`とRelease単体EXE発行は成功（0エラー、NU1900はNuGet脆弱性情報サービスへの接続警告）。`dist/Better Flow.exe`は82,480,741 bytes、SHA-256 `0C2860963CA521CF138F553523D435AB5B0B94122A6AD0C3288826A4B939CB58`で、発行物と一致。置換前Whisper版は`artifacts/BetterFlow-before-parakeet-default-20261015.exe`に退避。実音声比較は行っていない。
