@@ -893,7 +893,7 @@ public partial class MainWindow : System.Windows.Window
             _selectedTextQuestionHistory.Clear();
             _selectedTextQuestionSessionActive = true;
             _selectedTextQuestionSessionStopping = false;
-            _answerWindow.ResetConversation();
+            _answerWindow.ResetAnswer();
             _activationSoundPlayer.Play();
             ActionButton.Content = "質問セッションを終了";
             RuntimeStatus.Text = "選択した文章について話してください。発話の区切りを検出すると回答します。ショートカットで終了できます。";
@@ -931,7 +931,7 @@ public partial class MainWindow : System.Windows.Window
         _gptLiveQuestionSession = session;
         _gptLiveQuestionActive = true;
         _activationSoundPlayer.Play();
-        _answerWindow.ResetConversation();
+        _answerWindow.ResetAnswer();
         RuntimeStatus.Text = "GPT Liveの音声会話を準備しています…";
         _indicator.ShowStatus("GPT Live接続中");
         UpdateAiModeDisplay();
@@ -955,20 +955,22 @@ public partial class MainWindow : System.Windows.Window
                     _indicator.ShowStatus(GetGptLiveIndicatorText(message));
                     RuntimeStatus.Text = message;
                 }),
-                question => DispatchQuestionUi(() =>
+                _ => DispatchQuestionUi(() =>
                 {
-                    if (!_closing) _answerWindow.BeginConversationTurn(question);
+                    if (!_closing) _answerWindow.BeginAnswerTurn();
                 }),
                 answer =>
                 {
                     if (!_closing) _answerWindow.SetCurrentAssistantText(answer);
                 },
+                finalAnswer =>
+                {
+                    if (!_closing) _answerWindow.SetFinalAssistantText(finalAnswer);
+                },
                 cancellation.Token);
-            if (!_closing) DispatchQuestionUi(_answerWindow.CommitCurrentTurn);
         }
         catch (OperationCanceledException) when (cancellation.IsCancellationRequested || _closing)
         {
-            if (!_closing) DispatchQuestionUi(_answerWindow.CommitCurrentTurn);
         }
         catch (Exception ex)
         {
@@ -1409,7 +1411,7 @@ public partial class MainWindow : System.Windows.Window
                     if (string.IsNullOrWhiteSpace(providerId) || string.IsNullOrWhiteSpace(modelId))
                         throw new InvalidOperationException("設定からOpenCodeモデルを選択してください。");
 
-                    _answerWindow.BeginConversationTurn(question);
+                    _answerWindow.BeginAnswerTurn();
                     RuntimeStatus.Text = "選択した文章とこれまでの会話を参考に回答しています…";
                     _indicator.ShowStatus("回答中");
                     var answer = await _openCode.AnswerSelectedTextAsync(
@@ -1425,20 +1427,19 @@ public partial class MainWindow : System.Windows.Window
                         throw new InvalidDataException("モデルから回答が返りませんでした。選択中の文章は変更していません。");
 
                     answer = answer.Trim();
-                    _answerWindow.SetCurrentAssistantText(answer);
-                    _answerWindow.CommitCurrentTurn();
+                    _answerWindow.SetFinalAssistantText(answer);
                     _selectedTextQuestionHistory.Add((question, answer));
                     RuntimeStatus.Text = "回答しました。続けて質問できます。";
                     _indicator.ShowStatus("質問できます");
                 }
                 catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
                 {
-                    _answerWindow.DiscardCurrentTurn();
+                    _answerWindow.ClearAnswer();
                     break;
                 }
                 catch (Exception ex)
                 {
-                    _answerWindow.DiscardCurrentTurn();
+                    _answerWindow.ClearAnswer();
                     if (!_closing)
                     {
                         var message = ex.GetBaseException().Message;
@@ -1475,7 +1476,6 @@ public partial class MainWindow : System.Windows.Window
                 catch { }
             }
             _continuousRecorder.DiscardPendingUtterances();
-            _answerWindow.CommitCurrentTurn();
 
             var wasCanceled = !_closing && cancellationToken.IsCancellationRequested;
             _selectedTextQuestionSessionActive = false;

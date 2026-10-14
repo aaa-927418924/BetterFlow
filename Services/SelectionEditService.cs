@@ -38,9 +38,14 @@ internal static class SelectionEditService
 
         try
         {
-            var provider = FindSelectedTextProvider(targetWindow, out var textPattern, out var selections);
+            var provider = FindSelectedTextProvider(targetWindow, out var textPattern, out var selections,
+                out var ambiguousSelection);
             if (provider is null || textPattern is null || selections is null)
+            {
+                if (ambiguousSelection)
+                    failureMessage = "選択範囲を一意に特定できませんでした。文章を選択し直してください。";
                 return false;
+            }
 
             if (selections.Length != 1)
             {
@@ -71,15 +76,21 @@ internal static class SelectionEditService
     private static AutomationElement? FindSelectedTextProvider(
         IntPtr targetWindow,
         out TextPattern? pattern,
-        out TextPatternRange[]? selections)
+        out TextPatternRange[]? selections,
+        out bool ambiguousSelection)
     {
         pattern = null;
         selections = null;
+        ambiguousSelection = false;
         var visited = new HashSet<string>(StringComparer.Ordinal);
         var focused = AutomationElement.FocusedElement;
         var walker = TreeWalker.ControlViewWalker;
 
-        for (var depth = 0; focused is not null && depth < MaximumFocusedAncestors; depth++)
+        // Global hotkey callbacks can observe a stale UIA focused element from the
+        // previous foreground app. Only trust the focus chain when it belongs to
+        // the window whose selection we are about to capture.
+        for (var depth = 0; focused is not null && depth < MaximumFocusedAncestors &&
+             IsWithinWindow(focused, targetWindow); depth++)
         {
             if (TryReadSelection(focused, visited, out pattern, out selections))
                 return focused;
@@ -89,14 +100,76 @@ internal static class SelectionEditService
         var root = AutomationElement.FromHandle(targetWindow);
         var condition = new PropertyCondition(AutomationElement.IsTextPatternAvailableProperty, true);
         var candidates = root.FindAll(TreeScope.Descendants, condition);
+        AutomationElement? fallbackProvider = null;
+        TextPattern? fallbackPattern = null;
+        TextPatternRange[]? fallbackSelections = null;
+        string? fallbackText = null;
         for (var index = 0; index < candidates.Count && index < 4096; index++)
         {
             var candidate = candidates[index];
-            if (TryReadSelection(candidate, visited, out pattern, out selections))
+            if (!TryReadSelection(candidate, visited, out var candidatePattern, out var candidateSelections))
+                continue;
+
+            if (candidate.Current.HasKeyboardFocus)
+            {
+                pattern = candidatePattern;
+                selections = candidateSelections;
                 return candidate;
+            }
+
+            string candidateText;
+            try
+            {
+                candidateText = string.Join("\u001f", candidateSelections!.Select(range => NormalizeText(range.GetText(-1))));
+            }
+            catch (Exception ex) when (IsAutomationFailure(ex))
+            {
+                continue;
+            }
+            if (string.IsNullOrWhiteSpace(candidateText)) continue;
+
+            fallbackProvider ??= candidate;
+            if (fallbackPattern is null)
+            {
+                fallbackPattern = candidatePattern;
+                fallbackSelections = candidateSelections;
+                fallbackText = candidateText;
+            }
+            else if (!string.Equals(fallbackText, candidateText, StringComparison.Ordinal))
+            {
+                ambiguousSelection = true;
+            }
         }
 
-        return null;
+        if (ambiguousSelection)
+        {
+            pattern = null;
+            selections = null;
+            return null;
+        }
+        pattern = fallbackPattern;
+        selections = fallbackSelections;
+        return fallbackProvider;
+    }
+
+    private static bool IsWithinWindow(AutomationElement element, IntPtr targetWindow)
+    {
+        var walker = TreeWalker.ControlViewWalker;
+        for (var depth = 0; element is not null && depth < MaximumFocusedAncestors; depth++)
+        {
+            try
+            {
+                if (element.Current.NativeWindowHandle != 0 &&
+                    new IntPtr(element.Current.NativeWindowHandle) == targetWindow)
+                    return true;
+                element = walker.GetParent(element);
+            }
+            catch (Exception ex) when (IsAutomationFailure(ex))
+            {
+                return false;
+            }
+        }
+        return false;
     }
 
     private static bool TryReadSelection(

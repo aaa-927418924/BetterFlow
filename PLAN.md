@@ -214,3 +214,10 @@
 - 選択文編集セッション中にショートカットでキャンセルした場合は、終了処理でインジケーターを即時非表示にする。通常の音声入力のキャンセル表示「キャンセルしました」は維持する。
 - `MainWindow.xaml.cs`の選択文編集キャンセル開始時とセッション終了分岐だけを変更。Release build/publish成功（警告0・エラー0）。`artifacts/publish-selection-edit-cancel-status/BetterFlow.exe`と`dist/Better Flow.exe`は81,871,381 bytes、SHA-256 `B636B3467414D1D98F638CB52324E92B01D3CC53056811AE90E900293B317503`で一致。更新前EXEは`artifacts/BetterFlow-before-selection-edit-cancel-status.exe`へ保存。既存配布先EXEと完全一致したPID 39320だけを停止して置き換えた。
 - `git diff --check`成功。テストスイートは未実行。実際の編集キャンセル操作と画面表示は未確認。
+
+## 選択テキスト質問の回答表示と文脈安定化（2026-10-14）
+
+- 回答ウィンドウはユーザー発話・過去の回答を履歴として描画せず、最新AI回答だけを表示する。新しい質問を検出した時点で前回答を隠し、回答テキストが届き始めてからウィンドウを表示する。
+- GPT Liveはユーザーの質問が届く前の初期応答を表示対象から除外する。音声文字起こしイベントは応答・項目単位に蓄積し、短い`added`スナップショットや複数テキストチャンネルで表示全文が巻き戻らないようにする。
+- 選択文はOpenCodeへJSONデータの`selected_text`として渡し、選択文を回答の第一根拠として優先するように指示する。OpenCodeへ送る会話履歴は直近4往復・約4,000文字以内に制限し、長時間の会話で選択文が履歴に押し流されるのを防ぐ。UI Automationではフォーカス要素が対象前景ウィンドウに属するかを確かめてから選択内容として採用する。
+- Release build/publish成功（NU1900はNuGet脆弱性フィードへの接続警告のみ）。`artifacts/publish-selected-text-answer-fix-20261014/BetterFlow.exe`と`dist/Better Flow.exe`は82,404,719 bytes、SHA-256 `33FF9B705B169389B681A2D1FCF347A212E9092E4718029650B3E89DF3C3482B`で一致。更新前の旧EXEは`artifacts/BetterFlow-before-selected-text-answer-fix-20261014.exe`へ保存。配布先を保持していたPID 17188は実行パスが`dist/Better Flow.exe`と一致することを確認して停止した。実GPT Liveイベント、実際の選択テキスト読み取り、モデル応答は未確認。テストスイートは実行していない。
