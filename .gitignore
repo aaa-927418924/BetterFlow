@@ -8,3 +8,22 @@ artifacts/
 *.suo
 *.log
 *.tmp
+
+# Local configuration, credentials, and diagnostics
+.env
+.env.*
+!.env.example
+settings.json
+auth.json
+credentials*.json
+gpt-live-credentials.bin
+*.jsonl
+*.pem
+*.key
+*.pfx
+*.p12
+*.sqlite
+*.sqlite3
+*.db
+.codex/
+.agents/
