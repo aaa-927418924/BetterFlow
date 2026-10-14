@@ -1192,12 +1192,14 @@ public partial class MainWindow : System.Windows.Window
                         _undoWindow.ShowUndo();
                     }
                     RuntimeStatus.Text = result.Message;
-                    _indicator.ShowStatus(result.CanContinue ? "選択文編集中" : "編集を中止",
+                    _indicator.ShowStatus(result.Applied
+                            ? result.CanContinue ? "選択文編集中" : "選択維持失敗"
+                            : "置換失敗",
                         result.CanContinue ? null : TimeSpan.FromSeconds(1));
 
                     if (!result.CanContinue)
                     {
-                        sessionEndIndicator = result.Applied ? "選択を維持できません" : "編集結果をコピーしました";
+                        sessionEndIndicator = result.Applied ? "選択維持失敗" : "置換失敗";
                         _selectionEditSessionStopping = true;
                         await _continuousRecorder.StopAsync(_lifetime.Token);
                         break;
@@ -1211,7 +1213,7 @@ public partial class MainWindow : System.Windows.Window
                 {
                     _openCode.Stop();
                     RuntimeStatus.Text = "AI編集に失敗しました。選択文は変更していません。 " + ex.GetBaseException().Message;
-                    _indicator.ShowStatus("選択文編集中");
+                    _indicator.ShowStatus("AI編集失敗");
                 }
                 finally
                 {
@@ -1268,7 +1270,8 @@ public partial class MainWindow : System.Windows.Window
             !string.Equals(previousContext.CurrentText, captured.CurrentText, StringComparison.Ordinal))
             return captured;
 
-        previousContext.UpdateProviderRuntimeId(captured.ProviderRuntimeId);
+        previousContext.UpdateProvider(captured.ProviderElement);
+        previousContext.UpdateLastKnownSelectionRange(captured.CloneLastKnownSelectionRange());
         return previousContext;
     }
 

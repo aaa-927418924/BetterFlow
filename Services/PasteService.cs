@@ -20,6 +20,9 @@ internal static class PasteService
     public static void CopyTextToClipboard(string text) => System.Windows.Clipboard.SetText(text);
 
     public static PasteResult PasteCopiedText(IntPtr targetWindow)
+        => PasteCopiedTextWithDetails(targetWindow).Result;
+
+    public static PasteAttemptResult PasteCopiedTextWithDetails(IntPtr targetWindow)
     {
         if (targetWindow != IntPtr.Zero && GetForegroundWindow() == targetWindow)
         {
@@ -30,11 +33,27 @@ internal static class PasteService
                 CreateKeyInput(VirtualKeyV, keyUp: true),
                 CreateKeyInput(VirtualKeyControl, keyUp: true)
             };
-            return SendInput((uint)inputs.Length, inputs, Marshal.SizeOf<NativeInput>()) == (uint)inputs.Length
-                ? PasteResult.Pasted
-                : PasteResult.CopiedOnly;
+            var sent = SendInput((uint)inputs.Length, inputs, Marshal.SizeOf<NativeInput>());
+            var lastError = sent < (uint)inputs.Length ? Marshal.GetLastWin32Error() : (int?)null;
+            if (sent < (uint)inputs.Length)
+            {
+                // A partial Ctrl+V sequence can leave a modifier logically held.
+                // Release both keys before returning the failed attempt.
+                var releases = new[]
+                {
+                    CreateKeyInput(VirtualKeyV, keyUp: true),
+                    CreateKeyInput(VirtualKeyControl, keyUp: true)
+                };
+                SendInput((uint)releases.Length, releases, Marshal.SizeOf<NativeInput>());
+            }
+
+            return new PasteAttemptResult(
+                sent == inputs.Length ? PasteResult.Pasted : PasteResult.CopiedOnly,
+                sent,
+                (uint)inputs.Length,
+                lastError);
         }
-        return PasteResult.CopiedOnly;
+        return new PasteAttemptResult(PasteResult.CopiedOnly, 0, 4, null);
     }
 
     private static NativeInput CreateKeyInput(ushort virtualKey, bool keyUp = false) => new()
@@ -72,3 +91,9 @@ internal static class PasteService
 }
 
 internal enum PasteResult { Pasted, CopiedOnly }
+
+internal readonly record struct PasteAttemptResult(
+    PasteResult Result,
+    uint EventsSent,
+    uint EventsRequested,
+    int? LastErrorCode);
