@@ -107,8 +107,6 @@
                         </StackPanel>
                         <StackPanel x:Name="CorrectionDictionarySettingsPanel" Margin="0,16,0,0" Visibility="Collapsed">
                             <TextBlock Text="用語辞書" FontSize="14" FontWeight="SemiBold" />
-                            <TextBlock Text="登録した単語はAI整形時に自動で使います。"
-                                       FontSize="11" Foreground="{StaticResource MutedBrush}" Margin="0,3,0,8" />
                             <TextBlock Text="正しい表記" FontSize="12" Foreground="{StaticResource MutedBrush}" Margin="0,0,0,4" />
                             <Border Background="#333333" BorderBrush="#686868" BorderThickness="1"
                                     CornerRadius="10" Height="42" Padding="10,4">
@@ -118,43 +116,29 @@
                                          VerticalContentAlignment="Center"
                                          AutomationProperties.Name="辞書に登録する正しい表記" />
                             </Border>
-                            <DockPanel Margin="0,8,0,0" LastChildFill="True">
-                                <ToggleButton x:Name="AutoDictionaryLearningToggle" DockPanel.Dock="Right"
-                                              Style="{StaticResource ModeToggleStyle}"
-                                              Click="AutoDictionaryLearningToggle_Click"
-                                              AutomationProperties.Name="送信した修正から正しい表記を自動登録" />
-                                <StackPanel VerticalAlignment="Center" Margin="0,0,12,0">
-                                    <TextBlock Text="修正した表記を自動登録" FontSize="13" />
-                                    <TextBlock x:Name="AutoDictionaryLearningDescription"
-                                               Text="送信後に、修正した正しい表記を辞書へ追加します。"
-                                               FontSize="11" Foreground="{StaticResource MutedBrush}" />
-                                </StackPanel>
-                            </DockPanel>
-                            <Button Content="単語を登録" Height="38" HorizontalAlignment="Right"
-                                    MinWidth="112" Padding="12,0" Margin="0,8,0,0"
-                                    Style="{StaticResource SecondaryButtonStyle}"
-                                    Click="AddCorrectionDictionaryEntry_Click"
-                                    AutomationProperties.Name="用語辞書に単語を登録" />
+                            <TextBlock Text="誤認識・別表記（任意。複数は「、」区切り）"
+                                       FontSize="12" Foreground="{StaticResource MutedBrush}" Margin="0,8,0,4" />
+                            <Border Background="#333333" BorderBrush="#686868" BorderThickness="1"
+                                    CornerRadius="10" Height="42" Padding="10,4">
+                                <TextBox x:Name="DictionaryAlternativesBox" BorderThickness="0"
+                                         Background="Transparent" Foreground="#F4F4F4"
+                                         FontFamily="Yu Gothic UI" FontSize="13" MaxLength="400"
+                                         VerticalContentAlignment="Center"
+                                         AutomationProperties.Name="辞書に登録する誤認識・別表記" />
+                            </Border>
+                            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,8,0,0">
+                                <Button Content="辞書リスト" Height="38" MinWidth="112" Padding="12,0"
+                                        Margin="0,0,8,0" Style="{StaticResource SecondaryButtonStyle}"
+                                        Click="OpenDictionaryList_Click"
+                                        AutomationProperties.Name="辞書リストを表示" />
+                                <Button Content="単語を登録" Height="38" MinWidth="112" Padding="12,0"
+                                        Style="{StaticResource SecondaryButtonStyle}"
+                                        Click="AddCorrectionDictionaryEntry_Click"
+                                        AutomationProperties.Name="用語辞書に単語を登録" />
+                            </StackPanel>
                             <TextBlock x:Name="CorrectionDictionaryStatus" FontSize="11"
                                        Foreground="{StaticResource MutedBrush}" Margin="0,5,0,0"
                                        AutomationProperties.LiveSetting="Polite" />
-                            <ItemsControl x:Name="CorrectionDictionaryItems" Margin="0,8,0,0">
-                                <ItemsControl.ItemTemplate>
-                                    <DataTemplate>
-                                        <Border Background="#2B2B2B" CornerRadius="10" Padding="8" Margin="0,0,0,6">
-                                            <DockPanel LastChildFill="True">
-                                                <Button DockPanel.Dock="Right" Content="削除" Tag="{Binding}"
-                                                        Height="32" MinWidth="60" Padding="8,0" Margin="8,0,0,0"
-                                                        Style="{StaticResource SecondaryButtonStyle}"
-                                                        Click="RemoveCorrectionDictionaryEntry_Click"
-                                                        AutomationProperties.Name="この辞書項目を削除" />
-                                                <TextBlock Text="{Binding Summary}" VerticalAlignment="Center"
-                                                           FontSize="12" TextWrapping="Wrap" />
-                                            </DockPanel>
-                                        </Border>
-                                    </DataTemplate>
-                                </ItemsControl.ItemTemplate>
-                            </ItemsControl>
                         </StackPanel>
                         <StackPanel x:Name="SelectedTextAnswerSettingsPanel" Margin="0,16,0,0" Visibility="Collapsed">
                             <TextBlock Text="選択した文章への回答方法" FontSize="14" FontWeight="SemiBold" />
@@ -196,6 +180,47 @@
                     <Button x:Name="ActionButton" Grid.Row="2" Content="Setup" Width="210" Height="56"
                             HorizontalAlignment="Right" VerticalAlignment="Bottom" Style="{StaticResource PrimaryButtonStyle}"
                             Click="ActionButton_Click" />
+
+                    <Grid x:Name="DictionaryListPage" Grid.Row="0" Grid.RowSpan="3"
+                          Background="{StaticResource PanelBrush}" Visibility="Collapsed" Panel.ZIndex="10">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="54" />
+                            <RowDefinition Height="*" />
+                        </Grid.RowDefinitions>
+                        <StackPanel Grid.Row="0" Orientation="Horizontal" VerticalAlignment="Top">
+                            <Button Content="← 戻る" Height="38" MinWidth="88" Padding="12,0"
+                                    Style="{StaticResource SecondaryButtonStyle}"
+                                    Click="BackFromDictionaryList_Click"
+                                    AutomationProperties.Name="設定に戻る" />
+                            <TextBlock Text="辞書リスト" FontSize="17" FontWeight="SemiBold"
+                                       VerticalAlignment="Center" Margin="14,0,0,0" />
+                        </StackPanel>
+                        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto"
+                                      HorizontalScrollBarVisibility="Disabled" Focusable="False">
+                            <StackPanel>
+                                <TextBlock x:Name="DictionaryListEmptyText" Text="辞書に登録された単語はありません。"
+                                           FontSize="12" Foreground="{StaticResource MutedBrush}"
+                                           Margin="0,4,0,0" Visibility="Collapsed" />
+                                <ItemsControl x:Name="CorrectionDictionaryItems" Margin="0,4,0,0">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                            <Border Background="#2B2B2B" CornerRadius="10" Padding="8" Margin="0,0,0,6">
+                                                <DockPanel LastChildFill="True">
+                                                    <Button DockPanel.Dock="Right" Content="削除" Tag="{Binding}"
+                                                            Height="32" MinWidth="60" Padding="8,0" Margin="8,0,0,0"
+                                                            Style="{StaticResource SecondaryButtonStyle}"
+                                                            Click="RemoveCorrectionDictionaryEntry_Click"
+                                                            AutomationProperties.Name="この辞書項目を削除" />
+                                                    <TextBlock Text="{Binding Summary}" VerticalAlignment="Center"
+                                                               FontSize="12" TextWrapping="Wrap" />
+                                                </DockPanel>
+                                            </Border>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                            </StackPanel>
+                        </ScrollViewer>
+                    </Grid>
                 </Grid>
             </Border>
         </Border>

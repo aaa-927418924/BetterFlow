@@ -11,7 +11,6 @@ internal sealed class AppSettings
     public string OpenCodeModelProviderId { get; set; } = "opencode";
     public string OpenCodeModelId { get; set; } = "muse-spark-1.3-contributor-free";
     public List<CorrectionDictionaryEntry> CorrectionDictionary { get; set; } = new();
-    public bool AutoLearnDictionaryEnabled { get; set; } = true;
     public List<DictionaryLearningEvidence> PendingDictionaryLearning { get; set; } = new();
     public List<string> SuppressedAutomaticDictionaryTerms { get; set; } = new();
 
@@ -19,8 +18,6 @@ internal sealed class AppSettings
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? LegacyDictionaryLearningMode { get; set; }
 
-    [JsonIgnore]
-    public bool LegacyDictionaryAlternativesPresent { get; set; }
     public string MicrophoneDeviceId { get; set; } = AudioInputDeviceOption.SystemDefaultId;
     public uint ShortcutModifiers { get; set; }
     public uint ShortcutVirtualKey { get; set; } = HotkeyBinding.RightAltVirtualKey;
@@ -37,17 +34,29 @@ internal sealed class AppSettings
 internal sealed class CorrectionDictionaryEntry
 {
     public string PreferredSpelling { get; set; } = string.Empty;
+    public string Alternatives { get; set; } = string.Empty;
     public string Source { get; set; } = "manual";
     public int UseCount { get; set; }
     public DateTimeOffset? LastUsedUtc { get; set; }
 
     [JsonIgnore]
-    public string Summary => PreferredSpelling;
+    public IReadOnlyList<string> AlternativeSpellings => (Alternatives ?? string.Empty)
+        .Split(['、', ',', '，', ';', '；', '\n', '\r', '|'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+        .Where(value => value.Length > 0 && !string.Equals(value, PreferredSpelling, StringComparison.OrdinalIgnoreCase))
+        .Distinct(StringComparer.OrdinalIgnoreCase)
+        .Take(20)
+        .ToArray();
+
+    [JsonIgnore]
+    public string Summary => AlternativeSpellings.Count == 0
+        ? PreferredSpelling
+        : $"{PreferredSpelling}\n誤認識・別表記: {string.Join("、", AlternativeSpellings)}";
 }
 
 internal sealed class DictionaryLearningEvidence
 {
     public string PreferredSpelling { get; set; } = string.Empty;
+    public string Alternatives { get; set; } = string.Empty;
     public int IndependentCorrectionCount { get; set; }
     public DateTimeOffset LastCorrectionUtc { get; set; }
     public List<string> CountedSubmissionIds { get; set; } = new();
@@ -64,11 +73,6 @@ internal sealed class SettingsStore
 
             var json = File.ReadAllText(AppPaths.SettingsFile);
             var settings = System.Text.Json.JsonSerializer.Deserialize<AppSettings>(json) ?? new AppSettings();
-            using var document = System.Text.Json.JsonDocument.Parse(json);
-            settings.LegacyDictionaryAlternativesPresent = document.RootElement.TryGetProperty(
-                "CorrectionDictionary", out var dictionary) && dictionary.ValueKind == System.Text.Json.JsonValueKind.Array &&
-                dictionary.EnumerateArray().Any(entry => entry.ValueKind == System.Text.Json.JsonValueKind.Object &&
-                    entry.TryGetProperty("Alternatives", out _));
             return settings;
         }
         catch

@@ -43,7 +43,11 @@ internal static class DictionaryTermSelector
             .Select(entry => new
             {
                 Entry = entry,
-                Relevance = CalculateRelevance(transcriptTokens, entry.PreferredSpelling),
+                Relevance = entry.AlternativeSpellings
+                    .Prepend(entry.PreferredSpelling)
+                    .Select(term => CalculateRelevance(transcriptTokens, term))
+                    .DefaultIfEmpty(0)
+                    .Max(),
                 Usage = Math.Min(Math.Max(entry.UseCount, 0), 10) * 0.002 +
                         (entry.LastUsedUtc is { } lastUsed && now - lastUsed <= TimeSpan.FromDays(30)
                             ? 0.01
