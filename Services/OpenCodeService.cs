@@ -1112,7 +1112,7 @@ internal sealed class OpenCodeService : IDisposable
     {
         if (detail.Contains("Token refresh failed", StringComparison.OrdinalIgnoreCase) ||
             detail.Contains("invalid_grant", StringComparison.OrdinalIgnoreCase))
-            return "OpenCodeのOAuth認証を更新できませんでした。OpenCode Desktopで選択モデルのproviderに再ログインし、Better FlowのAIモードを一度オフにしてからオンにしてください。詳細: " + detail;
+            return "OpenCodeのOAuth認証を更新できませんでした。OpenCode Desktopで選択モデルのproviderに再ログインし、Better Flowの設定からモデル一覧を更新してください。詳細: " + detail;
 
         if (detail.Contains("can only be used from within OpenCode", StringComparison.OrdinalIgnoreCase) ||
             detail.Contains("FreeTierError", StringComparison.OrdinalIgnoreCase))

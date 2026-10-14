@@ -50,19 +50,6 @@
                             <TextBlock x:Name="ShortcutCaptureStatus" Text="" FontSize="12"
                                        Foreground="{StaticResource MutedBrush}" LineHeight="18"
                                        Margin="0,5,0,0" AutomationProperties.LiveSetting="Polite" />
-                            <DockPanel Margin="0,12,0,0" LastChildFill="True">
-                                <ToggleButton x:Name="AiModeToggle" DockPanel.Dock="Right"
-                                              Style="{StaticResource ModeToggleStyle}" Click="AiModeToggle_Click"
-                                              IsChecked="False"
-                                              AutomationProperties.Name="AIによる文章整形モード"
-                                              AutomationProperties.HelpText="オフは文字起こしのみです。オンでは通常の認識文を整え、選択文編集時は音声指示で選択文を編集します。" />
-                                <StackPanel VerticalAlignment="Center" Margin="0,0,12,0">
-                                    <TextBlock x:Name="AiModeLabel" Text="AIによる文章整形" FontSize="14" />
-                                    <TextBlock x:Name="AiModeDescription" Text="オフ: 文字起こしのみ"
-                                               FontSize="12" Foreground="{StaticResource MutedBrush}"
-                                               AutomationProperties.LiveSetting="Polite" />
-                                </StackPanel>
-                            </DockPanel>
                         </StackPanel>
                         <StackPanel x:Name="MicrophoneSettingsPanel" Margin="0,16,0,0" Visibility="Collapsed">
                             <TextBlock Text="音声入力デバイス" FontSize="14" FontWeight="SemiBold" />
@@ -76,7 +63,9 @@
                                           FontFamily="Yu Gothic UI" FontSize="13"
                                           ItemTemplate="{StaticResource AudioInputDisplayNameTemplate}"
                                           Style="{StaticResource DarkComboBoxStyle}"
+                                          DropDownOpened="MicrophoneDeviceCombo_DropDownOpened"
                                           SelectionChanged="MicrophoneDeviceCombo_SelectionChanged"
+                                          ToolTip="{Binding SelectedItem.DisplayName, RelativeSource={RelativeSource Self}}"
                                           AutomationProperties.Name="音声入力デバイス" />
                             </DockPanel>
                             <TextBlock x:Name="MicrophoneDeviceStatus" FontSize="11" Foreground="{StaticResource MutedBrush}"
@@ -98,10 +87,6 @@
                                           SelectionChanged="OpenCodeModelCombo_SelectionChanged"
                                           AutomationProperties.Name="OpenCode Desktopのモデル" />
                             </DockPanel>
-                            <TextBlock x:Name="OpenCodeModelModeHint"
-                                       Text="AIモード中はモデルを変更できません。変更するにはAIモードをオフにしてください。"
-                                       FontSize="11" Foreground="{StaticResource MutedBrush}" Margin="0,5,0,0"
-                                       Visibility="Collapsed" />
                             <TextBlock x:Name="OpenCodeModelStatus" FontSize="11" Foreground="{StaticResource MutedBrush}"
                                        Margin="0,5,0,0" AutomationProperties.LiveSetting="Polite" />
                         </StackPanel>

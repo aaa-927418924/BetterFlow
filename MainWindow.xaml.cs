@@ -1,7 +1,9 @@
 using System.IO;
+using System.Globalization;
 using Microsoft.Win32;
 using System.Windows.Interop;
 using System.Windows.Input;
+using System.Windows.Media;
 using BetterFlow.Services;
 using ToolStripMenuItem = System.Windows.Forms.ToolStripMenuItem;
 using ToolStripSeparator = System.Windows.Forms.ToolStripSeparator;
@@ -50,9 +52,7 @@ public partial class MainWindow : System.Windows.Window
     private Task? _transcriptPreviewTask;
     private long _transcriptPreviewSession;
     private AutoDictionaryLearningMonitor? _autoDictionaryLearningMonitor;
-    private CancellationTokenSource? _dictionaryLearningCancellation;
-    private readonly Queue<DateTimeOffset> _dictionaryReviewRequests = new();
-    private readonly object _dictionaryReviewRequestLock = new();
+    private readonly SemaphoreSlim _dictionaryReviewSemaphore = new(1, 1);
     private CancellationTokenSource? _selectedTextQuestionCancellation;
     private GptLiveQuestionSession? _gptLiveQuestionSession;
     private readonly List<(string Question, string Answer)> _selectedTextQuestionHistory = new();
@@ -277,7 +277,7 @@ public partial class MainWindow : System.Windows.Window
 
     private void ScheduleOpenCodeWarmupIfNeeded()
     {
-        if (_closing || !_settings.AiModeEnabled || _asr is null || _openCodeReady || _isBusy)
+        if (_closing || _asr is null || _openCodeReady || _isBusy)
             return;
 
         // Starting OpenCode on the first spoken request made that request absorb
@@ -310,102 +310,20 @@ public partial class MainWindow : System.Windows.Window
         {
             _openCodeReady = false;
             _openCode.Stop();
-            RuntimeStatus.Text = "OpenCodeモデルを準備できませんでした。設定を確認し、AIモードを一度オフにしてからオンにしてください。 " + ex.GetBaseException().Message;
+            RuntimeStatus.Text = "OpenCodeモデルを準備できませんでした。設定画面でモデルを選び直すか、一覧を更新してください。 " + ex.GetBaseException().Message;
         }
         finally
         {
             _isBusy = false;
-            UpdateAiModeDisplay();
-        }
-    }
-
-    private async void AiModeToggle_Click(object sender, System.Windows.RoutedEventArgs e)
-    {
-        var enableAiMode = AiModeToggle.IsChecked == true;
-        if (_asr is null || _isBusy || IsAnyRecording)
-        {
-            AiModeToggle.IsChecked = _settings.AiModeEnabled;
-            RuntimeStatus.Text = IsAnyRecording
-                ? "録音中はモードを切り替えられません。"
-                : "処理中はモードを切り替えられません。";
-            return;
-        }
-
-        if (enableAiMode == _settings.AiModeEnabled) return;
-
-        if (!enableAiMode)
-        {
-            _settings.AiModeEnabled = false;
-            try
-            {
-                _settingsStore.Save(_settings);
-                _openCodeReady = false;
-                _openCode.Stop();
-                UpdateAiModeDisplay();
-                RuntimeStatus.Text = "文字起こしのみモードに切り替えました。";
-            }
-            catch (Exception ex)
-            {
-                _settings.AiModeEnabled = true;
-                AiModeToggle.IsChecked = true;
-                UpdateAiModeDisplay();
-                RuntimeStatus.Text = "モード設定を保存できませんでした。 " + ex.Message;
-            }
-            return;
-        }
-
-        _isBusy = true;
-        _openCodeReady = false;
-        UpdateAiModeDisplay();
-        AiModeToggle.IsEnabled = false;
-        ActionButton.IsEnabled = false;
-        RuntimeStatus.Text = "OpenCodeモデルを確認しています…";
-        try
-        {
-            await EnsureOpenCodeReadyAsync();
-            await LoadOpenCodeModelsAsync();
-            var selectedModel = GetSelectedOpenCodeModel();
-            if (selectedModel is null)
-                throw new InvalidOperationException("OpenCodeのモデル一覧から使うモデルを選択してください。OpenCode Desktopでモデルを追加した後は一覧を更新してください。");
-            await _openCode.EnsureModelAvailableAsync(selectedModel.ProviderId, selectedModel.ModelId, _lifetime.Token);
-            SaveOpenCodeModelSelection(selectedModel);
-            _settings.AiModeEnabled = true;
-            _settingsStore.Save(_settings);
-            _openCodeReady = true;
-            UpdateAiModeDisplay();
-            RuntimeStatus.Text = "AIモードに切り替えました。";
-        }
-        catch (Exception ex)
-        {
-            _settings.AiModeEnabled = false;
-            _openCodeReady = false;
-            AiModeToggle.IsChecked = false;
-            _openCode.Stop();
-            UpdateAiModeDisplay();
-            RuntimeStatus.Text = "AIモードを有効にできませんでした。文字起こしのみで利用できます。 " + ex.Message;
-        }
-        finally
-        {
-            _isBusy = false;
-            AiModeToggle.IsEnabled = true;
-            ActionButton.IsEnabled = true;
             UpdateAiModeDisplay();
         }
     }
 
     private void UpdateAiModeDisplay()
     {
-        AiModeToggle.IsChecked = _settings.AiModeEnabled;
-        AiModeDescription.Text = !_settings.AiModeEnabled
-            ? "オフ: 文字起こしをそのまま貼り付けます。"
-            : "オン: OpenCodeの選択モデルで文章を整えます。";
-        AiModeToggle.IsEnabled = _asr is not null && !_isBusy && !IsAnyRecording && !_isRefreshingOpenCodeModels;
-        var canChooseModel = !_settings.AiModeEnabled && !_isBusy && !IsAnyRecording;
+        var canChooseModel = _asr is not null && !_isBusy && !IsAnyRecording && !_isRefreshingOpenCodeModels;
         OpenCodeModelCombo.IsEnabled = canChooseModel;
         RefreshOpenCodeModelsButton.IsEnabled = canChooseModel && !_isRefreshingOpenCodeModels;
-        OpenCodeModelModeHint.Visibility = _settings.AiModeEnabled
-            ? System.Windows.Visibility.Visible
-            : System.Windows.Visibility.Collapsed;
         CorrectionDictionarySettingsPanel.IsEnabled = _asr is not null && !_isBusy && !IsAnyRecording;
         UpdateSelectedTextAnswerModeDisplay();
     }
@@ -549,10 +467,16 @@ public partial class MainWindow : System.Windows.Window
                 _settings.OpenCodeModelId = "muse-spark-1.3-contributor-free";
             }
 
-            if (oldProviderId is not ("" or "opencode-zen-free"))
-                _settings.AiModeEnabled = false;
             _settings.LegacyAiProviderId = null;
             _settings.LegacyAiProviders = null;
+            shouldSaveSettings = true;
+        }
+
+        // AI formatting is now always enabled; older transcription-only settings
+        // are migrated once so existing installs follow the same behavior.
+        if (!_settings.AiModeEnabled)
+        {
+            _settings.AiModeEnabled = true;
             shouldSaveSettings = true;
         }
 
@@ -714,6 +638,27 @@ public partial class MainWindow : System.Windows.Window
         RefreshMicrophoneDeviceList(updateStatus: true);
     }
 
+    private void MicrophoneDeviceCombo_DropDownOpened(object sender, EventArgs e)
+    {
+        if (MicrophoneDeviceCombo.Template.FindName("PopupBorder", MicrophoneDeviceCombo) is not
+            System.Windows.Controls.Border popupBorder)
+            return;
+
+        var pixelsPerDip = VisualTreeHelper.GetDpi(MicrophoneDeviceCombo).PixelsPerDip;
+        var typeface = new Typeface(MicrophoneDeviceCombo.FontFamily, System.Windows.FontStyles.Normal,
+            MicrophoneDeviceCombo.FontWeight, MicrophoneDeviceCombo.FontStretch);
+        var widestName = _audioInputDevices
+            .Select(device => new FormattedText(device.DisplayName, CultureInfo.CurrentUICulture,
+                System.Windows.FlowDirection.LeftToRight, typeface, MicrophoneDeviceCombo.FontSize,
+                System.Windows.Media.Brushes.White, pixelsPerDip).WidthIncludingTrailingWhitespace)
+            .DefaultIfEmpty(0)
+            .Max();
+        var desiredWidth = Math.Max(MicrophoneDeviceCombo.ActualWidth, widestName + 56);
+        var screenLimit = Math.Max(MicrophoneDeviceCombo.ActualWidth,
+            System.Windows.SystemParameters.WorkArea.Width - 32);
+        popupBorder.Width = Math.Min(desiredWidth, screenLimit);
+    }
+
     private void RefreshCorrectionDictionaryItems()
     {
         CorrectionDictionaryItems.ItemsSource = null;
@@ -824,37 +769,30 @@ public partial class MainWindow : System.Windows.Window
             return;
         }
 
-        if (!_settings.AiModeEnabled || !_openCodeReady || !_openCode.IsRunning)
+        if (!_openCodeReady || !_openCode.IsRunning)
         {
-            var skipReason = !_settings.AiModeEnabled
-                ? "ai-mode-off"
-                : !_openCodeReady
-                    ? "model-not-ready"
-                    : "opencode-not-running";
+            var skipReason = !_openCodeReady ? "model-not-ready" : "opencode-not-running";
             DictionaryLearningDiagnosticLog.Write("learning_skipped", skipReason, changes.Count,
                 submission.MonitorId, submission.CandidateId);
-            CorrectionDictionaryStatus.Text = "AIモードまたはOpenCodeモデルが準備できていないため、今回は登録を見送りました。";
+            CorrectionDictionaryStatus.Text = "OpenCodeモデルが準備できていないため、今回は登録を見送りました。";
             return;
         }
 
-        var cancellation = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token);
-        var previousCancellation = _dictionaryLearningCancellation;
-        _dictionaryLearningCancellation = cancellation;
-        previousCancellation?.Cancel();
+        var providerId = _settings.OpenCodeModelProviderId;
+        var modelId = _settings.OpenCodeModelId;
+        var cancellationToken = _lifetime.Token;
+        var semaphoreAcquired = false;
         try
         {
-            if (!TryReserveDictionaryReviewRequest())
-            {
-                DictionaryLearningDiagnosticLog.Write("model_review_skipped", "rate-limit", changes.Count,
-                    submission.MonitorId, submission.CandidateId);
-                CorrectionDictionaryStatus.Text = "辞書判定の回数制限に達したため、今回は登録を見送りました。";
-                return;
-            }
-
+            DictionaryLearningDiagnosticLog.Write("model_review_queued", "selected-model", changes.Count,
+                submission.MonitorId, submission.CandidateId);
+            await _dictionaryReviewSemaphore.WaitAsync(cancellationToken);
+            semaphoreAcquired = true;
+            cancellationToken.ThrowIfCancellationRequested();
             DictionaryLearningDiagnosticLog.Write("model_review_started", "selected-model", changes.Count,
                 submission.MonitorId, submission.CandidateId);
             var review = await _openCode.ReviewDictionaryCorrectionsAsync(
-                changes, _settings.OpenCodeModelProviderId, _settings.OpenCodeModelId, cancellation.Token);
+                changes, providerId, modelId, cancellationToken);
             var confirmedChanges = review.Items
                 .Where(item => item.Decision == DictionaryCorrectionDecision.Confirmed &&
                                item.Index >= 0 && item.Index < changes.Count)
@@ -877,7 +815,7 @@ public partial class MainWindow : System.Windows.Window
             DictionaryLearningDiagnosticLog.Write("model_review_completed", reviewDetail,
                 review.Items.Count, submission.MonitorId, submission.CandidateId);
 
-            cancellation.Token.ThrowIfCancellationRequested();
+            cancellationToken.ThrowIfCancellationRequested();
             var submissionId = $"{submission.MonitorId}:{submission.CandidateId}";
             var result = ApplyAutomaticDictionaryLearning(
                 confirmedChanges, pendingChanges, submissionId, submission.MonitorId, submission.CandidateId);
@@ -928,7 +866,7 @@ public partial class MainWindow : System.Windows.Window
                         : "候補は確認しましたが、新しい辞書項目は追加されませんでした。既登録の可能性があります。";
             }
         }
-        catch (OperationCanceledException) when (cancellation.IsCancellationRequested) { }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { }
         catch (Exception ex)
         {
             DictionaryLearningDiagnosticLog.Write("learning_failed", ex.GetType().Name, changes.Count,
@@ -937,23 +875,7 @@ public partial class MainWindow : System.Windows.Window
         }
         finally
         {
-            if (ReferenceEquals(_dictionaryLearningCancellation, cancellation))
-                _dictionaryLearningCancellation = null;
-            cancellation.Dispose();
-        }
-    }
-
-    private bool TryReserveDictionaryReviewRequest()
-    {
-        lock (_dictionaryReviewRequestLock)
-        {
-            var now = DateTimeOffset.UtcNow;
-            while (_dictionaryReviewRequests.Count > 0 &&
-                   now - _dictionaryReviewRequests.Peek() >= TimeSpan.FromMinutes(1))
-                _dictionaryReviewRequests.Dequeue();
-            if (_dictionaryReviewRequests.Count >= 2) return false;
-            _dictionaryReviewRequests.Enqueue(now);
-            return true;
+            if (semaphoreAcquired) _dictionaryReviewSemaphore.Release();
         }
     }
 
@@ -1437,72 +1359,118 @@ public partial class MainWindow : System.Windows.Window
         ApplyOpenCodeModels();
     }
 
-    private void OpenCodeModelCombo_SelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
+    private async void OpenCodeModelCombo_SelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
     {
         if (_loadingOpenCodeModelUi) return;
-        if (_settings.AiModeEnabled || _isBusy || IsAnyRecording)
+        if (_isBusy || IsAnyRecording)
         {
             _loadingOpenCodeModelUi = true;
             OpenCodeModelCombo.SelectedItem = FindSelectedOpenCodeModel();
             _loadingOpenCodeModelUi = false;
-            RuntimeStatus.Text = "モデルを変更するには、録音や処理を終えてAIモードをオフにしてください。";
+            RuntimeStatus.Text = "モデルを変更するには、録音や処理を終えてください。";
             return;
         }
 
         if (GetSelectedOpenCodeModel() is not OpenCodeModelOption selected) return;
         var oldProviderId = _settings.OpenCodeModelProviderId;
         var oldModelId = _settings.OpenCodeModelId;
+        if (string.Equals(oldProviderId, selected.ProviderId, StringComparison.Ordinal) &&
+            string.Equals(oldModelId, selected.ModelId, StringComparison.Ordinal) && _openCodeReady)
+            return;
+
+        var wasReady = _openCodeReady;
+        _isBusy = true;
+        _openCodeReady = false;
+        UpdateAiModeDisplay();
+        RuntimeStatus.Text = "選択したOpenCodeモデルを準備しています…";
         try
         {
+            await EnsureOpenCodeReadyAsync(_lifetime.Token);
+            await _openCode.EnsureModelAvailableAsync(selected.ProviderId, selected.ModelId, _lifetime.Token);
             SaveOpenCodeModelSelection(selected);
             _settingsStore.Save(_settings);
+            _openCodeReady = true;
             UpdateAiModeDisplay();
+            OpenCodeModelStatus.Text = string.Empty;
             RuntimeStatus.Text = "OpenCodeモデルを選択しました。";
+        }
+        catch (OperationCanceledException) when (_lifetime.IsCancellationRequested)
+        {
+            _settings.OpenCodeModelProviderId = oldProviderId;
+            _settings.OpenCodeModelId = oldModelId;
+            _openCodeReady = wasReady && _openCode.IsRunning;
+            RestoreOpenCodeModelSelection();
         }
         catch (Exception ex)
         {
             _settings.OpenCodeModelProviderId = oldProviderId;
             _settings.OpenCodeModelId = oldModelId;
-            _loadingOpenCodeModelUi = true;
-            OpenCodeModelCombo.SelectedItem = FindSelectedOpenCodeModel();
-            _loadingOpenCodeModelUi = false;
-            RuntimeStatus.Text = "モデルを選択できませんでした。 " + ex.Message;
+            _openCodeReady = wasReady && _openCode.IsRunning;
+            RestoreOpenCodeModelSelection();
+            RuntimeStatus.Text = "OpenCodeモデルを切り替えられませんでした。 " + ex.GetBaseException().Message;
+        }
+        finally
+        {
+            _isBusy = false;
+            UpdateAiModeDisplay();
         }
     }
 
     private async void RefreshOpenCodeModels_Click(object sender, System.Windows.RoutedEventArgs e)
     {
-        if (_settings.AiModeEnabled || _isBusy || IsAnyRecording)
+        if (_isBusy || IsAnyRecording)
         {
-            OpenCodeModelStatus.Text = "モデル一覧を更新するには、AIモードをオフにしてください。";
+            OpenCodeModelStatus.Text = "録音や処理を終えてからモデル一覧を更新してください。";
             return;
         }
 
-        var wasRunning = _openCode.IsRunning;
+        var wasReady = _openCodeReady;
         _isRefreshingOpenCodeModels = true;
+        _isBusy = true;
         UpdateAiModeDisplay();
         OpenCodeModelStatus.Text = "OpenCode Desktopで接続中のproviderを確認しています…";
         try
         {
-            await EnsureOpenCodeReadyAsync();
+            await EnsureOpenCodeReadyAsync(_lifetime.Token);
             await LoadOpenCodeModelsAsync();
             var selected = GetSelectedOpenCodeModel();
-            OpenCodeModelStatus.Text = _openCodeModels.Count == 0
-                ? "接続済みモデルが見つかりません。OpenCode Desktopでproviderに接続してから更新してください。"
-                : IsSelectedOpenCodeModelConnected(selected)
-                    ? $"接続済みproviderのモデルを{_openCodeModels.Count}件読み込みました。"
-                    : $"接続済みproviderのモデルを{_openCodeModels.Count}件読み込みました。保存中のモデルは未接続です。接続後に選び直してください。";
+            if (_openCodeModels.Count == 0)
+            {
+                _openCodeReady = false;
+                OpenCodeModelStatus.Text = "接続済みモデルが見つかりません。OpenCode Desktopでproviderに接続してから更新してください。";
+            }
+            else if (!IsSelectedOpenCodeModelConnected(selected) || selected is null)
+            {
+                _openCodeReady = false;
+                OpenCodeModelStatus.Text = $"接続済みproviderのモデルを{_openCodeModels.Count}件読み込みました。使うモデルを選択してください。";
+            }
+            else
+            {
+                await _openCode.EnsureModelAvailableAsync(selected.ProviderId, selected.ModelId, _lifetime.Token);
+                SaveOpenCodeModelSelection(selected);
+                _settingsStore.Save(_settings);
+                _openCodeReady = true;
+                OpenCodeModelStatus.Text = $"接続済みproviderのモデルを{_openCodeModels.Count}件読み込み、選択モデルの準備が完了しました。";
+            }
         }
         catch (Exception ex)
         {
+            _openCodeReady = wasReady && _openCode.IsRunning;
             OpenCodeModelStatus.Text = "モデル一覧を読み込めませんでした。 " + ex.Message;
         }
         finally
         {
-            if (!wasRunning && !_settings.AiModeEnabled) _openCode.Stop();
             _isRefreshingOpenCodeModels = false;
+            _isBusy = false;
             UpdateAiModeDisplay();
         }
+    }
+
+    private void RestoreOpenCodeModelSelection()
+    {
+        _loadingOpenCodeModelUi = true;
+        OpenCodeModelCombo.SelectedItem = FindSelectedOpenCodeModel();
+        _loadingOpenCodeModelUi = false;
     }
 
     private async Task LoadRecognizerAsync(CancellationToken cancellationToken)
@@ -1529,8 +1497,6 @@ public partial class MainWindow : System.Windows.Window
 
     private async Task RecordButton_Click()
     {
-        _dictionaryLearningCancellation?.Cancel();
-
         if (_selectedTextQuestionSessionActive)
         {
             await StopSelectedTextQuestionSessionAsync();
@@ -1565,15 +1531,9 @@ public partial class MainWindow : System.Windows.Window
                     var selectedTextContext = selection!;
                     if (selectedTextContext.IsEditable)
                     {
-                        if (!_settings.AiModeEnabled)
-                        {
-                            RuntimeStatus.Text = "選択した入力文章を編集するにはAIモードをオンにしてください。";
-                            _indicator.ShowStatus("AIモードをオン", TimeSpan.FromSeconds(1));
-                            return;
-                        }
                         if (!_openCodeReady)
                         {
-                            RuntimeStatus.Text = "OpenCodeモデルの準備が完了していません。AIモードを一度オフにしてからオンにしてください。";
+                            RuntimeStatus.Text = "OpenCodeモデルの準備が完了していません。設定画面でモデルを選び直すか、一覧を更新してください。";
                             _indicator.ShowStatus("AI準備未完了", TimeSpan.FromSeconds(1));
                             return;
                         }
@@ -1598,9 +1558,9 @@ public partial class MainWindow : System.Windows.Window
                     return;
                 }
 
-                if (_settings.AiModeEnabled && !_openCodeReady)
+                if (!_openCodeReady)
                 {
-                    RuntimeStatus.Text = "OpenCodeモデルの準備が完了していません。AIモードを一度オフにしてからオンにしてください。";
+                    RuntimeStatus.Text = "OpenCodeモデルの準備が完了していません。設定画面でモデルを選び直すか、一覧を更新してください。";
                     _indicator.ShowStatus("AI準備未完了", TimeSpan.FromSeconds(1));
                     return;
                 }
@@ -2361,7 +2321,7 @@ public partial class MainWindow : System.Windows.Window
             if (!TranscriptFormatter.HasMeaningfulText(transcript))
                 throw new InvalidDataException("文字起こし結果が空、または句読点・記号だけでした。マイクを確認して、もう一度お試しください。");
 
-            if (_settings.AiModeEnabled && VoiceCommandParser.TryRemoveSendDirective(transcript, out var transcriptWithoutCommand))
+            if (VoiceCommandParser.TryRemoveSendDirective(transcript, out var transcriptWithoutCommand))
             {
                 sendAfterPaste = true;
                 transcript = transcriptWithoutCommand;
@@ -2373,63 +2333,55 @@ public partial class MainWindow : System.Windows.Window
             string text;
             string resultStatus;
             _indicator.HideStatus();
-            if (!_settings.AiModeEnabled)
+            RuntimeStatus.Text = "OpenCodeを準備しています…";
+            _indicator.ShowStatus("整形中");
+            if (!sendAfterPaste)
             {
-                text = TranscriptFormatter.NormalizeTranscript(transcript);
-                resultStatus = "文字起こしを入力欄へ貼り付けました。";
-            }
-            else
-            {
-                RuntimeStatus.Text = "OpenCodeを準備しています…";
-                _indicator.ShowStatus("整形中");
-                if (!sendAfterPaste)
-                {
-                    try
-                    {
-                        var selectedInput = MicrophoneDeviceCombo.SelectedItem as AudioInputDeviceOption;
-                        StartRecorderWithFallback(_continuousRecorder.Start, selectedInput);
-                        sendCommandListenerTask = MonitorSendVoiceCommandsAsync(sendCommandDetected, cancellationToken);
-                        _sendCommandListenerTask = sendCommandListenerTask;
-                        RuntimeStatus.Text = "OpenCodeの選択モデルで文章を整えています。音声で送信を指示できます。";
-                    }
-                    catch
-                    {
-                        sendCommandMonitorUnavailable = true;
-                    }
-                }
                 try
                 {
-                    if (sendCommandListenerTask is null && !sendAfterPaste)
-                        RuntimeStatus.Text = "OpenCodeの選択モデルで文章を整えています…";
-                    if (!_openCode.IsRunning) await EnsureOpenCodeReadyAsync(cancellationToken);
-                    var relevantDictionary = DictionaryTermSelector.SelectRelevant(
-                        transcript, _settings.CorrectionDictionary);
-                    var response = await _openCode.RewriteAsync(
-                        transcript, _settings.OpenCodeModelProviderId, _settings.OpenCodeModelId,
-                        relevantDictionary, cancellationToken);
-                    cancellationToken.ThrowIfCancellationRequested();
-                    if (sendCommandListenerTask is not null)
-                    {
-                        await StopSendCommandMonitorAsync(sendCommandListenerTask);
-                        if (ReferenceEquals(_sendCommandListenerTask, sendCommandListenerTask))
-                            _sendCommandListenerTask = null;
-                        sendCommandListenerTask = null;
-                        sendAfterPaste = sendCommandDetected.Task.IsCompletedSuccessfully && sendCommandDetected.Task.Result;
-                    }
-                    text = response.Trim();
-                    if (!TranscriptFormatter.HasMeaningfulText(text))
-                        throw new InvalidDataException("モデルから文字として使える回答が返りませんでした。入力欄は変更していません。");
-                    RecordDictionaryTermUsage(relevantDictionary);
-                    resultStatus = "整えた文章を入力欄へ貼り付けました。";
+                    var selectedInput = MicrophoneDeviceCombo.SelectedItem as AudioInputDeviceOption;
+                    StartRecorderWithFallback(_continuousRecorder.Start, selectedInput);
+                    sendCommandListenerTask = MonitorSendVoiceCommandsAsync(sendCommandDetected, cancellationToken);
+                    _sendCommandListenerTask = sendCommandListenerTask;
+                    RuntimeStatus.Text = "OpenCodeの選択モデルで文章を整えています。音声で送信を指示できます。";
                 }
-                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
-                catch (Exception ex)
+                catch
                 {
-                    _openCode.Stop();
-                    RuntimeStatus.Text = "AI変換に失敗しました。入力欄は変更していません。 " + ex.Message;
-                    _indicator.ShowStatus(GetAiFailureIndicatorText(ex), TimeSpan.FromSeconds(1));
-                    return;
+                    sendCommandMonitorUnavailable = true;
                 }
+            }
+            try
+            {
+                if (sendCommandListenerTask is null && !sendAfterPaste)
+                    RuntimeStatus.Text = "OpenCodeの選択モデルで文章を整えています…";
+                if (!_openCode.IsRunning) await EnsureOpenCodeReadyAsync(cancellationToken);
+                var relevantDictionary = DictionaryTermSelector.SelectRelevant(
+                    transcript, _settings.CorrectionDictionary);
+                var response = await _openCode.RewriteAsync(
+                    transcript, _settings.OpenCodeModelProviderId, _settings.OpenCodeModelId,
+                    relevantDictionary, cancellationToken);
+                cancellationToken.ThrowIfCancellationRequested();
+                if (sendCommandListenerTask is not null)
+                {
+                    await StopSendCommandMonitorAsync(sendCommandListenerTask);
+                    if (ReferenceEquals(_sendCommandListenerTask, sendCommandListenerTask))
+                        _sendCommandListenerTask = null;
+                    sendCommandListenerTask = null;
+                    sendAfterPaste = sendCommandDetected.Task.IsCompletedSuccessfully && sendCommandDetected.Task.Result;
+                }
+                text = response.Trim();
+                if (!TranscriptFormatter.HasMeaningfulText(text))
+                    throw new InvalidDataException("モデルから文字として使える回答が返りませんでした。入力欄は変更していません。");
+                RecordDictionaryTermUsage(relevantDictionary);
+                resultStatus = "整えた文章を入力欄へ貼り付けました。";
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
+            catch (Exception ex)
+            {
+                _openCode.Stop();
+                RuntimeStatus.Text = "AI変換に失敗しました。入力欄は変更していません。 " + ex.Message;
+                _indicator.ShowStatus(GetAiFailureIndicatorText(ex), TimeSpan.FromSeconds(1));
+                return;
             }
 
             cancellationToken.ThrowIfCancellationRequested();
@@ -2887,7 +2839,6 @@ public partial class MainWindow : System.Windows.Window
         _lifetime.Cancel();
         CancelTranscriptPreview();
         _autoDictionaryLearningMonitor?.Dispose();
-        _dictionaryLearningCancellation?.Cancel();
         _selectionEditCancellation?.Cancel();
         _selectedTextQuestionCancellation?.Cancel();
         SystemEvents.SessionEnding -= SystemEvents_SessionEnding;
