@@ -13,7 +13,14 @@ internal static class PasteService
 
     public static PasteResult CopyAndPaste(string text, IntPtr targetWindow)
     {
-        System.Windows.Clipboard.SetText(text);
+        CopyTextToClipboard(text);
+        return PasteCopiedText(targetWindow);
+    }
+
+    public static void CopyTextToClipboard(string text) => System.Windows.Clipboard.SetText(text);
+
+    public static PasteResult PasteCopiedText(IntPtr targetWindow)
+    {
         if (targetWindow != IntPtr.Zero && GetForegroundWindow() == targetWindow)
         {
             var inputs = new[]

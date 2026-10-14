@@ -242,9 +242,11 @@
 - Release build/publish成功。NuGet脆弱性フィードへの接続に関する`NU1900`警告のみ。`artifacts/publish-selection-edit-replace-continue-20261014/BetterFlow.exe`と`dist/Better Flow.exe`は82,406,518 bytes、SHA-256 `9304809875C31B6BB8F359BDC74855E51F2C4183AA25F4D829E0AD35C915BB83`で一致。更新前EXEは`artifacts/BetterFlow-before-selection-edit-replace-continue-20261014.exe`に保存し、フルパスが一致するPID 33140を停止して更新した。
 - 実マイク、OpenCode応答、対象アプリでの置換・連続発話は未確認。テストスイートは実行していない。
 
-## 選択文編集の再発症状：原因調査と次の計画（2026-10-14、実装なし）
+## 選択文編集の再発症状：原因調査と修正（2026-10-14）
 
 - 読み取り専用でソース制御フローを確認。`ReplaceCurrentSelectionAsync`は貼り付け前に`WaitForSelectionTextAsync`で、前面ウィンドウと同一RuntimeIdのUI Automation選択を短時間再確認する。この確認が失敗すると`PasteService.CopyAndPaste`を呼ばずに`Applied=false, CanContinue=false`を返す。クリップボード書き込みは`CopyAndPaste`内にあるため、この経路では生成文がコピーされない。呼び出し側は`CanContinue=false`で連続録音を停止してループを抜ける。報告された「置換されない・クリップボードにない・1回で終了」を一度に説明する回帰候補。
 - 実行ログや対象アプリのUIAイベントは取得していないため、実際にこの分岐へ入ったかは未確定。ソース上の原因候補とユーザー報告の症状は一致する。
 - 次の実装計画: (1) OpenCodeから非空の生成結果を得たら、貼り付け可否の判定より先にクリップボードへ保存する。(2) 貼り付け前の判定は、同じ対象ウィンドウと元の文章の維持を安全条件にし、Select後の厳密RuntimeId再照会を貼り付けの必須条件にしない。(3) 成功後は置換文の選択を復元し、回復可能なUIA確認失敗だけで連続録音を止めない。対象ウィンドウ変更や選択文の変化など誤貼り付けの危険時は貼り付けを中止する。(4) 必要なら音声・選択文を記録しない段階別診断で、AI応答、クリップボード、SendInput、選択確認、録音状態を切り分ける。
-- 今回はソース、EXE、プロセス、設定を変更せず、ビルドや実動作確認も行っていない。
+- 実装: 生成結果を貼り付け判定より先にクリップボードへ保存。対象ウィンドウ内のフォーカス中の編集可能なUIA要素を優先して再取得し、変化したRuntimeIdをコンテキストへ更新。選択内容が元の文章と一致しない場合は貼り付けず、対象ウィンドウが前面の間は連続録音を維持する。Ctrl+V送信後は挿入された文章を再選択できた場合だけ次の編集へ進み、選択復元に失敗してもUndoから文書範囲を再探索する。挿入文検索の次回検索範囲が一致箇所の末尾で潰れていた問題も修正。
+- Release build成功。NU1900のNuGet脆弱性フィード接続警告のみ。単体EXEを`artifacts/publish-selection-edit-recovery-20261014/BetterFlow.exe`へ発行して`dist/Better Flow.exe`を更新。両者82,406,776 bytes、SHA-256 `BB1666D95BA2AF2E37DC6DD4DDA084EB980580133D181D830B21F7B98F51A9DE`で一致。置換前EXEは`artifacts/BetterFlow-before-selection-edit-recovery-20261014.exe`に保存。対象アプリの実行プロセスは見つからなかったため停止していない。
+- Codex/Chrome上での実入力、マイクを使った連続編集、Undoの実動作は未確認。テストスイートは実行していない。

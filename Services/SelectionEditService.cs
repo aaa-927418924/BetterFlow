@@ -6,18 +6,22 @@ namespace BetterFlow.Services;
 
 internal sealed class SelectionEditContext
 {
+    private int[] _providerRuntimeId;
+
     public SelectionEditContext(IntPtr targetWindow, int[] providerRuntimeId, string selectedText, bool isEditable)
     {
         TargetWindow = targetWindow;
-        ProviderRuntimeId = providerRuntimeId;
+        _providerRuntimeId = providerRuntimeId.ToArray();
         CurrentText = selectedText;
         IsEditable = isEditable;
     }
 
     public IntPtr TargetWindow { get; }
-    public int[] ProviderRuntimeId { get; }
+    public int[] ProviderRuntimeId => _providerRuntimeId;
     public string CurrentText { get; set; }
     public bool IsEditable { get; }
+
+    public void UpdateProviderRuntimeId(int[] providerRuntimeId) => _providerRuntimeId = providerRuntimeId.ToArray();
 }
 
 internal readonly record struct SelectionEditResult(bool Applied, bool CanContinue, string Message);
@@ -26,7 +30,8 @@ internal static class SelectionEditService
 {
     private const int MaximumSelectionLength = 20_000;
     private const int MaximumReplacementLength = 20_000;
-    private const int MaximumFocusedAncestors = 12;
+    private const int MaximumFocusedAncestors = 64;
+    private const int MaximumWindowAncestorDepth = 256;
 
     public static bool TryCapture(out SelectionEditContext? context, out string? failureMessage)
     {
@@ -155,7 +160,7 @@ internal static class SelectionEditService
     private static bool IsWithinWindow(AutomationElement element, IntPtr targetWindow)
     {
         var walker = TreeWalker.ControlViewWalker;
-        for (var depth = 0; element is not null && depth < MaximumFocusedAncestors; depth++)
+        for (var depth = 0; element is not null && depth < MaximumWindowAncestorDepth; depth++)
         {
             try
             {
@@ -227,62 +232,105 @@ internal static class SelectionEditService
         string replacement,
         CancellationToken cancellationToken)
     {
-        var replacementApplied = false;
         var previousText = context.CurrentText;
         if (string.IsNullOrWhiteSpace(replacement))
-            return new SelectionEditResult(false, false, "編集結果が空でした。選択文は変更していません。");
+            return new SelectionEditResult(false, IsTargetWindowForeground(context), "編集結果が空でした。選択文は変更していません。");
         if (replacement.Length > MaximumReplacementLength)
-            return new SelectionEditResult(false, false, "編集結果が長すぎるため、選択文は変更していません。");
+            return new SelectionEditResult(false, IsTargetWindowForeground(context), "編集結果が長すぎるため、選択文は変更していません。");
+
+        // Preserve the generated result even when UI Automation cannot safely
+        // reacquire the editor after the model response.
+        try
+        {
+            PasteService.CopyTextToClipboard(replacement);
+        }
+        catch (Exception ex)
+        {
+            return new SelectionEditResult(false, IsTargetWindowForeground(context),
+                "編集結果をクリップボードへ保存できませんでした。 " + ex.GetBaseException().Message);
+        }
+
         if (PasteService.GetForegroundWindowHandle() != context.TargetWindow)
-            return new SelectionEditResult(false, false, "編集中に前面のアプリが変わったため、誤貼り付けを防いで編集を終了しました。");
+            return new SelectionEditResult(false, false,
+                "前面のアプリが変わったため貼り付けませんでした。編集結果はクリップボードにコピーされています。");
 
         try
         {
-            var provider = FindFocusedTextProvider(context.ProviderRuntimeId, context.TargetWindow, out var textPattern);
+            var provider = FindFocusedEditProvider(context.ProviderRuntimeId, context.TargetWindow, out var textPattern);
             if (provider is null || textPattern is null)
-                return new SelectionEditResult(false, false, "編集中に入力欄が変わったため、選択文は変更していません。");
+                return new SelectionEditResult(false, true,
+                    "入力欄を再確認できませんでした。編集結果はクリップボードにコピーされています。対象の選択を戻して続けてください。");
+
+            context.UpdateProviderRuntimeId(provider.GetRuntimeId());
 
             var selections = textPattern.GetSelection();
             if (selections is null || selections.Length != 1)
-                return new SelectionEditResult(false, false, "選択範囲が変わったため、選択文は変更していません。");
+                return new SelectionEditResult(false, IsTargetWindowForeground(context),
+                    "選択範囲が変わったため貼り付けませんでした。編集結果はクリップボードにコピーされています。");
 
             var currentSelection = selections[0];
             var selectedText = NormalizeText(currentSelection.GetText(-1));
             if (!string.Equals(selectedText, context.CurrentText, StringComparison.Ordinal))
-                return new SelectionEditResult(false, false, "選択文が編集中に変わったため、選択文は変更していません。");
+                return new SelectionEditResult(false, IsTargetWindowForeground(context),
+                    "選択文が編集中に変わったため貼り付けませんでした。編集結果はクリップボードにコピーされています。");
+
+            if (!provider.Current.HasKeyboardFocus)
+            {
+                provider.SetFocus();
+                if (PasteService.GetForegroundWindowHandle() != context.TargetWindow)
+                    return new SelectionEditResult(false, false,
+                        "前面のアプリが変わったため貼り付けませんでした。編集結果はクリップボードにコピーされています。");
+
+                provider = FindFocusedEditProvider(context.ProviderRuntimeId, context.TargetWindow, out textPattern);
+                if (provider is null || textPattern is null)
+                    return new SelectionEditResult(false, true,
+                        "入力欄のフォーカスを確認できませんでした。編集結果はクリップボードにコピーされています。続けて話してください。");
+                context.UpdateProviderRuntimeId(provider.GetRuntimeId());
+                selections = textPattern.GetSelection();
+                if (selections is not { Length: 1 } ||
+                    !string.Equals(NormalizeText(selections[0].GetText(-1)), context.CurrentText, StringComparison.Ordinal))
+                    return new SelectionEditResult(false, IsTargetWindowForeground(context),
+                        "入力欄へ戻った後に選択文が変わったため貼り付けませんでした。編集結果はクリップボードにコピーされています。");
+                currentSelection = selections[0];
+            }
 
             currentSelection.Select();
             if (!await WaitForSelectionTextAsync(context, context.CurrentText, cancellationToken))
-                return new SelectionEditResult(false, false, "貼り付け前に選択範囲を確認できませんでした。選択文は変更していません。");
+                return new SelectionEditResult(false, IsTargetWindowForeground(context),
+                    "貼り付け前に選択範囲を再確認できませんでした。編集結果はクリップボードにコピーされています。続けて話してください。");
 
-            var paste = PasteService.CopyAndPaste(replacement, context.TargetWindow);
+            if (PasteService.GetForegroundWindowHandle() != context.TargetWindow)
+                return new SelectionEditResult(false, false,
+                    "前面のアプリが変わったため貼り付けませんでした。編集結果はクリップボードにコピーされています。");
+
+            var paste = PasteService.PasteCopiedText(context.TargetWindow);
             if (paste != PasteResult.Pasted)
             {
-                var canContinue = await WaitForSelectionTextAsync(context, context.CurrentText, cancellationToken);
+                var canContinue = IsTargetWindowForeground(context) &&
+                                  await WaitForSelectionTextAsync(context, context.CurrentText, cancellationToken);
                 return new SelectionEditResult(false, canContinue,
                     canContinue
                         ? "自動貼り付けを送れませんでした。結果はクリップボードにコピーされています。続けて話してください。"
-                        : "対象アプリへの貼り付けを確認できませんでした。選択文は変更していません。");
+                        : "対象アプリへの貼り付けを送れませんでした。結果はクリップボードにコピーされています。");
             }
 
-            replacementApplied = true;
-            context.CurrentText = replacement;
-            if (PasteService.GetForegroundWindowHandle() != context.TargetWindow)
-                return new SelectionEditResult(true, false, "編集を適用しました。対象アプリが切り替わったため、連続編集を終了しました。");
-            if (await TryReselectInsertedTextAsync(
-                    context.ProviderRuntimeId, replacement, context.TargetWindow, cancellationToken))
-                return new SelectionEditResult(true, true, "選択文を編集しました。続けて話してください。");
-
-            if (await WaitForSelectionTextAsync(
-                    context, previousText, cancellationToken, allowProviderFallback: true))
+            if (await TryReselectInsertedTextAsync(context, replacement, cancellationToken))
             {
-                context.CurrentText = previousText;
-                replacementApplied = false;
-                return new SelectionEditResult(false, true,
-                    "貼り付け後の変更を確認できませんでした。元の選択文は維持しています。結果はクリップボードにコピーされています。続けて話してください。");
+                context.CurrentText = replacement;
+                return new SelectionEditResult(true, true, "選択文を編集しました。続けて話してください。");
             }
 
-            return new SelectionEditResult(true, false, "編集結果を入力しましたが、選択状態を確認できません。安全のため連続編集を終了しました。");
+            if (IsTargetWindowForeground(context) &&
+                await WaitForSelectionTextAsync(context, previousText, cancellationToken))
+                return new SelectionEditResult(false, true,
+                    "貼り付け後に選択文が変わりませんでした。編集結果はクリップボードにコピーされています。続けて話してください。");
+
+            // All Ctrl+V events were accepted and the original selection is gone.
+            // Keep an undo record even if this editor temporarily refuses to expose
+            // the replacement selection; the undo path will attempt to find it again.
+            context.CurrentText = replacement;
+            return new SelectionEditResult(true, false,
+                "編集結果を貼り付けましたが、選択状態を確認できません。結果はクリップボードにもコピーされています。");
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -290,9 +338,9 @@ internal static class SelectionEditService
         }
         catch (Exception ex)
         {
-            return replacementApplied
-                ? new SelectionEditResult(true, false, "編集を適用しましたが、選択状態を安全に維持できません。連続編集を終了しました。")
-                : new SelectionEditResult(false, false, "選択範囲を安全に更新できませんでした。 " + ex.GetBaseException().Message);
+            return new SelectionEditResult(false, IsTargetWindowForeground(context),
+                "選択範囲を安全に更新できませんでした。編集結果はクリップボードにコピーされています。 " +
+                ex.GetBaseException().Message);
         }
     }
 
@@ -317,12 +365,24 @@ internal static class SelectionEditService
                 var provider = FindFocusedEditProvider(context.ProviderRuntimeId, context.TargetWindow, out var textPattern);
                 if (provider is not null && textPattern is not null)
                 {
+                    context.UpdateProviderRuntimeId(provider.GetRuntimeId());
                     var selections = textPattern.GetSelection();
-                    if (selections is { Length: 1 } &&
-                        string.Equals(NormalizeText(selections[0].GetText(-1)), NormalizeText(expectedText),
-                            StringComparison.Ordinal))
+                    if (selections is { Length: 1 })
                     {
-                        selections[0].Select();
+                        TextPatternRange? targetRange = null;
+                        if (string.Equals(NormalizeText(selections[0].GetText(-1)), NormalizeText(expectedText),
+                                StringComparison.Ordinal))
+                            targetRange = selections[0].Clone();
+                        else
+                            TryGetInsertedTextRange(textPattern, expectedText, out targetRange);
+
+                        if (targetRange is not null)
+                        {
+                            targetRange.Select();
+                            if (IsReplacementSelected(textPattern, expectedText))
+                                return true;
+                        }
+
                         if (IsReplacementSelected(textPattern, expectedText))
                             return true;
                     }
@@ -343,8 +403,7 @@ internal static class SelectionEditService
     private static async Task<bool> WaitForSelectionTextAsync(
         SelectionEditContext context,
         string expectedText,
-        CancellationToken cancellationToken,
-        bool allowProviderFallback = false)
+        CancellationToken cancellationToken)
     {
         const int MaximumAttempts = 8;
         for (var attempt = 0; attempt < MaximumAttempts; attempt++)
@@ -355,15 +414,15 @@ internal static class SelectionEditService
 
             try
             {
-                TextPattern? textPattern;
-                var provider = allowProviderFallback
-                    ? FindFocusedEditProvider(context.ProviderRuntimeId, context.TargetWindow, out textPattern)
-                    : FindFocusedTextProvider(context.ProviderRuntimeId, context.TargetWindow, out textPattern);
+                var provider = FindFocusedEditProvider(context.ProviderRuntimeId, context.TargetWindow, out var textPattern);
                 var selections = textPattern?.GetSelection();
                 if (provider is not null && selections is { Length: 1 } &&
                     string.Equals(NormalizeText(selections[0].GetText(-1)), NormalizeText(expectedText),
                         StringComparison.Ordinal))
+                {
+                    context.UpdateProviderRuntimeId(provider.GetRuntimeId());
                     return true;
+                }
             }
             catch (Exception ex) when (IsAutomationFailure(ex))
             {
@@ -382,11 +441,13 @@ internal static class SelectionEditService
         IntPtr targetWindow,
         out TextPattern? pattern)
     {
-        var provider = FindFocusedTextProvider(requiredRuntimeId, targetWindow, out pattern);
-        if (provider is not null || requiredRuntimeId is null)
+        var provider = FindFocusedTextProvider(null, targetWindow, out pattern);
+        if (provider is not null)
             return provider;
 
-        provider = FindFocusedTextProvider(null, targetWindow, out pattern);
+        provider = requiredRuntimeId is null
+            ? null
+            : FindFocusedTextProvider(requiredRuntimeId, targetWindow, out pattern);
         return provider is not null && IsEditableTextProvider(provider) ? provider : null;
     }
 
@@ -401,14 +462,15 @@ internal static class SelectionEditService
         if (element is null || !IsWithinWindow(element, targetWindow))
             return null;
 
-        for (var depth = 0; element is not null && depth < MaximumFocusedAncestors; depth++)
+        for (var depth = 0; element is not null && depth < MaximumWindowAncestorDepth; depth++)
         {
             if (element.Current.IsPassword)
                 return null;
 
             if ((requiredRuntimeId is null || RuntimeIdMatches(element, requiredRuntimeId)) &&
                 element.TryGetCurrentPattern(TextPattern.Pattern, out var patternObject) &&
-                patternObject is TextPattern textPattern)
+                patternObject is TextPattern textPattern &&
+                (requiredRuntimeId is not null || IsEditableTextProvider(element)))
             {
                 pattern = textPattern;
                 return element;
@@ -504,6 +566,7 @@ internal static class SelectionEditService
 
                 var nextSearchRange = match.Clone();
                 nextSearchRange.MoveEndpointByRange(TextPatternRangeEndpoint.Start, match, TextPatternRangeEndpoint.End);
+                nextSearchRange.MoveEndpointByRange(TextPatternRangeEndpoint.End, documentRange, TextPatternRangeEndpoint.End);
                 if (nextSearchRange.CompareEndpoints(TextPatternRangeEndpoint.Start, searchRange,
                         TextPatternRangeEndpoint.Start) <= 0)
                     break;
@@ -536,25 +599,25 @@ internal static class SelectionEditService
     }
 
     private static async Task<bool> TryReselectInsertedTextAsync(
-        int[] providerRuntimeId,
+        SelectionEditContext context,
         string insertedText,
-        IntPtr targetWindow,
         CancellationToken cancellationToken)
     {
         const int MaximumAttempts = 10;
         for (var attempt = 0; attempt < MaximumAttempts; attempt++)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            if (PasteService.GetForegroundWindowHandle() != targetWindow)
+            if (PasteService.GetForegroundWindowHandle() != context.TargetWindow)
                 return false;
 
             try
             {
-                var provider = FindFocusedEditProvider(providerRuntimeId, targetWindow, out var textPattern);
+                var provider = FindFocusedEditProvider(context.ProviderRuntimeId, context.TargetWindow, out var textPattern);
                 if (provider is not null && textPattern is not null &&
                     TryGetInsertedTextRange(textPattern, insertedText, out var insertedRange))
                 {
-                    if (PasteService.GetForegroundWindowHandle() != targetWindow)
+                    context.UpdateProviderRuntimeId(provider.GetRuntimeId());
+                    if (PasteService.GetForegroundWindowHandle() != context.TargetWindow)
                         return false;
 
                     // Select the whole replacement in one UI Automation operation.
@@ -567,7 +630,7 @@ internal static class SelectionEditService
                     {
                         cancellationToken.ThrowIfCancellationRequested();
                         await Task.Delay(TimeSpan.FromMilliseconds(20), cancellationToken);
-                        if (PasteService.GetForegroundWindowHandle() != targetWindow)
+                        if (PasteService.GetForegroundWindowHandle() != context.TargetWindow)
                             return false;
 
                         if (IsReplacementSelected(textPattern, insertedText))
@@ -588,6 +651,9 @@ internal static class SelectionEditService
 
         return false;
     }
+
+    private static bool IsTargetWindowForeground(SelectionEditContext context) =>
+        PasteService.GetForegroundWindowHandle() == context.TargetWindow;
 
     private static bool IsReplacementSelected(TextPattern textPattern, string insertedText)
     {

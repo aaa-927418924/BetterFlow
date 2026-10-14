@@ -1137,6 +1137,7 @@ public partial class MainWindow : System.Windows.Window
 
     private async Task ProcessSelectionEditSessionAsync(SelectionEditContext context, CancellationToken cancellationToken)
     {
+        var sessionEndIndicator = "編集終了";
         try
         {
             await foreach (var samples in _continuousRecorder.ReadUtterancesAsync(cancellationToken))
@@ -1196,6 +1197,7 @@ public partial class MainWindow : System.Windows.Window
 
                     if (!result.CanContinue)
                     {
+                        sessionEndIndicator = result.Applied ? "選択を維持できません" : "編集結果をコピーしました";
                         _selectionEditSessionStopping = true;
                         await _continuousRecorder.StopAsync(_lifetime.Token);
                         break;
@@ -1224,7 +1226,7 @@ public partial class MainWindow : System.Windows.Window
         catch (Exception ex)
         {
             RuntimeStatus.Text = "連続音声の処理を終了しました。 " + ex.GetBaseException().Message;
-            _indicator.ShowStatus("処理を終了", TimeSpan.FromSeconds(1));
+            sessionEndIndicator = "録音エラー";
         }
         finally
         {
@@ -1249,7 +1251,7 @@ public partial class MainWindow : System.Windows.Window
             _selectionEditCancellation = null;
             ActionButton.Content = _asr is null ? "Setup" : "録音を開始";
             if (endedDuringShutdown || wasCanceled) _indicator.HideStatus();
-            else _indicator.ShowStatus("編集終了", TimeSpan.FromSeconds(1));
+            else _indicator.ShowStatus(sessionEndIndicator, TimeSpan.FromSeconds(1));
             UpdateAiModeDisplay();
         }
     }
@@ -1261,11 +1263,13 @@ public partial class MainWindow : System.Windows.Window
             return captured;
 
         var previousContext = undo.Context;
-        return previousContext.TargetWindow == captured.TargetWindow &&
-               previousContext.ProviderRuntimeId.AsSpan().SequenceEqual(captured.ProviderRuntimeId) &&
-               string.Equals(previousContext.CurrentText, captured.CurrentText, StringComparison.Ordinal)
-            ? previousContext
-            : captured;
+        if (previousContext.TargetWindow != captured.TargetWindow ||
+            !previousContext.IsEditable || !captured.IsEditable ||
+            !string.Equals(previousContext.CurrentText, captured.CurrentText, StringComparison.Ordinal))
+            return captured;
+
+        previousContext.UpdateProviderRuntimeId(captured.ProviderRuntimeId);
+        return previousContext;
     }
 
     private async void UndoWindow_UndoRequested(object? sender, EventArgs e)
