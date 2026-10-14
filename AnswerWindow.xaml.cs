@@ -10,14 +10,13 @@ public partial class AnswerWindow : System.Windows.Window
 {
     private const int GwlExStyle = -20;
     private const long WsExToolWindow = 0x00000080L;
-    private const long WsExNoActivate = 0x08000000L;
     private bool _followOutput = true;
     private string _currentAssistantText = string.Empty;
 
     public AnswerWindow()
     {
         InitializeComponent();
-        SourceInitialized += (_, _) => MakeNonActivating();
+        SourceInitialized += (_, _) => MakeToolWindow();
     }
 
     public void ResetAnswer()
@@ -50,8 +49,30 @@ public partial class AnswerWindow : System.Windows.Window
                 _currentAssistantText.StartsWith(nextText, StringComparison.Ordinal))
                 return;
 
+            var hadFocus = AnswerContent.IsKeyboardFocusWithin;
+            var previousText = _currentAssistantText;
+            var selectionStart = AnswerContent.SelectionStart;
+            var selectionLength = AnswerContent.SelectionLength;
+            var selectedAll = hadFocus && selectionLength == previousText.Length &&
+                              selectionStart == 0 && previousText.Length > 0;
+            var selectedText = hadFocus ? AnswerContent.SelectedText : string.Empty;
+            var caretWasAtEnd = hadFocus && selectionLength == 0 &&
+                                AnswerContent.CaretIndex == previousText.Length;
+
             _currentAssistantText = nextText;
             AnswerContent.Text = _currentAssistantText;
+
+            if (hadFocus)
+            {
+                if (selectedAll && nextText.StartsWith(previousText, StringComparison.Ordinal))
+                    AnswerContent.Select(0, nextText.Length);
+                else if (selectionLength > 0 && selectionStart + selectionLength <= nextText.Length &&
+                         nextText.AsSpan(selectionStart, selectionLength).SequenceEqual(selectedText.AsSpan()))
+                    AnswerContent.Select(selectionStart, selectionLength);
+                else if (caretWasAtEnd && nextText.StartsWith(previousText, StringComparison.Ordinal))
+                    AnswerContent.CaretIndex = nextText.Length;
+            }
+
             if (_followOutput) AnswerScrollViewer.ScrollToEnd();
 
             if (string.IsNullOrWhiteSpace(_currentAssistantText))
@@ -87,12 +108,12 @@ public partial class AnswerWindow : System.Windows.Window
             Dispatcher.BeginInvoke(DispatcherPriority.Background, action);
     }
 
-    private void MakeNonActivating()
+    private void MakeToolWindow()
     {
         var handle = new WindowInteropHelper(this).Handle;
         var currentStyle = GetWindowLongPtr(handle, GwlExStyle).ToInt64();
         SetWindowLongPtr(handle, GwlExStyle,
-            new IntPtr(currentStyle | WsExToolWindow | WsExNoActivate));
+            new IntPtr(currentStyle | WsExToolWindow));
     }
 
     [DllImport("user32.dll", EntryPoint = "GetWindowLongPtrW", SetLastError = true)]

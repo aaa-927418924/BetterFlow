@@ -30,8 +30,13 @@
                 <ScrollViewer x:Name="AnswerScrollViewer" Grid.Row="1" Margin="0,14,0,0"
                               VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
                               CanContentScroll="False" ScrollChanged="AnswerScrollViewer_ScrollChanged">
-                    <TextBlock x:Name="AnswerContent" Text="" FontSize="15" LineHeight="23"
-                               TextWrapping="Wrap" AutomationProperties.LiveSetting="Polite" />
+                    <TextBox x:Name="AnswerContent" Text="" FontFamily="Yu Gothic UI" FontSize="15"
+                             TextWrapping="Wrap" AcceptsReturn="True" IsReadOnly="True"
+                             IsInactiveSelectionHighlightEnabled="True"
+                             Background="Transparent" Foreground="{StaticResource TextBrush}"
+                             BorderThickness="0" Padding="0" CaretBrush="{StaticResource TextBrush}"
+                             HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Disabled"
+                             FocusVisualStyle="{x:Null}" AutomationProperties.LiveSetting="Polite" />
                 </ScrollViewer>
             </Grid>
         </Border>
