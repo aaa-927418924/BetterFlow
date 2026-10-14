@@ -20,13 +20,20 @@ internal sealed record DictionaryLearningStatusUpdate(string MonitorId, string M
 internal sealed class AutoDictionaryLearningMonitor : IDisposable
 {
     private const int WhKeyboardLl = 13;
+    private const int WhMouseLl = 14;
     private const int WmKeyDown = 0x0100;
     private const int WmSysKeyDown = 0x0104;
     private const int WmKeyUp = 0x0101;
     private const int WmSysKeyUp = 0x0105;
+    private const int WmLeftButtonDown = 0x0201;
     private const uint LlkhfInjected = 0x10;
+    private const uint LlkhfLowerIntegrityInjected = 0x02;
+    private const uint LlMouseInjected = 0x01;
+    private const uint LlMouseLowerIntegrityInjected = 0x02;
     private const int VkReturn = 0x0D;
     private const int VkShift = 0x10;
+    private const int VkControl = 0x11;
+    private const int VkMenu = 0x12;
     private const int MaxDocumentLength = 24_000;
     private const int MaxMonitorMinutes = 10;
     private const int PastePropagationTimeoutMs = 2_000;
@@ -35,6 +42,7 @@ internal sealed class AutoDictionaryLearningMonitor : IDisposable
     private const int RecentPreClearSnapshotMs = 500;
     private const int TrackedEditorFocusFreshnessMs = 1_000;
     private const int SubmissionRecoveryWindowMs = 8_000;
+    private const int UnsignaledSnapshotMaxAgeMs = 8_000;
     private const int MaxPlaceholderLength = 128;
     private const int MaxAutomationSearchNodes = 2_000;
     private const int MaxAutomationTreeDepth = 32;
@@ -62,6 +70,7 @@ internal sealed class AutoDictionaryLearningMonitor : IDisposable
 
     private readonly IntPtr _targetWindow;
     private readonly int _targetProcessId;
+    private readonly string _targetProcessName;
     private readonly string _pastedText;
     private readonly CancellationTokenSource _cancellation = new();
     private readonly CancellationToken _token;
@@ -73,7 +82,9 @@ internal sealed class AutoDictionaryLearningMonitor : IDisposable
     private readonly TaskCompletionSource<bool> _readySignal = new(
         TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly LowLevelKeyboardProc _keyboardProc;
+    private readonly LowLevelMouseProc _mouseProc;
     private IntPtr _keyboardHook;
+    private IntPtr _mouseHook;
     private Task? _monitorTask;
     private string _prefix = string.Empty;
     private string _suffix = string.Empty;
@@ -84,6 +95,7 @@ internal sealed class AutoDictionaryLearningMonitor : IDisposable
     private EditorSnapshot _snapshot = EditorSnapshot.Unreadable;
     private EditorSnapshot _lastValidSnapshot = EditorSnapshot.Unreadable;
     private SubmitCandidate? _preparedApplicationSubmit;
+    private SubmitCandidate? _outgoingProofCandidate;
     private long _snapshotVersion;
     private long _nextCandidateId;
     private long _latestCandidateId;
@@ -99,6 +111,8 @@ internal sealed class AutoDictionaryLearningMonitor : IDisposable
     private int _initialized;
     private int _disposed;
     private long _trackedEditorFocusTimestamp;
+    private long _lastMouseMissDiagnosticTimestamp;
+    private long _lastOutgoingProofCheckTimestamp;
     private long _nextEditorGeneration;
     private int _trackingState = (int)EditorTrackingState.Starting;
 
@@ -107,9 +121,11 @@ internal sealed class AutoDictionaryLearningMonitor : IDisposable
         _targetWindow = targetWindow;
         GetWindowThreadProcessId(targetWindow, out var processId);
         _targetProcessId = unchecked((int)processId);
+        _targetProcessName = GetProcessName(_targetProcessId);
         _pastedText = NormalizeLineEndings(pastedText);
         _token = _cancellation.Token;
         _keyboardProc = KeyboardHookCallback;
+        _mouseProc = MouseHookCallback;
     }
 
     public event EventHandler<DictionaryCorrectionSubmission>? SubmissionConfirmed;
@@ -227,7 +243,11 @@ internal sealed class AutoDictionaryLearningMonitor : IDisposable
             return null;
         }
 
-        monitor.Log("monitor_started");
+        monitor._mouseHook = SetWindowsHookEx(WhMouseLl, monitor._mouseProc, module, 0);
+        monitor.Log("monitor_started",
+            $"target-process={monitor._targetProcessName};mouse-hook={(monitor._mouseHook == IntPtr.Zero ? "unavailable" : "ready")}");
+        if (monitor._mouseHook == IntPtr.Zero)
+            monitor.Log("mouse_hook_unavailable", $"error={Marshal.GetLastWin32Error()}");
         monitor._monitorTask = Task.Run(monitor.MonitorAsync);
         return monitor;
     }
@@ -241,6 +261,11 @@ internal sealed class AutoDictionaryLearningMonitor : IDisposable
             UnhookWindowsHookEx(_keyboardHook);
             _keyboardHook = IntPtr.Zero;
         }
+        if (_mouseHook != IntPtr.Zero)
+        {
+            UnhookWindowsHookEx(_mouseHook);
+            _mouseHook = IntPtr.Zero;
+        }
         lock (_snapshotLock)
         {
             _prefix = string.Empty;
@@ -249,6 +274,7 @@ internal sealed class AutoDictionaryLearningMonitor : IDisposable
             _snapshot = EditorSnapshot.Unreadable;
             _lastValidSnapshot = EditorSnapshot.Unreadable;
             _preparedApplicationSubmit = null;
+            _outgoingProofCandidate = null;
             Volatile.Write(ref _editorBinding, null);
             _trackedEditorIdentity = null;
             Interlocked.Exchange(ref _pendingSubmissionId, 0);
@@ -288,18 +314,6 @@ internal sealed class AutoDictionaryLearningMonitor : IDisposable
             lastRebindDiagnosticKey = key;
             lastRebindDiagnosticAt = now;
             Log(stage, detail);
-        }
-
-        void QueueAutomationNotice(AutomationNotice notice)
-        {
-            if (Volatile.Read(ref _disposed) != 0) return;
-            _automationNotices.Enqueue(notice);
-            try
-            {
-                if (_monitorWakeSignal.CurrentCount == 0) _monitorWakeSignal.Release();
-            }
-            catch (ObjectDisposedException) { }
-            catch (SemaphoreFullException) { }
         }
 
         void DetachEditorEvents()
@@ -458,6 +472,24 @@ internal sealed class AutoDictionaryLearningMonitor : IDisposable
                 {
                     if (notice.Element is not null && IsSendButton(notice.Element))
                         SignalSubmit("send-button");
+                    continue;
+                }
+
+                if (notice.Kind == AutomationNoticeKind.MouseButtonDown)
+                {
+                    if (notice.TargetForegroundMatched)
+                    {
+                        if (TryFindSendButtonAtPoint(notice.X, notice.Y, out _, out var hitTestResult))
+                        {
+                            Log("send_button_click_detected", "source=mouse;control=enabled-send-button");
+                            SignalSubmit("mouse-send-button", notice.PreparedCandidate);
+                        }
+                        else if (hitTestResult == "button-name-not-recognized")
+                        {
+                            LogMouseHitTestMiss(hitTestResult);
+                        }
+                        else LogMouseHitTestMiss(hitTestResult);
+                    }
                     continue;
                 }
 
@@ -626,7 +658,9 @@ internal sealed class AutoDictionaryLearningMonitor : IDisposable
                 var deduplicatedCount = Interlocked.Exchange(ref _deduplicatedSignalCount, 0);
                 if (deduplicatedCount > 0)
                     Log("submit_signal_deduplicated", "repeat-or-cross-source", deduplicatedCount);
-                if (TryReadCurrentEditor(out var currentText, out var readState))
+                var composerCleared = false;
+                var editorReadable = TryReadCurrentEditor(out var currentText, out var readState);
+                if (editorReadable)
                 {
                     recoveryStartedAt = 0;
                     SetTrackingState(EditorTrackingState.Tracking, "editor-readable");
@@ -638,7 +672,12 @@ internal sealed class AutoDictionaryLearningMonitor : IDisposable
                         ReportStatus("editor_text_too_long", "入力欄が長くなったため、自動登録の監視を終了しました。");
                         return;
                     }
-                    if (TryExtractSegment(currentText, out var segment))
+                    composerCleared = IsComposerCleared(currentText);
+                    if (composerCleared)
+                    {
+                        SetSnapshot(currentText, string.Empty);
+                    }
+                    else if (TryExtractSegment(currentText, out var segment))
                     {
                         SetSnapshot(currentText, segment);
                     }
@@ -658,6 +697,18 @@ internal sealed class AutoDictionaryLearningMonitor : IDisposable
                         ? EditorTrackingState.Suspended
                         : EditorTrackingState.Reacquiring;
                     SetTrackingState(nextState, readState);
+                }
+
+                var canCheckOutgoingProof = composerCleared ||
+                                            !editorReadable &&
+                                            (EditorTrackingState)Volatile.Read(ref _trackingState) == EditorTrackingState.Suspended;
+                if (canCheckOutgoingProof)
+                {
+                    if (TryCompleteUnsignaledSubmission()) return;
+                }
+                else if (editorReadable)
+                {
+                    ClearUnsignaledSubmissionCandidate();
                 }
 
                 while (_pendingSubmissions.TryDequeue(out var candidate))
@@ -712,15 +763,69 @@ internal sealed class AutoDictionaryLearningMonitor : IDisposable
         try
         {
             var current = element.Current;
-            if (current.ControlType != ControlType.Button || !current.IsEnabled) return false;
-            var name = current.Name ?? string.Empty;
-            return name.Contains("送信", StringComparison.OrdinalIgnoreCase) ||
-                   name.Contains("send", StringComparison.OrdinalIgnoreCase) ||
-                   name.Contains("submit", StringComparison.OrdinalIgnoreCase) ||
-                   name.Contains("投稿", StringComparison.OrdinalIgnoreCase);
+            var isButton = current.ControlType == ControlType.Button ||
+                           current.ControlType == ControlType.Custom &&
+                           element.TryGetCurrentPattern(InvokePattern.Pattern, out _);
+            if (!isButton || !current.IsEnabled) return false;
+            var labels = $"{current.Name} {current.AutomationId} {current.HelpText}";
+            return labels.Contains("送信", StringComparison.OrdinalIgnoreCase) ||
+                   labels.Contains("send", StringComparison.OrdinalIgnoreCase) ||
+                   labels.Contains("submit", StringComparison.OrdinalIgnoreCase) ||
+                   labels.Contains("投稿", StringComparison.OrdinalIgnoreCase);
         }
         catch (Exception ex) when (IsAutomationFailure(ex) || ex is ObjectDisposedException) { }
         return false;
+    }
+
+    private bool TryFindSendButtonAtPoint(int x, int y, out AutomationElement? sendButton, out string hitTestResult)
+    {
+        sendButton = null;
+        hitTestResult = "no-button-at-point";
+        try
+        {
+            var element = AutomationElement.FromPoint(new System.Windows.Point(x, y));
+            var walker = TreeWalker.ControlViewWalker;
+            for (var depth = 0; element is not null && depth < 32 && IsWithinWindow(element, _targetWindow); depth++)
+            {
+                var current = element.Current;
+                if ((_targetProcessId == 0 || current.ProcessId == _targetProcessId) && IsSendButton(element))
+                {
+                    sendButton = element;
+                    return true;
+                }
+                var isButton = current.ControlType == ControlType.Button ||
+                               current.ControlType == ControlType.Custom &&
+                               element.TryGetCurrentPattern(InvokePattern.Pattern, out _);
+                if ((_targetProcessId == 0 || current.ProcessId == _targetProcessId) &&
+                    isButton && current.IsEnabled)
+                    hitTestResult = "button-name-not-recognized";
+                element = walker.GetParent(element);
+            }
+        }
+        catch (Exception ex) when (IsAutomationFailure(ex) || ex is ObjectDisposedException) { }
+        return false;
+    }
+
+    private IntPtr MouseHookCallback(int code, IntPtr wParam, IntPtr lParam)
+    {
+        if (code >= 0 && wParam.ToInt32() == WmLeftButtonDown &&
+            Volatile.Read(ref _initialized) != 0 && Volatile.Read(ref _disposed) == 0)
+        {
+            var mouse = Marshal.PtrToStructure<MouseData>(lParam);
+            var injected = (mouse.Flags & (LlMouseInjected | LlMouseLowerIntegrityInjected)) != 0;
+            var targetForegroundMatched = GetForegroundWindow() == _targetWindow;
+            if (!injected && targetForegroundMatched)
+            {
+                SubmitCandidate preparedCandidate;
+                lock (_snapshotLock)
+                    preparedCandidate = CreateCandidateLocked("mouse-send-button", DateTimeOffset.UtcNow);
+                QueueAutomationNotice(new AutomationNotice(AutomationNoticeKind.MouseButtonDown, 0,
+                    X: mouse.Point.X, Y: mouse.Point.Y,
+                    TargetForegroundMatched: true, PreparedCandidate: preparedCandidate));
+            }
+        }
+
+        return CallNextHookEx(_mouseHook, code, wParam, lParam);
     }
 
     private IntPtr KeyboardHookCallback(int code, IntPtr wParam, IntPtr lParam)
@@ -729,24 +834,39 @@ internal sealed class AutoDictionaryLearningMonitor : IDisposable
             wParam.ToInt32() is WmKeyUp or WmSysKeyUp)
         {
             var key = Marshal.PtrToStructure<KeyboardData>(lParam);
-            if (key.VirtualKey == VkReturn && (key.Flags & LlkhfInjected) == 0)
+            if (key.VirtualKey == VkReturn)
                 Interlocked.Exchange(ref _enterKeyDown, 0);
         }
         else if (code >= 0 && Volatile.Read(ref _initialized) != 0 && Volatile.Read(ref _disposed) == 0 &&
                  wParam.ToInt32() is WmKeyDown or WmSysKeyDown)
         {
             var key = Marshal.PtrToStructure<KeyboardData>(lParam);
-            if (key.VirtualKey == VkReturn && (key.Flags & LlkhfInjected) == 0 &&
-                Interlocked.Exchange(ref _enterKeyDown, 1) == 0 &&
-                (GetAsyncKeyState(VkShift) & 0x8000) == 0 &&
-                GetForegroundWindow() == _targetWindow)
-                SignalSubmit("enter");
+            if (key.VirtualKey == VkReturn && Interlocked.Exchange(ref _enterKeyDown, 1) == 0)
+            {
+                var injected = (key.Flags & (LlkhfInjected | LlkhfLowerIntegrityInjected)) != 0;
+                var targetForegroundMatched = GetForegroundWindow() == _targetWindow;
+                var shift = (GetAsyncKeyState(VkShift) & 0x8000) != 0;
+                var control = (GetAsyncKeyState(VkControl) & 0x8000) != 0;
+                var alt = (GetAsyncKeyState(VkMenu) & 0x8000) != 0;
+                var trackedEditorFocused = targetForegroundMatched && WasTrackedEditorFocusedRecently();
+                Log("enter_key_observed",
+                    $"injected={injected};target-window={targetForegroundMatched};tracked-editor-focus={trackedEditorFocused};shift={shift};control={control};alt={alt}");
+
+                var ignoredReason = injected ? "injected-key" :
+                    !targetForegroundMatched ? "target-window-not-foreground" :
+                    shift ? "shift-enter" :
+                    !trackedEditorFocused ? "tracked-editor-focus-not-current" : null;
+                if (ignoredReason is null)
+                    SignalSubmit("enter");
+                else
+                    Log("submit_signal_ignored", $"source=enter;reason={ignoredReason};control={control};alt={alt}");
+            }
         }
 
         return CallNextHookEx(_keyboardHook, code, wParam, lParam);
     }
 
-    private void SignalSubmit(string source)
+    private void SignalSubmit(string source, SubmitCandidate? preparedCandidate = null)
     {
         if (Volatile.Read(ref _disposed) != 0) return;
         SubmitCandidate? candidate = null;
@@ -763,27 +883,36 @@ internal sealed class AutoDictionaryLearningMonitor : IDisposable
             {
                 var now = Stopwatch.GetTimestamp();
                 var sameSignalWindow = now - _lastSignalTimestamp < Stopwatch.Frequency / 4;
+                var candidateSnapshotVersion = preparedCandidate?.Snapshot.Version ?? _snapshot.Version;
                 var duplicateCrossSource = sameSignalWindow &&
-                                           _snapshot.Version == _lastSignalSnapshotVersion &&
+                                           candidateSnapshotVersion == _lastSignalSnapshotVersion &&
                                            !string.Equals(source, _lastSignalSource, StringComparison.Ordinal);
-                var duplicateButtonInvoke = source == "send-button" && _lastSignalSource == "send-button" &&
-                                           _snapshot.Version == _lastSignalSnapshotVersion && sameSignalWindow;
+                var duplicateButtonInvoke = (source is "send-button" or "mouse-send-button") &&
+                                            (_lastSignalSource is "send-button" or "mouse-send-button") &&
+                                            candidateSnapshotVersion == _lastSignalSnapshotVersion && sameSignalWindow;
                 if (duplicateCrossSource || duplicateButtonInvoke)
                 {
                     deduplicated = true;
                 }
                 else
                 {
-                    var captured = CreateCandidateLocked(source, DateTimeOffset.UtcNow);
+                    var captured = preparedCandidate is { IsValid: true }
+                        ? preparedCandidate with { Source = source, SignalTime = DateTimeOffset.UtcNow }
+                        : CreateCandidateLocked(source, DateTimeOffset.UtcNow);
                     if (!captured.IsValid)
                     {
                         ignoredReason = $"snapshot-not-fresh:{captured.Snapshot.State}";
                     }
                     else
                     {
+                        if (_outgoingProofCandidate is { } outgoingProof)
+                        {
+                            ClearPendingSubmission(outgoingProof.Id);
+                            _outgoingProofCandidate = null;
+                        }
                         candidate = captured;
                         _latestCandidateId = candidate.Id;
-                        _lastSignalSnapshotVersion = _snapshot.Version;
+                        _lastSignalSnapshotVersion = candidate.Snapshot.Version;
                         _lastSignalTimestamp = now;
                         _lastSignalSource = source;
                     }
@@ -819,6 +948,115 @@ internal sealed class AutoDictionaryLearningMonitor : IDisposable
         }
         catch (ObjectDisposedException) { }
         catch (SemaphoreFullException) { }
+    }
+
+    private void QueueAutomationNotice(AutomationNotice notice)
+    {
+        if (Volatile.Read(ref _disposed) != 0) return;
+        _automationNotices.Enqueue(notice);
+        try
+        {
+            if (_monitorWakeSignal.CurrentCount == 0) _monitorWakeSignal.Release();
+        }
+        catch (ObjectDisposedException) { }
+        catch (SemaphoreFullException) { }
+    }
+
+    private bool TryCompleteUnsignaledSubmission()
+    {
+        SubmitCandidate? candidate;
+        var created = false;
+        lock (_snapshotLock)
+        {
+            if (_submissionCompleted != 0) return true;
+            if (_outgoingProofCandidate is not null)
+            {
+                candidate = _outgoingProofCandidate;
+            }
+            else
+            {
+                if (HasPendingSubmissionIntent()) return false;
+                var snapshot = _lastValidSnapshot;
+                if (snapshot.State != SnapshotState.Valid || string.IsNullOrWhiteSpace(snapshot.Segment) ||
+                    GetSnapshotAgeMilliseconds(snapshot) > UnsignaledSnapshotMaxAgeMs)
+                    return false;
+
+                candidate = new SubmitCandidate(++_nextCandidateId, "outgoing-proof-fallback",
+                    DateTimeOffset.UtcNow, snapshot, true, true);
+                _outgoingProofCandidate = candidate;
+                _latestCandidateId = candidate.Id;
+                Interlocked.Exchange(ref _pendingSubmissionId, candidate.Id);
+                Interlocked.Exchange(ref _pendingSubmissionTimestamp, Stopwatch.GetTimestamp());
+                created = true;
+            }
+
+            var now = Stopwatch.GetTimestamp();
+            if (_lastOutgoingProofCheckTimestamp != 0 &&
+                Stopwatch.GetElapsedTime(_lastOutgoingProofCheckTimestamp, now) < TimeSpan.FromMilliseconds(500))
+                return false;
+            _lastOutgoingProofCheckTimestamp = now;
+        }
+
+        if (candidate is null) return false;
+        if (created)
+        {
+            Log("outgoing_proof_candidate_started",
+                $"field=cleared;{SnapshotDescription(candidate.Snapshot)}", 0, candidate.Id);
+            StatusChanged?.Invoke(this,
+                new DictionaryLearningStatusUpdate(_monitorId, "送信後の表示を確認しています…"));
+        }
+
+        if (DateTimeOffset.UtcNow - candidate.SignalTime >= TimeSpan.FromMilliseconds(SubmissionRecoveryWindowMs))
+        {
+            lock (_snapshotLock)
+            {
+                if (_outgoingProofCandidate?.Id == candidate.Id)
+                {
+                    _outgoingProofCandidate = null;
+                    ClearPendingSubmission(candidate.Id);
+                }
+            }
+            ReportStatus("submission_not_confirmed", "送信を確認できず、自動登録を行いませんでした。",
+                "source=outgoing-proof-fallback;reason=no-new-matching-message", 0, candidate.Id);
+            return false;
+        }
+
+        if (!HasNewOutgoingTextEvidence(candidate.Snapshot.FullText, out var evidence)) return false;
+
+        var correction = !string.Equals(candidate.Snapshot.Segment, _originalSegment, StringComparison.Ordinal);
+        Log("submit_candidate_captured",
+            $"source=outgoing-proof-fallback;valid=True;recent-preclear=True;{SnapshotDescription(candidate.Snapshot)}",
+            0, candidate.Id);
+        CompleteConfirmedSubmission(candidate, correction,
+            $"composer-cleared;{evidence}", "outgoing-message-proof", 1);
+        lock (_snapshotLock)
+        {
+            if (_outgoingProofCandidate?.Id == candidate.Id)
+                _outgoingProofCandidate = null;
+        }
+        return Volatile.Read(ref _submissionCompleted) != 0;
+    }
+
+    private void ClearUnsignaledSubmissionCandidate()
+    {
+        SubmitCandidate? candidate;
+        lock (_snapshotLock)
+        {
+            candidate = _outgoingProofCandidate;
+            _outgoingProofCandidate = null;
+            if (candidate is not null) ClearPendingSubmission(candidate.Id);
+        }
+        if (candidate is not null)
+            Log("outgoing_proof_candidate_cancelled", "reason=composer-no-longer-empty", 0, candidate.Id);
+    }
+
+    private void LogMouseHitTestMiss(string result)
+    {
+        var now = Stopwatch.GetTimestamp();
+        var previous = Interlocked.Read(ref _lastMouseMissDiagnosticTimestamp);
+        if (previous != 0 && Stopwatch.GetElapsedTime(previous, now) < TimeSpan.FromSeconds(2)) return;
+        if (Interlocked.CompareExchange(ref _lastMouseMissDiagnosticTimestamp, now, previous) == previous)
+            Log("mouse_click_not_send_button", $"target-window=true;hit-test={result}");
     }
 
     private async Task<bool> ProcessSubmissionCandidateAsync(
@@ -1117,7 +1355,7 @@ internal sealed class AutoDictionaryLearningMonitor : IDisposable
                                   snapshot.State == SnapshotState.RangeLost &&
                                   (string.IsNullOrWhiteSpace(snapshot.FullText) ||
                                    IsComposerPlaceholder(snapshot.FullText));
-        if (source == "send-button" && currentFieldCleared &&
+        if ((source is "send-button" or "mouse-send-button") && currentFieldCleared &&
             _lastValidSnapshot.State == SnapshotState.Valid &&
             GetSnapshotAgeMilliseconds(_lastValidSnapshot) <= RecentPreClearSnapshotMs)
         {
@@ -1835,6 +2073,9 @@ internal sealed class AutoDictionaryLearningMonitor : IDisposable
         return KnownComposerPlaceholders.Contains(NormalizePlaceholderText(fullText));
     }
 
+    private static bool IsComposerCleared(string fullText) =>
+        string.IsNullOrWhiteSpace(fullText) || IsComposerPlaceholder(fullText);
+
     private static string NormalizePlaceholderText(string value) =>
         string.Join(" ", NormalizeLineEndings(value).Replace('\u00a0', ' ')
             .Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
@@ -1885,13 +2126,18 @@ internal sealed class AutoDictionaryLearningMonitor : IDisposable
     private sealed record AutomationNotice(
         AutomationNoticeKind Kind,
         long Generation,
-        AutomationElement? Element = null);
+        AutomationElement? Element = null,
+        int X = 0,
+        int Y = 0,
+        bool TargetForegroundMatched = false,
+        SubmitCandidate? PreparedCandidate = null);
 
     private enum AutomationNoticeKind
     {
         EditorChanged,
         FocusChanged,
-        Invoked
+        Invoked,
+        MouseButtonDown
     }
 
     private enum EditorTrackingState
@@ -1936,6 +2182,20 @@ internal sealed class AutoDictionaryLearningMonitor : IDisposable
         catch (Exception ex) when (IsAutomationFailure(ex) || ex is ObjectDisposedException)
         {
             return null;
+        }
+    }
+
+    private static string GetProcessName(int processId)
+    {
+        if (processId <= 0) return "unknown";
+        try
+        {
+            using var process = Process.GetProcessById(processId);
+            return process.ProcessName;
+        }
+        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or System.ComponentModel.Win32Exception)
+        {
+            return "unknown";
         }
     }
 
@@ -2126,6 +2386,7 @@ internal sealed class AutoDictionaryLearningMonitor : IDisposable
         bool UsedRecentPreClearSnapshot);
 
     private delegate IntPtr LowLevelKeyboardProc(int code, IntPtr wParam, IntPtr lParam);
+    private delegate IntPtr LowLevelMouseProc(int code, IntPtr wParam, IntPtr lParam);
 
     [StructLayout(LayoutKind.Sequential)]
     private struct KeyboardData
@@ -2137,8 +2398,28 @@ internal sealed class AutoDictionaryLearningMonitor : IDisposable
         public UIntPtr ExtraInfo;
     }
 
+    [StructLayout(LayoutKind.Sequential)]
+    private struct NativePoint
+    {
+        public int X;
+        public int Y;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct MouseData
+    {
+        public NativePoint Point;
+        public uint MouseDataValue;
+        public uint Flags;
+        public uint Time;
+        public UIntPtr ExtraInfo;
+    }
+
     [DllImport("user32.dll", SetLastError = true)]
     private static extern IntPtr SetWindowsHookEx(int idHook, LowLevelKeyboardProc callback, IntPtr module, uint threadId);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern IntPtr SetWindowsHookEx(int idHook, LowLevelMouseProc callback, IntPtr module, uint threadId);
 
     [DllImport("user32.dll", SetLastError = true)]
     private static extern bool UnhookWindowsHookEx(IntPtr hook);
