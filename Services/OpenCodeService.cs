@@ -116,9 +116,10 @@ internal sealed class OpenCodeService : IDisposable
     }
 
     public Task<string> RewriteAsync(string transcript, string providerId, string modelId,
+        IReadOnlyList<CorrectionDictionaryEntry>? dictionary = null,
         CancellationToken cancellationToken = default) =>
         GenerateTextAsync(providerId, modelId, TranscriptRewritePrompt.SystemMessage,
-            TranscriptRewritePrompt.CreateUserMessage(transcript), cancellationToken);
+            TranscriptRewritePrompt.CreateUserMessage(transcript, dictionary), cancellationToken);
 
     public Task<string> EditSelectedTextAsync(string selectedText, string instruction, string providerId, string modelId,
         CancellationToken cancellationToken = default) =>

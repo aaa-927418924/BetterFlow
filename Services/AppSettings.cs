@@ -10,6 +10,7 @@ internal sealed class AppSettings
     public string SelectedTextAnswerMode { get; set; } = "opencode";
     public string OpenCodeModelProviderId { get; set; } = "opencode";
     public string OpenCodeModelId { get; set; } = "muse-spark-1.3-contributor-free";
+    public List<CorrectionDictionaryEntry> CorrectionDictionary { get; set; } = new();
     public string MicrophoneDeviceId { get; set; } = AudioInputDeviceOption.SystemDefaultId;
     public uint ShortcutModifiers { get; set; }
     public uint ShortcutVirtualKey { get; set; } = HotkeyBinding.RightAltVirtualKey;
@@ -21,6 +22,17 @@ internal sealed class AppSettings
     [JsonPropertyName("AiProviders")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public Dictionary<string, LegacyAiProviderSettings>? LegacyAiProviders { get; set; }
+}
+
+internal sealed class CorrectionDictionaryEntry
+{
+    public string PreferredSpelling { get; set; } = string.Empty;
+    public string Alternatives { get; set; } = string.Empty;
+
+    [JsonIgnore]
+    public string Summary => string.IsNullOrWhiteSpace(Alternatives)
+        ? PreferredSpelling
+        : $"{PreferredSpelling}  ←  {Alternatives}";
 }
 
 internal sealed class SettingsStore

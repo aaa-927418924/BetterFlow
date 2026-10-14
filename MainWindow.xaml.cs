@@ -90,6 +90,7 @@ public partial class MainWindow : System.Windows.Window
         _settings = _settingsStore.Load();
         NormalizeAiSettings();
         InitializeOpenCodeModelUi();
+        RefreshCorrectionDictionaryItems();
         InitializeSelectedTextAnswerModeUi();
         InitializeMicrophoneDeviceUi();
         InitializeTrayIcon();
@@ -380,6 +381,7 @@ public partial class MainWindow : System.Windows.Window
         OpenCodeModelModeHint.Visibility = _settings.AiModeEnabled
             ? System.Windows.Visibility.Visible
             : System.Windows.Visibility.Collapsed;
+        CorrectionDictionarySettingsPanel.IsEnabled = _asr is not null && !_isBusy && !IsAnyRecording;
         UpdateSelectedTextAnswerModeDisplay();
     }
 
@@ -545,6 +547,19 @@ public partial class MainWindow : System.Windows.Window
             shouldSaveSettings = true;
         }
 
+        _settings.CorrectionDictionary = (_settings.CorrectionDictionary ?? new List<CorrectionDictionaryEntry>())
+            .Where(entry => entry is not null)
+            .Select(entry => new CorrectionDictionaryEntry
+            {
+                PreferredSpelling = CleanDictionaryField(entry.PreferredSpelling, 100),
+                Alternatives = NormalizeDictionaryAlternatives(entry.Alternatives)
+            })
+            .Where(entry => !string.IsNullOrWhiteSpace(entry.PreferredSpelling))
+            .GroupBy(entry => entry.PreferredSpelling, StringComparer.OrdinalIgnoreCase)
+            .Select(group => group.First())
+            .Take(100)
+            .ToList();
+
         if (shouldSaveSettings)
             _settingsStore.Save(_settings);
 
@@ -634,6 +649,118 @@ public partial class MainWindow : System.Windows.Window
     private void RefreshMicrophoneDevices_Click(object sender, System.Windows.RoutedEventArgs e)
     {
         RefreshMicrophoneDeviceList(updateStatus: true);
+    }
+
+    private void RefreshCorrectionDictionaryItems()
+    {
+        CorrectionDictionaryItems.ItemsSource = null;
+        CorrectionDictionaryItems.ItemsSource = _settings.CorrectionDictionary.ToArray();
+    }
+
+    private void AddCorrectionDictionaryEntry_Click(object sender, System.Windows.RoutedEventArgs e)
+    {
+        if (_isBusy || IsAnyRecording) return;
+
+        var preferred = CleanDictionaryField(DictionaryPreferredSpellingBox.Text, 100);
+        var alternatives = NormalizeDictionaryAlternatives(DictionaryAlternativesBox.Text);
+        if (preferred.Length == 0)
+        {
+            CorrectionDictionaryStatus.Text = "正しい表記を入力してください。";
+            return;
+        }
+
+        var existing = _settings.CorrectionDictionary.FirstOrDefault(entry =>
+            string.Equals(entry.PreferredSpelling, preferred, StringComparison.OrdinalIgnoreCase));
+        if (existing is null && _settings.CorrectionDictionary.Count >= 100)
+        {
+            CorrectionDictionaryStatus.Text = "登録できる単語は100件までです。";
+            return;
+        }
+
+        var previous = CloneCorrectionDictionary();
+        if (existing is null)
+        {
+            _settings.CorrectionDictionary.Add(new CorrectionDictionaryEntry
+            {
+                PreferredSpelling = preferred,
+                Alternatives = alternatives
+            });
+        }
+        else
+        {
+            existing.PreferredSpelling = preferred;
+            existing.Alternatives = NormalizeDictionaryAlternatives(
+                string.Join('、', new[] { existing.Alternatives, alternatives }.Where(value => value.Length > 0)));
+            if (previous.Any(entry => string.Equals(entry.PreferredSpelling, existing.PreferredSpelling,
+                    StringComparison.Ordinal) &&
+                string.Equals(entry.Alternatives, existing.Alternatives, StringComparison.Ordinal)))
+            {
+                CorrectionDictionaryStatus.Text = "この単語はすでに登録されています。";
+                return;
+            }
+        }
+
+        if (!PersistCorrectionDictionary(previous, existing is null ? "辞書に登録しました。" : "辞書を更新しました。"))
+            return;
+        DictionaryPreferredSpellingBox.Clear();
+        DictionaryAlternativesBox.Clear();
+    }
+
+    private void RemoveCorrectionDictionaryEntry_Click(object sender, System.Windows.RoutedEventArgs e)
+    {
+        if (_isBusy || IsAnyRecording || sender is not System.Windows.Controls.Button { Tag: CorrectionDictionaryEntry entry })
+            return;
+
+        var index = _settings.CorrectionDictionary.IndexOf(entry);
+        if (index < 0) return;
+        var previous = CloneCorrectionDictionary();
+        _settings.CorrectionDictionary.RemoveAt(index);
+        PersistCorrectionDictionary(previous, "辞書から削除しました。");
+    }
+
+    private bool PersistCorrectionDictionary(List<CorrectionDictionaryEntry> previous, string successMessage)
+    {
+        try
+        {
+            _settingsStore.Save(_settings);
+            RefreshCorrectionDictionaryItems();
+            CorrectionDictionaryStatus.Text = successMessage;
+            return true;
+        }
+        catch (Exception ex)
+        {
+            _settings.CorrectionDictionary = previous;
+            RefreshCorrectionDictionaryItems();
+            CorrectionDictionaryStatus.Text = "辞書を保存できませんでした。 " + ex.Message;
+            return false;
+        }
+    }
+
+    private List<CorrectionDictionaryEntry> CloneCorrectionDictionary() => _settings.CorrectionDictionary
+        .Select(entry => new CorrectionDictionaryEntry
+        {
+            PreferredSpelling = entry.PreferredSpelling,
+            Alternatives = entry.Alternatives
+        })
+        .ToList();
+
+    private static string NormalizeDictionaryAlternatives(string? value)
+    {
+        var normalized = CleanDictionaryField(value, 400)
+            .Replace("\r", "、", StringComparison.Ordinal)
+            .Replace("\n", "、", StringComparison.Ordinal);
+        var alternatives = normalized
+            .Split(['、', ',', '，', ';', '；'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Where(part => part.Length > 0)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Take(12);
+        return string.Join('、', alternatives);
+    }
+
+    private static string CleanDictionaryField(string? value, int maxLength)
+    {
+        var cleaned = (value ?? string.Empty).Trim();
+        return cleaned.Length <= maxLength ? cleaned : cleaned[..maxLength];
     }
 
     private OpenCodeModelOption? FindSelectedOpenCodeModel()
@@ -789,6 +916,7 @@ public partial class MainWindow : System.Windows.Window
         ShortcutSettingsPanel.Visibility = System.Windows.Visibility.Visible;
         MicrophoneSettingsPanel.Visibility = System.Windows.Visibility.Visible;
         OpenCodeModelSettingsPanel.Visibility = System.Windows.Visibility.Visible;
+        CorrectionDictionarySettingsPanel.Visibility = System.Windows.Visibility.Visible;
         SelectedTextAnswerSettingsPanel.Visibility = System.Windows.Visibility.Visible;
         ShortcutCaptureStatus.Text = string.Empty;
         UpdateShortcutDisplay();
@@ -1671,7 +1799,8 @@ public partial class MainWindow : System.Windows.Window
                         RuntimeStatus.Text = "OpenCodeの選択モデルで文章を整えています…";
                     if (!_openCode.IsRunning) await EnsureOpenCodeReadyAsync(cancellationToken);
                     var response = await _openCode.RewriteAsync(
-                        transcript, _settings.OpenCodeModelProviderId, _settings.OpenCodeModelId, cancellationToken);
+                        transcript, _settings.OpenCodeModelProviderId, _settings.OpenCodeModelId,
+                        _settings.CorrectionDictionary.ToArray(), cancellationToken);
                     cancellationToken.ThrowIfCancellationRequested();
                     if (sendCommandListenerTask is not null)
                     {
