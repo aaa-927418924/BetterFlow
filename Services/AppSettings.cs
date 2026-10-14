@@ -12,7 +12,10 @@ internal sealed class AppSettings
     public string OpenCodeModelId { get; set; } = "muse-spark-1.3-contributor-free";
     public List<CorrectionDictionaryEntry> CorrectionDictionary { get; set; } = new();
     public bool AutoLearnDictionaryEnabled { get; set; } = true;
-    public string DictionaryLearningMode { get; set; } = "precision";
+
+    [JsonPropertyName("DictionaryLearningMode")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? LegacyDictionaryLearningMode { get; set; }
 
     [JsonIgnore]
     public bool LegacyDictionaryAlternativesPresent { get; set; }
@@ -32,6 +35,9 @@ internal sealed class AppSettings
 internal sealed class CorrectionDictionaryEntry
 {
     public string PreferredSpelling { get; set; } = string.Empty;
+    public string Source { get; set; } = "manual";
+    public int UseCount { get; set; }
+    public DateTimeOffset? LastUsedUtc { get; set; }
 
     [JsonIgnore]
     public string Summary => PreferredSpelling;

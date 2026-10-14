@@ -130,16 +130,6 @@
                                                FontSize="11" Foreground="{StaticResource MutedBrush}" />
                                 </StackPanel>
                             </DockPanel>
-                            <TextBlock Text="判定方法" FontSize="12" Foreground="{StaticResource MutedBrush}" Margin="0,8,0,4" />
-                            <ComboBox x:Name="DictionaryLearningModeCombo" IsEditable="False" MinHeight="40"
-                                      Background="#333333" Foreground="#F4F4F4" BorderBrush="#686868"
-                                      FontFamily="Yu Gothic UI" FontSize="13"
-                                      Style="{StaticResource DarkComboBoxStyle}"
-                                      SelectionChanged="DictionaryLearningModeCombo_SelectionChanged"
-                                      AutomationProperties.Name="自動辞書登録の判定方法">
-                                <ComboBoxItem Content="精度優先（選択中のOpenCodeモデルで判定）" Tag="precision" />
-                                <ComboBoxItem Content="速度優先（ローカルで明確な単語だけ）" Tag="speed" />
-                            </ComboBox>
                             <Button Content="単語を登録" Height="38" HorizontalAlignment="Right"
                                     MinWidth="112" Padding="12,0" Margin="0,8,0,0"
                                     Style="{StaticResource SecondaryButtonStyle}"

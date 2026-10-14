@@ -553,9 +553,11 @@ public partial class MainWindow : System.Windows.Window
             shouldSaveSettings = true;
         }
 
-        if (_settings.DictionaryLearningMode is not ("precision" or "speed"))
+        if (_settings.LegacyDictionaryLearningMode is not null)
         {
-            _settings.DictionaryLearningMode = "precision";
+            // The former speed/precision selector is retired. Automatic learning now
+            // always uses the selected OpenCode model, so the old value is discarded.
+            _settings.LegacyDictionaryLearningMode = null;
             shouldSaveSettings = true;
         }
 
@@ -569,7 +571,10 @@ public partial class MainWindow : System.Windows.Window
             .Where(entry => entry is not null)
             .Select(entry => new CorrectionDictionaryEntry
             {
-                PreferredSpelling = CleanDictionaryField(entry.PreferredSpelling, 100)
+                PreferredSpelling = CleanDictionaryField(entry.PreferredSpelling, 100),
+                Source = entry.Source is "automatic" ? "automatic" : "manual",
+                UseCount = Math.Max(0, entry.UseCount),
+                LastUsedUtc = entry.LastUsedUtc
             })
             .Where(entry => !string.IsNullOrWhiteSpace(entry.PreferredSpelling))
             .GroupBy(entry => entry.PreferredSpelling, StringComparer.OrdinalIgnoreCase)
@@ -682,10 +687,6 @@ public partial class MainWindow : System.Windows.Window
         try
         {
             AutoDictionaryLearningToggle.IsChecked = _settings.AutoLearnDictionaryEnabled;
-            DictionaryLearningModeCombo.SelectedItem = DictionaryLearningModeCombo.Items
-                .OfType<System.Windows.Controls.ComboBoxItem>()
-                .FirstOrDefault(item => string.Equals(item.Tag as string, _settings.DictionaryLearningMode,
-                    StringComparison.Ordinal));
         }
         finally { _loadingDictionaryLearningUi = false; }
         UpdateDictionaryLearningUi();
@@ -695,15 +696,11 @@ public partial class MainWindow : System.Windows.Window
     {
         AutoDictionaryLearningToggle.IsChecked = _settings.AutoLearnDictionaryEnabled;
         AutoDictionaryLearningToggle.IsEnabled = _asr is not null && !_isBusy && !IsAnyRecording;
-        DictionaryLearningModeCombo.IsEnabled = _asr is not null && _settings.AutoLearnDictionaryEnabled &&
-                                                !_isBusy && !IsAnyRecording;
         AutoDictionaryLearningDescription.Text = !_settings.AutoLearnDictionaryEnabled
             ? "自動登録はオフです。"
-            : _settings.DictionaryLearningMode == "speed"
-                ? "ローカルで確実に分かる単語だけを登録します。"
-                : _settings.AiModeEnabled && _openCodeReady
-                    ? "修正がある送信だけ、選択モデルで候補を判定します。"
-                    : "AIモードOFFまたはモデル未準備時はローカル判定になります。";
+            : _settings.AiModeEnabled && _openCodeReady && _openCode.IsRunning
+                ? "修正がある送信だけ、選択中のOpenCodeモデルで候補を判定します。"
+                : "自動登録にはAIモードと接続済みのOpenCodeモデルが必要です。";
     }
 
     private void StartAutoDictionaryLearningMonitor(string pastedText)
@@ -765,61 +762,59 @@ public partial class MainWindow : System.Windows.Window
             return;
         }
 
+        if (!_settings.AiModeEnabled || !_openCodeReady || !_openCode.IsRunning)
+        {
+            var skipReason = !_settings.AiModeEnabled
+                ? "ai-mode-off"
+                : !_openCodeReady
+                    ? "model-not-ready"
+                    : "opencode-not-running";
+            DictionaryLearningDiagnosticLog.Write("learning_skipped", skipReason, changes.Count,
+                submission.MonitorId, submission.CandidateId);
+            CorrectionDictionaryStatus.Text = "AIモードまたはOpenCodeモデルが準備できていないため、今回は登録を見送りました。";
+            return;
+        }
+
         var cancellation = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token);
         var previousCancellation = _dictionaryLearningCancellation;
         _dictionaryLearningCancellation = cancellation;
         previousCancellation?.Cancel();
         try
         {
-            IReadOnlyList<string> approvedTerms;
-            var canUseModel = _settings.DictionaryLearningMode == "precision" &&
-                              _settings.AiModeEnabled && _openCodeReady && _openCode.IsRunning;
-            if (canUseModel)
+            if (!TryReserveDictionaryReviewRequest())
             {
-                if (!TryReserveDictionaryReviewRequest())
-                {
-                    DictionaryLearningDiagnosticLog.Write("model_review_skipped", "rate-limit", changes.Count,
-                        submission.MonitorId, submission.CandidateId);
-                    CorrectionDictionaryStatus.Text = "辞書判定の回数制限に達したため、今回は登録を見送りました。";
-                    return;
-                }
-                DictionaryLearningDiagnosticLog.Write("model_review_started", "precision", changes.Count,
+                DictionaryLearningDiagnosticLog.Write("model_review_skipped", "rate-limit", changes.Count,
                     submission.MonitorId, submission.CandidateId);
-                var indexes = await _openCode.ReviewDictionaryCorrectionsAsync(
-                    changes, _settings.OpenCodeModelProviderId, _settings.OpenCodeModelId, cancellation.Token);
-                approvedTerms = indexes
-                    .Where(index => index >= 0 && index < changes.Count)
-                    .Select(index => changes[index].CorrectSpelling)
-                    .ToArray();
-                DictionaryLearningDiagnosticLog.Write("model_review_completed",
-                    approvedTerms.Count == 0 ? "no-approved-candidates" : "approved", approvedTerms.Count,
-                    submission.MonitorId, submission.CandidateId);
-                if (approvedTerms.Count == 0)
-                {
-                    CorrectionDictionaryStatus.Text = "選択モデルが登録可能な用語修正を承認しなかったため、辞書は変更していません。";
-                    return;
-                }
+                CorrectionDictionaryStatus.Text = "辞書判定の回数制限に達したため、今回は登録を見送りました。";
+                return;
             }
-            else
+
+            DictionaryLearningDiagnosticLog.Write("model_review_started", "selected-model", changes.Count,
+                submission.MonitorId, submission.CandidateId);
+            var review = await _openCode.ReviewDictionaryCorrectionsAsync(
+                changes, _settings.OpenCodeModelProviderId, _settings.OpenCodeModelId, cancellation.Token);
+            var approvedTerms = review.Items
+                .Where(item => item.Decision == DictionaryCorrectionDecision.Confirmed &&
+                               item.Index >= 0 && item.Index < changes.Count)
+                .Select(item => changes[item.Index].CorrectSpelling)
+                .ToArray();
+            var pendingCount = review.Items.Count(item => item.Decision == DictionaryCorrectionDecision.Pending);
+            var rejectedCount = review.Items.Count(item => item.Decision == DictionaryCorrectionDecision.Rejected);
+            var reasonSummary = string.Join(',', review.Items
+                .GroupBy(item => item.Reason)
+                .OrderBy(group => group.Key, StringComparer.Ordinal)
+                .Select(group => $"{group.Key}:{group.Count()}"));
+            var reviewDetail = $"{review.OutputReason};confirmed:{approvedTerms.Length};pending:{pendingCount};rejected:{rejectedCount}";
+            if (reasonSummary.Length > 0)
+                reviewDetail += ";reasons:" + reasonSummary;
+            DictionaryLearningDiagnosticLog.Write("model_review_completed", reviewDetail,
+                review.Items.Count, submission.MonitorId, submission.CandidateId);
+            if (approvedTerms.Length == 0)
             {
-                var fallbackReason = _settings.DictionaryLearningMode != "precision"
-                    ? "speed-mode"
-                    : !_settings.AiModeEnabled
-                        ? "ai-mode-off"
-                        : !_openCodeReady
-                            ? "model-not-ready"
-                            : "opencode-not-running";
-                DictionaryLearningDiagnosticLog.Write("local_review_started", fallbackReason, changes.Count,
-                    submission.MonitorId, submission.CandidateId);
-                approvedTerms = DictionaryCorrectionCandidates.SelectFastCandidates(changes);
-                DictionaryLearningDiagnosticLog.Write("local_review_completed",
-                    approvedTerms.Count == 0 ? "no-local-candidates" : "approved", approvedTerms.Count,
-                    submission.MonitorId, submission.CandidateId);
-                if (approvedTerms.Count == 0)
-                {
-                    CorrectionDictionaryStatus.Text = "ローカル判定で登録できる表記修正が見つからず、辞書は変更していません。";
-                    return;
-                }
+                CorrectionDictionaryStatus.Text = pendingCount > 0
+                    ? "同じ用語か判断しきれない候補があり、辞書は変更していません。"
+                    : "選択モデルが登録可能な用語修正を承認しなかったため、辞書は変更していません。";
+                return;
             }
 
             cancellation.Token.ThrowIfCancellationRequested();
@@ -835,7 +830,7 @@ public partial class MainWindow : System.Windows.Window
             }
             else
             {
-                DictionaryLearningDiagnosticLog.Write("learning_completed", "no-new-entry", approvedTerms.Count,
+                DictionaryLearningDiagnosticLog.Write("learning_completed", "no-new-entry", approvedTerms.Length,
                     submission.MonitorId, submission.CandidateId);
                 CorrectionDictionaryStatus.Text = "候補は承認されましたが、新しい辞書項目は追加されませんでした。既登録または上限に達している可能性があります。";
             }
@@ -929,35 +924,6 @@ public partial class MainWindow : System.Windows.Window
             _settings.AutoLearnDictionaryEnabled = previous;
             AutoDictionaryLearningToggle.IsChecked = previous;
             CorrectionDictionaryStatus.Text = "設定を保存できませんでした。 " + ex.Message;
-        }
-        UpdateDictionaryLearningUi();
-    }
-
-    private void DictionaryLearningModeCombo_SelectionChanged(object sender,
-        System.Windows.Controls.SelectionChangedEventArgs e)
-    {
-        if (_loadingDictionaryLearningUi || DictionaryLearningModeCombo.SelectedItem is not
-            System.Windows.Controls.ComboBoxItem item || item.Tag is not string mode || mode is not ("precision" or "speed"))
-            return;
-
-        var previous = _settings.DictionaryLearningMode;
-        _settings.DictionaryLearningMode = mode;
-        try
-        {
-            _settingsStore.Save(_settings);
-            CorrectionDictionaryStatus.Text = mode == "speed"
-                ? "速度優先の判定を保存しました。"
-                : "精度優先の判定を保存しました。";
-        }
-        catch (Exception ex)
-        {
-            _settings.DictionaryLearningMode = previous;
-            _loadingDictionaryLearningUi = true;
-            DictionaryLearningModeCombo.SelectedItem = DictionaryLearningModeCombo.Items
-                .OfType<System.Windows.Controls.ComboBoxItem>()
-                .FirstOrDefault(candidate => string.Equals(candidate.Tag as string, previous, StringComparison.Ordinal));
-            _loadingDictionaryLearningUi = false;
-            CorrectionDictionaryStatus.Text = "判定方法を保存できませんでした。 " + ex.Message;
         }
         UpdateDictionaryLearningUi();
     }

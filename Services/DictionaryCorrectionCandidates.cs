@@ -2,14 +2,39 @@ using System.Text.RegularExpressions;
 
 namespace BetterFlow.Services;
 
-internal sealed record DictionaryTermChange(string PreviousText, string CorrectSpelling);
+internal sealed record DictionaryTermChange(
+    string PreviousText,
+    string CorrectSpelling,
+    string BeforeContext,
+    string AfterContext);
+
+internal enum DictionaryCorrectionDecision
+{
+    Confirmed,
+    Pending,
+    Rejected
+}
+
+internal sealed record DictionaryCorrectionReviewItem(
+    int Index,
+    DictionaryCorrectionDecision Decision,
+    string Reason,
+    double Confidence);
+
+internal sealed record DictionaryCorrectionReviewResult(
+    IReadOnlyList<DictionaryCorrectionReviewItem> Items,
+    string OutputReason);
 
 internal static class DictionaryCorrectionCandidates
 {
     private const int MaximumTokens = 300;
     private const int MaximumChanges = 20;
+    private const int MaximumContextLength = 320;
     private static readonly Regex WordToken = new(
         @"[A-Za-z0-9]+(?:[._'’\-][A-Za-z0-9]+)*|[\u30A0-\u30FF\u31F0-\u31FFー]+|[\u3400-\u4DBF\u4E00-\u9FFF々〆〇]+",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex VersionToken = new(
+        @"^\d+(?:[.,]\d+)*(?:[A-Za-z]+)?$",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     public static IReadOnlyList<DictionaryTermChange> ExtractChanges(string before, string after)
@@ -47,6 +72,16 @@ internal static class DictionaryCorrectionCandidates
             if (i < oldTokens.Length && j < newTokens.Length &&
                 string.Equals(oldTokens[i].Value, newTokens[j].Value, StringComparison.Ordinal))
             {
+                if (oldRun.Count > 0 && newRun.Count > 0 &&
+                    CanAttachSharedVersion(oldRun[^1], newRun[^1], oldTokens[i], newTokens[j], before, after))
+                {
+                    // A version can be unchanged while the name around it is corrected. Keep it
+                    // inside the candidate so "Claude Fable 5" is learned as one exact spelling.
+                    oldRun.Add(oldTokens[i++]);
+                    newRun.Add(newTokens[j++]);
+                    continue;
+                }
+
                 AddChange();
                 i++;
                 j++;
@@ -75,54 +110,64 @@ internal static class DictionaryCorrectionCandidates
                 var oldText = before[oldStart..oldEnd].Trim();
                 var correctedText = after[newStart..newEnd].Trim();
                 if (IsCandidate(oldText, correctedText))
-                    result.Add(new DictionaryTermChange(oldText, correctedText));
+                {
+                    result.Add(new DictionaryTermChange(
+                        oldText,
+                        correctedText,
+                        GetSentenceContext(before, oldStart, oldEnd),
+                        GetSentenceContext(after, newStart, newEnd)));
+                }
             }
             oldRun.Clear();
             newRun.Clear();
         }
     }
 
-    public static IReadOnlyList<string> SelectFastCandidates(IReadOnlyList<DictionaryTermChange> changes) =>
-        changes.Where(change => IsLikelyTypoCorrection(change.PreviousText, change.CorrectSpelling))
-            .Select(change => change.CorrectSpelling)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .Take(MaximumChanges)
-            .ToArray();
+    private static bool CanAttachSharedVersion(
+        Match previousBefore,
+        Match previousAfter,
+        Match versionBefore,
+        Match versionAfter,
+        string before,
+        string after)
+    {
+        if (!VersionToken.IsMatch(versionBefore.Value) ||
+            !string.Equals(versionBefore.Value, versionAfter.Value, StringComparison.Ordinal))
+            return false;
+
+        return IsNameVersionGap(before, previousBefore, versionBefore) &&
+               IsNameVersionGap(after, previousAfter, versionAfter);
+    }
+
+    private static bool IsNameVersionGap(string text, Match name, Match version)
+    {
+        var gapStart = name.Index + name.Length;
+        if (version.Index < gapStart) return false;
+        var gap = text[gapStart..version.Index];
+        return gap.Length <= 1 && gap.All(character => char.IsWhiteSpace(character) || character is '-' or '_');
+    }
+
+    private static string GetSentenceContext(string text, int spanStart, int spanEnd)
+    {
+        var start = spanStart;
+        while (start > 0 && spanStart - start < MaximumContextLength / 2 &&
+               !IsSentenceBoundary(text[start - 1]))
+            start--;
+
+        var end = spanEnd;
+        while (end < text.Length && end - spanEnd < MaximumContextLength / 2 &&
+               !IsSentenceBoundary(text[end]))
+            end++;
+
+        return text[start..end].Trim();
+    }
+
+    private static bool IsSentenceBoundary(char value) => value is '。' or '！' or '？' or '\n' or '.' or '!' or '?';
 
     private static bool IsCandidate(string previous, string corrected) =>
         previous.Length is >= 2 and <= 120 && corrected.Length is >= 2 and <= 100 &&
         !string.Equals(previous, corrected, StringComparison.Ordinal) &&
         corrected.Any(char.IsLetterOrDigit);
-
-    private static bool IsLikelyTypoCorrection(string previous, string corrected)
-    {
-        if (!IsCandidate(previous, corrected) || corrected.Any(char.IsWhiteSpace) ||
-            corrected.Any(character => !char.IsLetterOrDigit(character) && character != 'ー' && character != '-'))
-            return false;
-
-        var distance = LevenshteinDistance(previous, corrected);
-        return distance <= Math.Max(1, Math.Max(previous.Length, corrected.Length) / 4);
-    }
-
-    private static int LevenshteinDistance(string left, string right)
-    {
-        if (left.Length > 120 || right.Length > 120) return int.MaxValue;
-        var previous = new int[right.Length + 1];
-        var current = new int[right.Length + 1];
-        for (var j = 0; j <= right.Length; j++) previous[j] = j;
-
-        for (var i = 1; i <= left.Length; i++)
-        {
-            current[0] = i;
-            for (var j = 1; j <= right.Length; j++)
-            {
-                var substitution = previous[j - 1] + (left[i - 1] == right[j - 1] ? 0 : 1);
-                current[j] = Math.Min(Math.Min(previous[j] + 1, current[j - 1] + 1), substitution);
-            }
-            (previous, current) = (current, previous);
-        }
-        return previous[right.Length];
-    }
 
     private static string Normalize(string value) =>
         value.Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\r', '\n');
