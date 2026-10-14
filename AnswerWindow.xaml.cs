@@ -31,11 +31,6 @@ public partial class AnswerWindow : System.Windows.Window
         });
     }
 
-    public void BeginAnswerTurn()
-    {
-        ResetAnswer();
-    }
-
     public void SetCurrentAssistantText(string text)
     {
         SetAssistantText(text, forceReplace: false);
@@ -84,8 +79,6 @@ public partial class AnswerWindow : System.Windows.Window
         _followOutput = AnswerScrollViewer.VerticalOffset + AnswerScrollViewer.ViewportHeight >=
                         AnswerScrollViewer.ExtentHeight - 24;
     }
-
-    private void CloseButton_Click(object sender, RoutedEventArgs e) => Hide();
 
     private void RunOnUi(Action action)
     {

@@ -14,10 +14,6 @@
                     <RowDefinition Height="*" />
                 </Grid.RowDefinitions>
                 <DockPanel Grid.Row="0" LastChildFill="True">
-                    <Button DockPanel.Dock="Right" Content="×" Width="30" Height="30"
-                            Style="{StaticResource WindowControlButtonStyle}"
-                            Click="CloseButton_Click" ToolTip="回答を閉じる"
-                            AutomationProperties.Name="回答を閉じる" />
                     <Viewbox Width="42" Height="40" Stretch="Uniform" VerticalAlignment="Center"
                              Margin="0,0,12,0" AutomationProperties.Name="Better Flow">
                         <Canvas Width="82" Height="77">

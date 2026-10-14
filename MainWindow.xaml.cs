@@ -955,10 +955,7 @@ public partial class MainWindow : System.Windows.Window
                     _indicator.ShowStatus(GetGptLiveIndicatorText(message));
                     RuntimeStatus.Text = message;
                 }),
-                _ => DispatchQuestionUi(() =>
-                {
-                    if (!_closing) _answerWindow.BeginAnswerTurn();
-                }),
+                _ => { },
                 answer =>
                 {
                     if (!_closing) _answerWindow.SetCurrentAssistantText(answer);
@@ -1414,7 +1411,6 @@ public partial class MainWindow : System.Windows.Window
                     if (string.IsNullOrWhiteSpace(providerId) || string.IsNullOrWhiteSpace(modelId))
                         throw new InvalidOperationException("設定からOpenCodeモデルを選択してください。");
 
-                    _answerWindow.BeginAnswerTurn();
                     RuntimeStatus.Text = "選択した文章とこれまでの会話を参考に回答しています…";
                     _indicator.ShowStatus("回答中");
                     var answer = await _openCode.AnswerSelectedTextAsync(
@@ -1442,7 +1438,6 @@ public partial class MainWindow : System.Windows.Window
                 }
                 catch (Exception ex)
                 {
-                    _answerWindow.ClearAnswer();
                     if (!_closing)
                     {
                         var message = ex.GetBaseException().Message;

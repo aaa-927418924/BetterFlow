@@ -227,3 +227,9 @@
 - 質問モードの終了キーを押した時点で、OpenCode/GPT Live両方の回答ウィンドウを即時リセットして閉じる。セッション後始末でも再度閉じ、停止タイミングによる残留を防ぐ。
 - GPT Liveの回答連結では日本語チャンク間に自動スペースを挿入しない。ASCII単語境界だけを補い、出力/コンテンツindexで項目順を並べる。複数文字起こし系列が切り替わるときは既に表示した先頭を保持し、完了イベントの全文で確定する。
 - Release publish成功（NU1900: NuGet脆弱性フィード接続警告のみ）。`artifacts/publish-gpt-live-transcript-stability-20261014/BetterFlow.exe`と`dist/Better Flow.exe`は82,405,594 bytes、SHA-256 `E943163B83128504047CB5C0758B456723646CD67293ACAB51EEDCEE8E9C70AB`で一致。更新前EXEは`artifacts/BetterFlow-before-final-gpt-live-transcript-stability-20261014.exe`へ退避。差し替え中に実行パスが完全一致したPID 49188を停止し、旧版ロックが残ったため以前の版も`artifacts/BetterFlow-old-live-after-replacement-lock-20261014.exe`へ退避して置換した。実GPT Live配信とホットキー操作は未確認。テストスイートは実行していない。
+
+## GPT Live先頭欠落と質問回答の表示維持（2026-10-14）
+
+- 発話確定前に届くGPT Live応答イベントを、音声入力開始イベントから質問文字起こし完了まで内部バッファへ保持する。質問確定時に先行回答があればそれを引き継いで表示し、セッション開始時の未依頼応答は引き続き表示しない。
+- OpenCode/GPT Liveとも次の質問を処理している間は前回答を表示し続け、新しい回答テキストが届いた時点で同じダイアログ内を置き換える。回答ダイアログ右上の閉じるボタンを削除する。
+- Release publish成功（NU1900: NuGet脆弱性フィード接続警告のみ）。`artifacts/publish-question-dialog-stream-fix-20261014/BetterFlow.exe`と`dist/Better Flow.exe`は82,405,780 bytes、SHA-256 `B35CCD60E16DA2FB877B7FC10D6C76B9FE456C7B18C8FD1E02B43F32CCC04544`で一致。更新前EXEは`artifacts/BetterFlow-before-final-question-dialog-stream-fix-20261014.exe`へ退避。実GPT Liveイベント、ホットキー操作、UI表示は未確認。テストスイートは実行していない。

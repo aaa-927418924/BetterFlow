@@ -38,6 +38,7 @@ internal sealed class GptLiveQuestionSession : IAsyncDisposable
     private string _activeAssistantText = string.Empty;
     private string? _activeAssistantResponseId;
     private bool _hasReportedUserQuestion;
+    private bool _pendingUserSpeech;
     private bool _awaitingAssistantResponse;
     private bool _assistantTurnFinalized;
     private string _lastUserTranscript = string.Empty;
@@ -300,9 +301,36 @@ internal sealed class GptLiveQuestionSession : IAsyncDisposable
             case "session.started":
                 _sessionStarted.TrySetResult();
                 break;
+            case "input_audio_buffer.speech_started":
+            case "input_audio_buffer.committed":
+                MarkPendingUserSpeech();
+                break;
+            case "conversation.item.created":
+                if (liveEvent.TryGetProperty("item", out var createdItem) &&
+                    createdItem.ValueKind == JsonValueKind.Object &&
+                    ReadString(createdItem, "role") == "user")
+                    MarkPendingUserSpeech();
+                break;
+            case "turn.started":
+                if (liveEvent.TryGetProperty("turn", out var startedTurn) &&
+                    startedTurn.ValueKind == JsonValueKind.Object &&
+                    ReadString(startedTurn, "role") == "user")
+                    MarkPendingUserSpeech();
+                break;
             case "input_transcript.added":
                 if (TryGetTranscript(liveEvent, out var interimTranscript))
+                {
+                    MarkPendingUserSpeech();
                     _pendingUserTranscript = interimTranscript.Trim();
+                }
+                _statusHandler?.Invoke("GPT Liveが質問を認識しています…");
+                break;
+            case "conversation.item.input_audio_transcription.delta":
+                if (ReadString(liveEvent, "delta") is { Length: > 0 } audioTranscriptDelta)
+                {
+                    MarkPendingUserSpeech();
+                    _pendingUserTranscript += audioTranscriptDelta;
+                }
                 _statusHandler?.Invoke("GPT Liveが質問を認識しています…");
                 break;
             case "conversation.item.input_audio_transcription.completed":
@@ -327,7 +355,10 @@ internal sealed class GptLiveQuestionSession : IAsyncDisposable
                 break;
             case "session.input_transcript.delta":
                 if (ReadString(liveEvent, "delta") is { Length: > 0 } transcriptDelta)
+                {
+                    MarkPendingUserSpeech();
                     _pendingUserTranscript += transcriptDelta;
+                }
                 _statusHandler?.Invoke("GPT Liveが質問を認識しています…");
                 break;
             case "response.created":
@@ -391,20 +422,51 @@ internal sealed class GptLiveQuestionSession : IAsyncDisposable
             return;
         }
 
+        if (!_pendingUserSpeech) MarkPendingUserSpeech();
+        var hasPrestartedResponse = _pendingUserSpeech &&
+                                    (_activeAssistantResponseId is not null ||
+                                     _assistantTranscriptItems.Count > 0 || _assistantTurnFinalized);
         _lastUserTranscript = text;
         _lastUserTranscriptAt = reportedAt;
         _pendingUserTranscript = string.Empty;
+        _pendingUserSpeech = false;
+        if (!hasPrestartedResponse)
+        {
+            RememberCompletedAssistantResponse(_activeAssistantResponseId);
+            _activeAssistantResponseId = null;
+            _assistantTurnFinalized = false;
+            _activeAssistantText = string.Empty;
+            _assistantTranscriptItems.Clear();
+            _assistantTranscriptSequence = 0;
+            _handledAssistantEventIds.Clear();
+        }
+        _hasReportedUserQuestion = true;
+        _awaitingAssistantResponse = !hasPrestartedResponse;
+        _questionHandler?.Invoke(text);
+        _statusHandler?.Invoke("GPT Liveが回答しています…");
+        if (hasPrestartedResponse)
+        {
+            if (_assistantTurnFinalized)
+                _finalAnswerHandler?.Invoke(_activeAssistantText);
+            else
+                PublishAssistantTranscript();
+        }
+    }
+
+    private void MarkPendingUserSpeech()
+    {
+        if (_pendingUserSpeech) return;
+
+        _pendingUserSpeech = true;
+        _pendingUserTranscript = string.Empty;
         RememberCompletedAssistantResponse(_activeAssistantResponseId);
         _activeAssistantResponseId = null;
-        _hasReportedUserQuestion = true;
         _awaitingAssistantResponse = true;
         _assistantTurnFinalized = false;
         _activeAssistantText = string.Empty;
         _assistantTranscriptItems.Clear();
         _assistantTranscriptSequence = 0;
         _handledAssistantEventIds.Clear();
-        _questionHandler?.Invoke(text);
-        _statusHandler?.Invoke("GPT Liveが回答しています…");
     }
 
     private static string? GetTranscriptEventId(JsonElement element)
@@ -421,7 +483,7 @@ internal sealed class GptLiveQuestionSession : IAsyncDisposable
 
     private void BeginAssistantResponse(JsonElement liveEvent)
     {
-        if (!_hasReportedUserQuestion) return;
+        if (!_hasReportedUserQuestion && !_pendingUserSpeech) return;
         var responseId = GetResponseId(liveEvent);
         if (string.IsNullOrWhiteSpace(responseId) || _staleAssistantResponseIds.Contains(responseId)) return;
         if (_awaitingAssistantResponse || _activeAssistantResponseId is null)
@@ -504,14 +566,15 @@ internal sealed class GptLiveQuestionSession : IAsyncDisposable
         _assistantTurnFinalized = true;
         _activeAssistantText = text.Trim();
         _assistantTranscriptItems.Clear();
-        _finalAnswerHandler?.Invoke(_activeAssistantText);
+        if (_hasReportedUserQuestion && !_pendingUserSpeech)
+            _finalAnswerHandler?.Invoke(_activeAssistantText);
         _statusHandler?.Invoke("GPT Liveが回答しています…");
     }
 
     private bool TryAcceptAssistantEvent(JsonElement liveEvent, out string? responseId)
     {
         responseId = GetResponseId(liveEvent);
-        if (!_hasReportedUserQuestion || _assistantTurnFinalized) return false;
+        if ((!_hasReportedUserQuestion && !_pendingUserSpeech) || _assistantTurnFinalized) return false;
         if (!string.IsNullOrWhiteSpace(responseId) && _staleAssistantResponseIds.Contains(responseId))
             return false;
 
@@ -537,6 +600,8 @@ internal sealed class GptLiveQuestionSession : IAsyncDisposable
 
     private void PublishAssistantTranscript()
     {
+        if (!_hasReportedUserQuestion || _pendingUserSpeech) return;
+
         var builder = new StringBuilder();
         foreach (var item in _assistantTranscriptItems.Values
                      .OrderBy(item => item.OutputIndex ?? int.MaxValue)
