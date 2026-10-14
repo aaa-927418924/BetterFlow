@@ -561,3 +561,10 @@
 - ビルド/配布: `dotnet build AutoPrompt.csproj --configuration Release --no-restore` と `dotnet publish AutoPrompt.csproj --configuration Release --no-restore --output artifacts/publish` は成功（0エラー、NU1900はNuGet脆弱性情報サービスへの接続警告）。単体EXE `dist/Better Flow.exe` は82,480,658 bytes、SHA-256 `B446D9710374FFB6B4DE4B55B2066DD1523C43D4B1457A571B2F22737EF63FE9`。発行物と配布先のSHA-256一致を確認。置換前のEXEは`artifacts/BetterFlow-before-whisper-turbo-final-20261015.exe`へ退避。
 - 確認範囲: ソースの差分確認とReleaseビルド/発行は完了。テストスイートや実音声による認識精度・速度・RAM使用量は未確認。Whisperモデルを含む初回ダウンロードはアプリのセットアップ画面から実行する。
 - Git: 実装前の計画チェックポイント`399623c`を作成済み。実装コミットは本節のソース・配布記録とともに作成する。
+
+## Parakeetを音声認識の既定に戻す（2026-10-15）
+
+- 目的: Whisper Large V3 Turboは速度面で試用に合わなかったため、Parakeet 0.6B日本語を既定に戻す。Whisperは設定画面から選べる追加オプションとして残す。
+- 変更: 新規設定の初期値と、不明なモデルIDを補正するfallbackをParakeetにする。既知のモデルID（Parakeet/Whisper）はそのまま尊重し、ユーザーが設定画面で選んだモデルの再起動後の維持を壊さない。選択UI、モデル別ダウンロード/ロード処理、保存済みParakeetデータは変更しない。
+- 確認: 差分確認とRelease build/publishを行い、単体EXEを更新して発行物とのSHA-256一致を確認する。実音声の速度・精度比較は行わない。
+- Git: この計画を先にコミットし、その後に既定値のみを変更する。
