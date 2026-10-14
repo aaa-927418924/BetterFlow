@@ -96,9 +96,3 @@ pwsh -NoProfile -File tools/Generate-Icons.ps1
 - セットアップ時の展開：SharpCompress。
 
 音声モデルの選定は[公開FLEURS日本語ベンチマーク](https://github.com/cm-nakamura-shogo/japanese-asr-l40s-benchmark)を参照しています。公開測定の重み・実行環境と、本アプリのINT8 ONNX版は異なるため、同じ認識精度を保証するものではありません。
-
-## 現在の課題
-
-Chrome版ChatGPTでは、入力欄の再描画時に自動辞書登録の監視が終了する場合があります。送信後の辞書保存が成功したケースもありますが、連続使用時の追跡復旧には追加修正が必要です。修正計画は[PLAN.md](PLAN.md)に記録しており、現時点では未実装です。
-
-選択文の置換・再選択・自動辞書登録は、入力先アプリがWindows UI Automationへ公開する情報に依存します。
