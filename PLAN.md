@@ -545,3 +545,14 @@
 - ビルド/配布: `dotnet publish AutoPrompt.csproj --configuration Release --no-restore --output artifacts/publish` 成功。コンパイルエラーなし。NU1900はNuGet脆弱性情報サービスへの接続警告。単体EXE `dist/Better Flow.exe` は82,474,468 bytes、SHA-256 `DDC1EE25CC2D5113DB1C08525BD386FEB88CB871005BFC8D0A1459E9241BD752`。発行元と配布先のハッシュ一致を確認。置換前の中間版を`artifacts/BetterFlow-intermediate-before-final-codex-submit-detection-20261014.exe`へ退避。
 - 確認範囲: テストスイートと実Codex送信、辞書登録、他アプリ回帰のUI操作は未実施。実送信は外部サービスへの送信を伴うため行っていない。実機確認後に成功/失敗ログをアプリ別の監視IDと照合する必要がある。
 - Git: 計画チェックポイント`cb54c33`を実装前に作成。実装コミットは本節のソース・配布記録とともに作成。
+
+## Whisper Large V3 Turbo一時試用とParakeetへの切替（2026-10-15）
+
+- 目的: Qwen3-ASRのメモリ負荷を避けるため、Whisper Large V3 Turboへ一時的に切り替えられるようにする。Whisperを既定にし、設定画面から既存のParakeet日本語モデルへ戻せる選択肢も維持する。
+- モデル形式: Sherpa-ONNX公式モデル一覧が案内する`csukuangfj/sherpa-onnx-whisper-turbo`のINT8 encoder/decoderとtokenファイルを使う。公開一覧では同リポジトリ全体が4.27GBだが、INT8の必要ファイルはencoder約675MB、decoder約361MB、tokens約817KBで、合計約1.04GB。モデルファイルのSHA-256を検証し、Parakeetの保存場所やファイルは変更しない。
+- 実行方式: 現在のSherpa-ONNX .NET Windowsランタイムを再利用し、Whisperは日本語文字起こし、INT8、CPU providerで動かす。現行Windows NuGetランタイムにはCUDA provider一式が含まれないため、この試用実装ではVRAMへ推論を移さない。VRAM利用は別途GPU対応ランタイムを配布する作業が必要。
+- 設定と復元: `settings.json`に認識モデルIDを保存する。既定値をWhisperへ変更し、設定画面からParakeetを選び直せるようにする。モデルの切替は録音中には行わず、認識器を準備してから入れ替え、失敗時は現在の認識器を保つ。
+- セットアップ: 選択中モデルに必要なものだけを取得し、WhisperはHTTPダウンロード中に一時ファイルへ書き、SHA-256を照合してから確定配置する。Parakeetの既存データは再利用し、不要な再ダウンロードを避ける。Whisperの必要空き容量表示は約1.3GBとする。
+- 可逆性: この計画と実装のベースはParakeet版`03dd620`。Qwen試用ブランチ`codex/qwen3-asr-ja-trial`と実装コミット`909347b`も残す。さらにアプリ内のモデル選択でParakeetへ戻せる。
+- 参照（公開一次資料、確認日: 2026-10-15）: [Sherpa-ONNX Whisperモデル一覧](https://k2-fsa.github.io/sherpa/onnx/pretrained_models/whisper/export-onnx.html)、[Whisper Turboモデルファイル一覧](https://huggingface.co/csukuangfj/sherpa-onnx-whisper-turbo/tree/main)、[INT8 decoder SHA-256](https://huggingface.co/csukuangfj/sherpa-onnx-whisper-turbo/blob/main/turbo-decoder.int8.onnx)、[INT8 encoder SHA-256](https://huggingface.co/csukuangfj/sherpa-onnx-whisper-turbo/blob/main/turbo-encoder.int8.onnx)。
+- 検証範囲: 計画チェックポイント時点では実装・ビルド・実音声認識をまだ行っていない。実装後はRelease単体EXEを発行し、ソースとEXEのハッシュを照合する。実モデル認識の精度・速度・実メモリ消費はユーザー端末での試用結果として扱う。
