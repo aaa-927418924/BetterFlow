@@ -15,6 +15,9 @@ internal sealed class ContinuousMicrophoneRecorder : IDisposable
     private const int VadFrameBytes = SileroVoiceActivityDetector.WindowBytes;
     private const int PreRollFrameCount = 16;
     private const int MinimumConsecutiveSpeechFrames = 8;
+    // Silero's minimum speech duration is 120 ms. Four positive 32 ms frames
+    // make the dedicated send-command listener responsive while retaining VAD filtering.
+    private const int SendCommandMinimumConsecutiveSpeechFrames = 4;
     private const int MinimumUtteranceSamples = 2400;
     private const int MaximumQueuedUtterances = 8;
     private static readonly TimeSpan EndOfUtteranceSilence = TimeSpan.FromMilliseconds(700);
@@ -29,6 +32,7 @@ internal sealed class ContinuousMicrophoneRecorder : IDisposable
     private TaskCompletionSource? _stopped;
     private Task? _stopTask;
     private bool _isSpeaking;
+    private int _minimumConsecutiveSpeechFrames = MinimumConsecutiveSpeechFrames;
     private int _vadFrameBufferedBytes;
     private int _consecutiveSpeechFrames;
     private long _lastVoiceTimestamp;
@@ -39,6 +43,12 @@ internal sealed class ContinuousMicrophoneRecorder : IDisposable
     public bool IsRecording => _waveIn is not null;
 
     public void Start(int deviceNumber = -1)
+        => StartCore(deviceNumber, MinimumConsecutiveSpeechFrames);
+
+    public void StartForSendCommands(int deviceNumber = -1)
+        => StartCore(deviceNumber, SendCommandMinimumConsecutiveSpeechFrames);
+
+    private void StartCore(int deviceNumber, int minimumConsecutiveSpeechFrames)
     {
         if (_waveIn is not null)
             throw new InvalidOperationException("録音はすでに開始しています。");
@@ -52,6 +62,7 @@ internal sealed class ContinuousMicrophoneRecorder : IDisposable
         {
             ClearQueuedSamplesLocked();
             ClearBuffersLocked();
+            _minimumConsecutiveSpeechFrames = minimumConsecutiveSpeechFrames;
             _vad = vad;
             _utterances = Channel.CreateBounded<float[]>(new BoundedChannelOptions(MaximumQueuedUtterances)
             {
@@ -262,7 +273,7 @@ internal sealed class ContinuousMicrophoneRecorder : IDisposable
         {
             AddPreRollLocked(frame);
             _consecutiveSpeechFrames = hasVoice ? _consecutiveSpeechFrames + 1 : 0;
-            if (_consecutiveSpeechFrames >= MinimumConsecutiveSpeechFrames)
+            if (_consecutiveSpeechFrames >= _minimumConsecutiveSpeechFrames)
             {
                 _isSpeaking = true;
                 while (_preRoll.TryDequeue(out var priorFrame))

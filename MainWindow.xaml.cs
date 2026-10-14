@@ -2497,7 +2497,7 @@ public partial class MainWindow : System.Windows.Window
                 try
                 {
                     var selectedInput = MicrophoneDeviceCombo.SelectedItem as AudioInputDeviceOption;
-                    StartRecorderWithFallback(_continuousRecorder.Start, selectedInput);
+                    StartRecorderWithFallback(_continuousRecorder.StartForSendCommands, selectedInput);
                     sendCommandListenerTask = MonitorSendVoiceCommandsAsync(sendCommandDetected, cancellationToken);
                     _sendCommandListenerTask = sendCommandListenerTask;
                     RuntimeStatus.Text = "OpenCodeの選択モデルで文章を整えています。音声で送信を指示できます。";
@@ -2645,12 +2645,23 @@ public partial class MainWindow : System.Windows.Window
                     if (sendCommandDetected.Task.IsCompleted) continue;
                     var recognizer = _asr;
                     if (recognizer is null) return;
-                    var recognized = await Task.Run(() => recognizer.Transcribe(utterance), cancellationToken)
-                        .ConfigureAwait(false);
-                    cancellationToken.ThrowIfCancellationRequested();
-                    recognized = TranscriptFormatter.NormalizeTranscript(recognized);
-                    if (VoiceCommandParser.IsStandaloneSendDirective(recognized))
-                        sendCommandDetected.TrySetResult(true);
+                    try
+                    {
+                        var recognized = await Task.Run(() => recognizer.Transcribe(utterance), cancellationToken)
+                            .ConfigureAwait(false);
+                        cancellationToken.ThrowIfCancellationRequested();
+                        recognized = TranscriptFormatter.NormalizeTranscript(recognized);
+                        if (VoiceCommandParser.IsStandaloneSendDirective(recognized))
+                            sendCommandDetected.TrySetResult(true);
+                    }
+                    catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                    {
+                        throw;
+                    }
+                    catch
+                    {
+                        // A single failed voice-command decode must not disable later commands.
+                    }
                 }
                 finally
                 {

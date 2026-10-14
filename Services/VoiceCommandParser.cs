@@ -4,7 +4,7 @@ namespace BetterFlow.Services;
 
 internal static partial class VoiceCommandParser
 {
-    private static readonly char[] CommandSeparators = [' ', '\t', '、', ','];
+    private static readonly char[] CommandSeparators = [' ', '\t', '\u3000', '、', ',', '，', '.', '．'];
 
     public static bool TryRemoveSendDirective(string transcript, out string content)
     {
@@ -22,6 +22,6 @@ internal static partial class VoiceCommandParser
     public static bool IsStandaloneSendDirective(string transcript) =>
         TryRemoveSendDirective(transcript, out var content) && string.IsNullOrWhiteSpace(content);
 
-    [GeneratedRegex("(?:送信して|送って)[。！？!?]*\\s*$", RegexOptions.CultureInvariant)]
+    [GeneratedRegex("(?:送信\\s*して|送っ\\s*て)(?:\\s*(?:ください|下さい))?[。！？!?…．.」』）)]*\\s*$", RegexOptions.CultureInvariant)]
     private static partial Regex SendDirectiveAtEndRegex();
 }
