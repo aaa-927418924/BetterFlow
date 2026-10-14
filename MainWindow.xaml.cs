@@ -2099,8 +2099,17 @@ public partial class MainWindow : System.Windows.Window
 
             cancellationToken.ThrowIfCancellationRequested();
             var pasted = PasteAndShow(text, resultStatus);
-            if (pasted && !sendAfterPaste && _settings.AutoLearnDictionaryEnabled)
+            if (pasted && _settings.AutoLearnDictionaryEnabled)
+            {
                 StartAutoDictionaryLearningMonitor(text);
+                if (sendAfterPaste && _autoDictionaryLearningMonitor is { } learningMonitor)
+                {
+                    var monitorReady = await learningMonitor.WaitUntilReadyAsync(
+                        TimeSpan.FromSeconds(2), cancellationToken);
+                    if (!monitorReady)
+                        DictionaryLearningDiagnosticLog.Write("monitor_not_ready_before_auto_send", "timeout");
+                }
+            }
             if (sendCommandMonitorUnavailable)
                 RuntimeStatus.Text += " 音声の送信指示を待機できなかったため、Enterは送信していません。";
             if (sendAfterPaste)
@@ -2115,6 +2124,7 @@ public partial class MainWindow : System.Windows.Window
                 cancellationToken.ThrowIfCancellationRequested();
                 if (PasteService.SendEnter(_pasteTarget))
                 {
+                    _autoDictionaryLearningMonitor?.NotifyApplicationSubmit();
                     RuntimeStatus.Text = "文章を入力欄へ貼り付けて送信しました。";
                     _indicator.ShowStatus("送信しました", TimeSpan.FromSeconds(1));
                 }

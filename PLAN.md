@@ -382,3 +382,6 @@
 - 改善: 入力欄の検出、貼り付け範囲の一致、送信操作、送信後の欄変更、候補抽出、精度/ローカル判定、承認件数、設定保存の段階と安全な理由コードを、本文・用語・ウィンドウ名なしでdictionary-learning-diagnostics.jsonlへ記録する。設定画面の辞書状態テキストにも各失敗段階を表示する。ログ上限128KB。
 - 実装前チェックポイントはaebb4d6。Release build/publish成功（0エラー、NU1900はNuGet脆弱性フィード接続警告）。単体EXEは82,434,126 bytes、SHA-256 47CB7ACFA733F70B99F4326E9EF40B36F5A1917C9C4E20BB502F1CBAA986ACB4。配布EXEと発行物のハッシュ一致を確認し、更新前はartifacts/BetterFlow-before-dictionary-learning-diagnostics-20261014.exeへ退避。置換時点で完全一致する実行中アプリプロセスはなかった。
 - 新ビルドのCodex/Chrome送信検出、辞書候補の判定と保存は未確認。テストスイートは実行していない。
+- 追加調査で、音声の「送信して」経由では`sendAfterPaste`分岐が辞書監視の起動自体を除外しており、さらにアプリ自身が送るEnterは注入キーとしてキーボードフックから意図的に無視されることを確認。監視開始条件を自動送信にも広げ、監視準備完了を待ってから送信し、アプリ送信の成功を監視へ明示通知するよう修正した。
+- 自動送信経路修正後のRelease build/publish成功（0エラー、NU1900はNuGet脆弱性フィード接続警告）。`dist/Better Flow.exe`と発行物は82,434,710 bytes、SHA-256 `C77AAD5007D7CC5A25864454C62D16DB2B42813F7868537577EBE19069390126`で一致。更新前EXEは`artifacts/BetterFlow-before-autosubmit-dictionary-fix-20261014.exe`へ退避。置換時に一致する実行中プロセスは確認されなかった。
+- 自動送信・手動送信後に辞書項目が作られることは、次回の実利用で確認が必要。テストスイートは実行していない。

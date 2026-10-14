@@ -23,6 +23,8 @@ internal sealed class AutoDictionaryLearningMonitor : IDisposable
     private readonly CancellationToken _token;
     private readonly SemaphoreSlim _submitSignal = new(0, 1);
     private readonly object _snapshotLock = new();
+    private readonly TaskCompletionSource<bool> _readySignal = new(
+        TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly LowLevelKeyboardProc _keyboardProc;
     private IntPtr _keyboardHook;
     private Task? _monitorTask;
@@ -36,6 +38,7 @@ internal sealed class AutoDictionaryLearningMonitor : IDisposable
     private bool _snapshotInvalid;
     private bool _submitSnapshotValid;
     private int _initialized;
+    private int _applicationSubmitPending;
     private int _disposed;
 
     private AutoDictionaryLearningMonitor(IntPtr targetWindow, string pastedText)
@@ -48,6 +51,30 @@ internal sealed class AutoDictionaryLearningMonitor : IDisposable
 
     public event EventHandler<DictionaryCorrectionSubmission>? SubmissionConfirmed;
     public event Action<string>? StatusChanged;
+
+    public async Task<bool> WaitUntilReadyAsync(TimeSpan timeout, CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await _readySignal.Task.WaitAsync(timeout, cancellationToken).ConfigureAwait(false);
+        }
+        catch (TimeoutException)
+        {
+            return false;
+        }
+    }
+
+    public void NotifyApplicationSubmit()
+    {
+        if (Volatile.Read(ref _disposed) != 0) return;
+        if (Volatile.Read(ref _initialized) == 0)
+        {
+            Interlocked.Exchange(ref _applicationSubmitPending, 1);
+            return;
+        }
+
+        SignalSubmit("application-send");
+    }
 
     public static AutoDictionaryLearningMonitor? TryStart(IntPtr targetWindow, string pastedText)
     {
@@ -182,6 +209,10 @@ internal sealed class AutoDictionaryLearningMonitor : IDisposable
             }
             catch (Exception ex) when (IsAutomationFailure(ex)) { }
 
+            _readySignal.TrySetResult(true);
+            if (Interlocked.Exchange(ref _applicationSubmitPending, 0) != 0)
+                SignalSubmit("application-send");
+
             while (!monitorToken.IsCancellationRequested)
             {
                 await Task.Delay(TimeSpan.FromMilliseconds(500), monitorToken).ConfigureAwait(false);
@@ -272,6 +303,7 @@ internal sealed class AutoDictionaryLearningMonitor : IDisposable
         }
         finally
         {
+            _readySignal.TrySetResult(false);
             if (root is not null && invokedHandler is not null)
             {
                 try { Automation.RemoveAutomationEventHandler(InvokePattern.InvokedEvent, root, invokedHandler); }
