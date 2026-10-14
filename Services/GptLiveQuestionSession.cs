@@ -47,14 +47,18 @@ internal sealed class GptLiveQuestionSession : IAsyncDisposable
     private readonly HashSet<string> _staleAssistantResponseIds = new(StringComparer.Ordinal);
     private readonly Queue<string> _staleAssistantResponseOrder = new();
     private readonly Dictionary<string, AssistantTranscriptItem> _assistantTranscriptItems = new(StringComparer.Ordinal);
-    private readonly List<string> _assistantTranscriptItemOrder = new();
     private readonly HashSet<string> _handledAssistantEventIds = new(StringComparer.Ordinal);
+    private int _assistantTranscriptSequence;
     private bool _disposed;
 
     private sealed class AssistantTranscriptItem
     {
         public Dictionary<string, string> Sources { get; } = new(StringComparer.Ordinal);
         public string? FinalText { get; set; }
+        public string PublishedText { get; set; } = string.Empty;
+        public int? OutputIndex { get; set; }
+        public int? ContentIndex { get; set; }
+        public int Sequence { get; set; }
     }
 
     public GptLiveQuestionSession(GptLiveAuthService auth)
@@ -397,7 +401,7 @@ internal sealed class GptLiveQuestionSession : IAsyncDisposable
         _assistantTurnFinalized = false;
         _activeAssistantText = string.Empty;
         _assistantTranscriptItems.Clear();
-        _assistantTranscriptItemOrder.Clear();
+        _assistantTranscriptSequence = 0;
         _handledAssistantEventIds.Clear();
         _questionHandler?.Invoke(text);
         _statusHandler?.Invoke("GPT Liveが回答しています…");
@@ -433,13 +437,7 @@ internal sealed class GptLiveQuestionSession : IAsyncDisposable
             !TryAcceptAssistantEvent(liveEvent, out var responseId)) return;
         if (TryAddHandledEvent(liveEvent)) return;
 
-        var key = GetAssistantItemKey(liveEvent, responseId);
-        if (!_assistantTranscriptItems.TryGetValue(key, out var item))
-        {
-            item = new AssistantTranscriptItem();
-            _assistantTranscriptItems.Add(key, item);
-            _assistantTranscriptItemOrder.Add(key);
-        }
+        var item = GetOrCreateAssistantItem(liveEvent, responseId);
 
         if (!item.Sources.TryGetValue(source, out var current)) current = string.Empty;
         item.Sources[source] = current + delta;
@@ -450,31 +448,20 @@ internal sealed class GptLiveQuestionSession : IAsyncDisposable
     {
         if (_assistantTurnFinalized || string.IsNullOrWhiteSpace(text)) return;
         var responseId = GetResponseId(liveEvent);
-        var key = GetAssistantItemKey(liveEvent, responseId);
-        if (!_assistantTranscriptItems.TryGetValue(key, out var item))
-        {
-            item = new AssistantTranscriptItem();
-            _assistantTranscriptItems.Add(key, item);
-            _assistantTranscriptItemOrder.Add(key);
-        }
+        var item = GetOrCreateAssistantItem(liveEvent, responseId);
 
         // A done event describes one transcript item. Finalize that item without
         // replacing text already received from other items in the same answer.
         item.Sources.Clear();
         item.FinalText = text.Trim();
+        item.PublishedText = item.FinalText;
         PublishAssistantTranscript();
     }
 
     private void MergeAssistantTextSnapshot(JsonElement liveEvent, string? responseId, string source, string text)
     {
         if (_assistantTurnFinalized || string.IsNullOrWhiteSpace(text) || TryAddHandledEvent(liveEvent)) return;
-        var key = GetAssistantItemKey(liveEvent, responseId);
-        if (!_assistantTranscriptItems.TryGetValue(key, out var item))
-        {
-            item = new AssistantTranscriptItem();
-            _assistantTranscriptItems.Add(key, item);
-            _assistantTranscriptItemOrder.Add(key);
-        }
+        var item = GetOrCreateAssistantItem(liveEvent, responseId);
 
         var current = item.FinalText ?? (item.Sources.TryGetValue(source, out var existing) ? existing : string.Empty);
         item.Sources[source] = MergeTranscriptSnapshot(current, text.Trim());
@@ -489,8 +476,26 @@ internal sealed class GptLiveQuestionSession : IAsyncDisposable
         if (current.StartsWith(next, StringComparison.Ordinal) || current.EndsWith(next, StringComparison.Ordinal))
             return current;
 
-        var separator = !char.IsWhiteSpace(current[^1]) && !char.IsWhiteSpace(next[0]) ? " " : string.Empty;
-        return current + separator + next;
+        var overlap = FindSuffixPrefixOverlap(current, next);
+        return overlap > 0
+            ? current + next[overlap..]
+            : JoinTranscriptChunks(current, next);
+    }
+
+    private AssistantTranscriptItem GetOrCreateAssistantItem(JsonElement liveEvent, string? responseId)
+    {
+        var key = GetAssistantItemKey(liveEvent, responseId);
+        if (!_assistantTranscriptItems.TryGetValue(key, out var item))
+        {
+            item = new AssistantTranscriptItem { Sequence = _assistantTranscriptSequence++ };
+            _assistantTranscriptItems.Add(key, item);
+        }
+
+        if (TryReadInt32(liveEvent, "output_index", out var outputIndex))
+            item.OutputIndex = outputIndex;
+        if (TryReadInt32(liveEvent, "content_index", out var contentIndex))
+            item.ContentIndex = contentIndex;
+        return item;
     }
 
     private void SetAssistantText(string text)
@@ -499,7 +504,6 @@ internal sealed class GptLiveQuestionSession : IAsyncDisposable
         _assistantTurnFinalized = true;
         _activeAssistantText = text.Trim();
         _assistantTranscriptItems.Clear();
-        _assistantTranscriptItemOrder.Clear();
         _finalAnswerHandler?.Invoke(_activeAssistantText);
         _statusHandler?.Invoke("GPT Liveが回答しています…");
     }
@@ -534,14 +538,19 @@ internal sealed class GptLiveQuestionSession : IAsyncDisposable
     private void PublishAssistantTranscript()
     {
         var builder = new StringBuilder();
-        foreach (var key in _assistantTranscriptItemOrder)
+        foreach (var item in _assistantTranscriptItems.Values
+                     .OrderBy(item => item.OutputIndex ?? int.MaxValue)
+                     .ThenBy(item => item.ContentIndex ?? int.MaxValue)
+                     .ThenBy(item => item.Sequence))
         {
-            if (!_assistantTranscriptItems.TryGetValue(key, out var item)) continue;
-            var text = item.FinalText ?? SelectBestTranscriptSource(item.Sources);
+            var candidate = item.FinalText ?? SelectBestTranscriptSource(item.Sources);
+            var text = item.FinalText is null
+                ? MergeStreamingTranscript(item.PublishedText, candidate)
+                : candidate;
             if (string.IsNullOrEmpty(text)) continue;
 
-            if (builder.Length > 0 && !char.IsWhiteSpace(builder[^1]) && !char.IsWhiteSpace(text[0]))
-                builder.Append(' ');
+            item.PublishedText = text;
+            if (builder.Length > 0) builder.Append(GetTranscriptSeparator(builder[^1], text[0]));
             builder.Append(text);
         }
 
@@ -555,6 +564,8 @@ internal sealed class GptLiveQuestionSession : IAsyncDisposable
 
     private static string SelectBestTranscriptSource(IReadOnlyDictionary<string, string> sources)
     {
+        // Prefer the most complete channel; audio wins ties. MergeStreamingTranscript
+        // keeps the already displayed prefix stable if another channel is partial.
         var priority = new Dictionary<string, int>(StringComparer.Ordinal)
         {
             ["audio"] = 0,
@@ -562,10 +573,53 @@ internal sealed class GptLiveQuestionSession : IAsyncDisposable
             ["session"] = 2
         };
         return sources
+            .Where(pair => pair.Value.Length > 0)
             .OrderByDescending(pair => pair.Value.Length)
             .ThenBy(pair => priority.TryGetValue(pair.Key, out var value) ? value : int.MaxValue)
             .Select(pair => pair.Value)
             .FirstOrDefault() ?? string.Empty;
+    }
+
+    private static string MergeStreamingTranscript(string current, string next)
+    {
+        if (current.Length == 0) return next;
+        if (next.Length == 0 || current.StartsWith(next, StringComparison.Ordinal) ||
+            current.Contains(next, StringComparison.Ordinal))
+            return current;
+        if (next.StartsWith(current, StringComparison.Ordinal) || next.Contains(current, StringComparison.Ordinal))
+            return next;
+
+        var overlap = FindSuffixPrefixOverlap(current, next);
+        // Keep the first visible prefix stable if parallel transcript channels
+        // disagree. A completed transcript event can still replace it exactly.
+        return overlap > 0 ? current + next[overlap..] : current;
+    }
+
+    private static int FindSuffixPrefixOverlap(string current, string next)
+    {
+        var maxOverlap = Math.Min(current.Length, next.Length);
+        for (var overlap = maxOverlap; overlap > 0; overlap--)
+            if (current.AsSpan(current.Length - overlap, overlap).SequenceEqual(next.AsSpan(0, overlap)))
+                return overlap;
+        return 0;
+    }
+
+    private static string JoinTranscriptChunks(string current, string next)
+    {
+        if (current.Length == 0 || next.Length == 0) return current + next;
+        return current + GetTranscriptSeparator(current[^1], next[0]) + next;
+    }
+
+    private static string GetTranscriptSeparator(char left, char right)
+    {
+        if (char.IsWhiteSpace(left) || char.IsWhiteSpace(right)) return string.Empty;
+        // Add a boundary only for adjacent ASCII words/punctuation. Japanese text
+        // should stay contiguous when realtime events split in the middle of a word.
+        if (char.IsAsciiLetterOrDigit(left) && char.IsAsciiLetterOrDigit(right)) return " ";
+        if (char.IsAscii(left) && char.IsAscii(right) && char.IsAsciiLetterOrDigit(right) &&
+            left is '.' or ',' or ';' or ':' or '!' or '?')
+            return " ";
+        return string.Empty;
     }
 
     private bool TryAddHandledEvent(JsonElement liveEvent)
@@ -602,7 +656,22 @@ internal sealed class GptLiveQuestionSession : IAsyncDisposable
                            contentIndexElement.TryGetInt32(out var index)
             ? index.ToString(System.Globalization.CultureInfo.InvariantCulture)
             : "0";
-        return $"{responseId ?? "active"}|{itemId ?? "default"}|{contentIndex}";
+        var outputIndex = element.TryGetProperty("output_index", out var outputIndexElement) &&
+                          outputIndexElement.TryGetInt32(out var outIndex)
+            ? outIndex.ToString(System.Globalization.CultureInfo.InvariantCulture)
+            : "0";
+        return $"{responseId ?? "active"}|{outputIndex}|{itemId ?? "default"}|{contentIndex}";
+    }
+
+    private static bool TryReadInt32(JsonElement element, string property, out int value) =>
+        element.TryGetProperty(property, out var propertyValue) && propertyValue.TryGetInt32(out value)
+            ? true
+            : SetDefault(out value);
+
+    private static bool SetDefault(out int value)
+    {
+        value = 0;
+        return false;
     }
 
     private static bool TryGetTranscript(JsonElement element, out string text)

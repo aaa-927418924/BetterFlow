@@ -989,6 +989,7 @@ public partial class MainWindow : System.Windows.Window
             _gptLiveQuestionActive = false;
             if (!_closing)
             {
+                _answerWindow.ResetAnswer();
                 _indicator.HideStatus();
                 UpdateAiModeDisplay();
             }
@@ -998,6 +999,7 @@ public partial class MainWindow : System.Windows.Window
 
     private async Task StopGptLiveSelectedTextQuestionAsync()
     {
+        _answerWindow.ResetAnswer();
         if (_gptLiveQuestionSession is { } session)
         {
             _indicator.ShowStatus("会話を終了中");
@@ -1013,6 +1015,7 @@ public partial class MainWindow : System.Windows.Window
     {
         if (!_selectedTextQuestionSessionActive && !_continuousRecorder.IsRecording) return;
 
+        _answerWindow.ResetAnswer();
         _selectedTextQuestionSessionStopping = true;
         _indicator.ShowStatus("質問を終了中");
         _selectedTextQuestionCancellation?.Cancel();
@@ -1488,6 +1491,7 @@ public partial class MainWindow : System.Windows.Window
             ActionButton.Content = _asr is null ? "Setup" : "録音を開始";
             if (!_closing)
             {
+                _answerWindow.ResetAnswer();
                 if (failed) { }
                 else if (wasCanceled) _indicator.ShowStatus("質問終了", TimeSpan.FromSeconds(1));
                 else _indicator.HideStatus();
