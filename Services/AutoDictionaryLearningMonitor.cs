@@ -16,6 +16,8 @@ internal sealed class AutoDictionaryLearningMonitor : IDisposable
     private const int VkShift = 0x10;
     private const int MaxDocumentLength = 24_000;
     private const int MaxMonitorMinutes = 10;
+    private const int PastePropagationTimeoutMs = 2_000;
+    private const int PastePropagationPollMs = 50;
 
     private readonly IntPtr _targetWindow;
     private readonly string _pastedText;
@@ -153,23 +155,39 @@ internal sealed class AutoDictionaryLearningMonitor : IDisposable
                 ReportStatus("editor_not_found", "入力欄を読み取れず、自動登録の監視を開始できませんでした。");
                 return;
             }
-            if (!TryReadText(editor, textPattern, valuePattern, out var initialText))
+            var initialText = string.Empty;
+            var insertedStart = -1;
+            var pasteReadAttempts = 0;
+            var pasteWait = System.Diagnostics.Stopwatch.StartNew();
+            do
             {
-                ReportStatus("editor_text_unavailable", "入力欄の文章を読み取れず、自動登録の監視を開始できませんでした。");
-                return;
-            }
-            initialText = NormalizeLineEndings(initialText);
-            if (initialText.Length > MaxDocumentLength)
-            {
-                ReportStatus("editor_text_too_long", "入力欄が長いため、自動登録の監視を開始できませんでした。");
-                return;
-            }
-            var insertedStart = initialText.IndexOf(_pastedText, StringComparison.Ordinal);
+                monitorToken.ThrowIfCancellationRequested();
+                pasteReadAttempts++;
+                if (TryReadText(editor, textPattern, valuePattern, out var currentText))
+                {
+                    initialText = NormalizeLineEndings(currentText);
+                    if (initialText.Length > MaxDocumentLength)
+                    {
+                        ReportStatus("editor_text_too_long", "入力欄が長いため、自動登録の監視を開始できませんでした。");
+                        return;
+                    }
+
+                    insertedStart = initialText.IndexOf(_pastedText, StringComparison.Ordinal);
+                    if (insertedStart >= 0) break;
+                }
+
+                if (pasteWait.ElapsedMilliseconds >= PastePropagationTimeoutMs) break;
+                await Task.Delay(TimeSpan.FromMilliseconds(PastePropagationPollMs), monitorToken).ConfigureAwait(false);
+            } while (true);
+
             if (insertedStart < 0)
             {
-                ReportStatus("pasted_text_not_found", "貼り付けた文章を入力欄内で特定できませんでした。");
+                DictionaryLearningDiagnosticLog.Write("paste_wait_expired", "text-not-visible", pasteReadAttempts);
+                ReportStatus("pasted_text_not_found", "入力欄に貼り付けた文章を確認できず、自動登録の監視を開始できませんでした。");
                 return;
             }
+            DictionaryLearningDiagnosticLog.Write("pasted_text_detected",
+                pasteReadAttempts == 1 ? "immediate" : "after-ui-update", pasteReadAttempts);
             if (initialText.IndexOf(_pastedText, insertedStart + _pastedText.Length,
                     StringComparison.Ordinal) >= 0)
             {

@@ -2105,7 +2105,7 @@ public partial class MainWindow : System.Windows.Window
                 if (sendAfterPaste && _autoDictionaryLearningMonitor is { } learningMonitor)
                 {
                     var monitorReady = await learningMonitor.WaitUntilReadyAsync(
-                        TimeSpan.FromSeconds(2), cancellationToken);
+                        TimeSpan.FromSeconds(4), cancellationToken);
                     if (!monitorReady)
                         DictionaryLearningDiagnosticLog.Write("monitor_not_ready_before_auto_send", "timeout");
                 }
