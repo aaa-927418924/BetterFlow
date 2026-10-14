@@ -218,6 +218,34 @@
                                         </DataTemplate>
                                     </ItemsControl.ItemTemplate>
                                 </ItemsControl>
+                                <StackPanel x:Name="SuppressedDictionarySection" Margin="0,12,0,0"
+                                            Visibility="Collapsed">
+                                    <TextBlock Text="削除済み用語" FontSize="13" FontWeight="SemiBold" />
+                                    <TextBlock Text="再学習を許可すると、次に手修正した文章を送信したときから候補を判定します。"
+                                               FontSize="11" Foreground="{StaticResource MutedBrush}"
+                                               TextWrapping="Wrap" Margin="0,3,0,6" />
+                                    <ItemsControl x:Name="SuppressedDictionaryItems">
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate>
+                                                <Border Background="#2B2B2B" CornerRadius="10" Padding="8" Margin="0,0,0,6">
+                                                    <DockPanel LastChildFill="True">
+                                                        <Button DockPanel.Dock="Right" Content="再学習を許可"
+                                                                Tag="{Binding Term}" Height="32" MinWidth="104"
+                                                                Padding="8,0" Margin="8,0,0,0"
+                                                                Style="{StaticResource SecondaryButtonStyle}"
+                                                                Click="AllowSuppressedDictionaryTerm_Click"
+                                                                AutomationProperties.Name="{Binding AllowActionName}" />
+                                                        <TextBlock Text="{Binding Term}" VerticalAlignment="Center"
+                                                                   FontSize="12" TextWrapping="Wrap" />
+                                                    </DockPanel>
+                                                </Border>
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                </StackPanel>
+                                <TextBlock x:Name="DictionaryListStatus" FontSize="11"
+                                           Foreground="{StaticResource MutedBrush}" Margin="0,6,0,0"
+                                           AutomationProperties.LiveSetting="Polite" />
                             </StackPanel>
                         </ScrollViewer>
                     </Grid>

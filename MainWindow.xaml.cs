@@ -81,6 +81,11 @@ public partial class MainWindow : System.Windows.Window
         string PreferredSpelling,
         IReadOnlyList<string> MisrecognizedVariants);
 
+    private sealed record SuppressedDictionaryTermOption(string Term)
+    {
+        public string AllowActionName => $"{Term}の自動登録を再度許可";
+    }
+
     private sealed record SelectionEditUndoRecord(
         SelectionEditContext Context,
         string PreviousText,
@@ -713,9 +718,45 @@ public partial class MainWindow : System.Windows.Window
     {
         CorrectionDictionaryItems.ItemsSource = null;
         CorrectionDictionaryItems.ItemsSource = _settings.CorrectionDictionary.ToArray();
-        DictionaryListEmptyText.Visibility = _settings.CorrectionDictionary.Count == 0
+        var registeredTerms = new HashSet<string>(_settings.CorrectionDictionary.Select(entry => entry.PreferredSpelling),
+            StringComparer.OrdinalIgnoreCase);
+        var suppressed = _settings.SuppressedAutomaticDictionaryTerms
+            .Where(term => !registeredTerms.Contains(term))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Select(term => new SuppressedDictionaryTermOption(term))
+            .ToArray();
+        SuppressedDictionaryItems.ItemsSource = null;
+        SuppressedDictionaryItems.ItemsSource = suppressed;
+        SuppressedDictionarySection.Visibility = suppressed.Length > 0
             ? System.Windows.Visibility.Visible
             : System.Windows.Visibility.Collapsed;
+        DictionaryListEmptyText.Visibility = _settings.CorrectionDictionary.Count == 0 && suppressed.Length == 0
+            ? System.Windows.Visibility.Visible
+            : System.Windows.Visibility.Collapsed;
+    }
+
+    private void AllowSuppressedDictionaryTerm_Click(object sender, System.Windows.RoutedEventArgs e)
+    {
+        if (_isBusy || IsAnyRecording || sender is not System.Windows.Controls.Button { Tag: string term })
+            return;
+
+        var previous = _settings.SuppressedAutomaticDictionaryTerms.ToList();
+        var removed = _settings.SuppressedAutomaticDictionaryTerms.RemoveAll(suppressed =>
+            string.Equals(suppressed, term, StringComparison.OrdinalIgnoreCase));
+        if (removed == 0) return;
+
+        try
+        {
+            _settingsStore.Save(_settings);
+            RefreshCorrectionDictionaryItems();
+            DictionaryListStatus.Text = $"{term}の再学習を許可しました。次に手修正した文章を送信すると候補を判定します。";
+        }
+        catch (Exception ex)
+        {
+            _settings.SuppressedAutomaticDictionaryTerms = previous;
+            RefreshCorrectionDictionaryItems();
+            DictionaryListStatus.Text = "再学習の設定を保存できませんでした。 " + ex.Message;
+        }
     }
 
     private void OpenDictionaryList_Click(object sender, System.Windows.RoutedEventArgs e) =>
