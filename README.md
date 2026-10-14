@@ -1,69 +1,69 @@
 # Better Flow
 
-Windows x64向けの音声入力・選択テキスト編集アプリです。日本語音声をローカルのParakeet 0.6Bで文字起こしし、OpenCode経由のモデルで話し方を保ちながら文章を整えます。
+Better Flow is a voice dictation and selected-text editing app for Windows x64. It transcribes Japanese speech locally using Parakeet 0.6B, then refines the text with a model accessed through OpenCode while preserving your speaking style.
 
-右Altを押して話すだけで入力できます。文章を選択してから起動すると、選択した文章の編集や、その文章についての質問もできます。
+Simply press Right Alt and speak to enter text. If you select text before activating Better Flow, you can edit the selection or ask questions about it.
 
-## 主な機能
+## Key Features
 
-- **音声入力**：フィラーや言い直しを整え、元の入力欄へ貼り付けます。録音中は暫定の文字起こしを表示し、停止後に録音全体から最終結果を作ります。
-- **選択文の連続編集**：「英語に翻訳して」「短くして」などの音声指示で置き換えます。編集後も文章を選択したまま、次の指示を受け付けます。
-- **選択文への質問**：通常のWebページや回答文を選択し、「3行で要約して」などと質問できます。原文を変更せず、回答を画面下のパネルへ逐次表示します。回答は選択・コピーできます。
-- **用語辞書**：正しい表記と参考の誤認識例を手動登録できます。音声入力を手修正して送信した場合も、同じ用語の表記訂正と判断された候補を自動登録します。
-- **取り消し**：編集後に表示される「元に戻す」ボタン、または編集セッション中の音声指示で直前の変更を戻せます。
-- **設定と常駐**：ショートカット、マイク、OpenCodeモデルを変更できます。タスクトレイ常駐とWindows起動時の自動起動に対応します。
+- **Voice dictation**: Cleans up filler words and false starts, then pastes the result into the original input field. A provisional transcript appears during recording; after recording stops, the final result is generated from the complete audio.
+- **Continuous editing of selected text**: Replace selected text using spoken instructions such as "Translate this into English" or "Make this shorter." The text remains selected after each edit, so you can give additional instructions.
+- **Ask questions about selected text**: Select text on a web page or in an AI response and ask questions such as "Summarize this in three lines." Answers stream into a panel at the bottom of the screen without modifying the original text. You can select and copy the answers.
+- **Custom terminology dictionary**: Manually register correct spellings and example misrecognitions. When you manually correct dictated text and submit it, Better Flow can also automatically register corrections identified as spelling or terminology fixes for the same term.
+- **Undo**: Revert the most recent change using the Undo button shown after an edit or a spoken command during an editing session.
+- **Settings and background operation**: Configure the shortcut, microphone, and OpenCode model. Better Flow supports system tray operation and automatic startup with Windows.
 
-文章整形は常時有効です。OpenCode Desktopと同じユーザープロファイルを使い、接続済みproviderのモデルから選びます。モデルの選択は再起動後も保持します。Better Flow独自のAPIキー・Base URL入力はありません。
+Text refinement is always enabled. Better Flow uses the same user profile as OpenCode Desktop and lets you choose models from connected providers. Your model selection persists across restarts. There are no separate API key or base URL fields in Better Flow.
 
-## 初回セットアップ
+## First-Time Setup
 
-1. 配布された単体EXEを起動します。
-2. 初回画面の **Setup** を押します。日本語音声モデルと、必要に応じてOpenCode CLIを取得・検証します。
-3. 利用するモデルの認証が必要な場合は、OpenCode DesktopなどOpenCode側でサインインします。
-4. 音声モデルとOpenCodeモデルの準備が完了したら、ショートカットで利用できます。
+1. Launch the distributed standalone EXE.
+2. Click **Setup** on the initial screen. Better Flow downloads and verifies the Japanese speech model and, if necessary, the OpenCode CLI.
+3. If your chosen model requires authentication, sign in through OpenCode, such as OpenCode Desktop.
+4. Once the speech model and OpenCode model are ready, you can start using Better Flow with the keyboard shortcut.
 
-初回はインターネット接続と、音声モデルの準備用に約1.2 GBの空き容量が必要です。Parakeet日本語モデルはEXEに含めず、セットアップ時にダウンロードします。ダウンロードはファイルサイズとSHA-256を検証します。
+The initial setup requires an internet connection and approximately 1.2 GB of free space for the speech model. The Japanese Parakeet model is not bundled with the EXE; it is downloaded during setup. Downloads are verified using file size and SHA-256 checks.
 
-PATH上に既存のOpenCodeがあれば優先して使い、なければ公式リリースのWindows x64 baseline版をアプリのデータフォルダーへ用意します。初期のモデルIDは`opencode/muse-spark-1.3-contributor-free`です。利用できるモデルと認証条件はOpenCode側の提供状況に従います。
+If OpenCode is already available on your PATH, Better Flow uses that installation first. Otherwise, it installs the official Windows x64 baseline release into the application's data folder. The default model ID is `opencode/muse-spark-1.3-contributor-free`. Available models and authentication requirements depend on OpenCode's offerings.
 
-セットアップ済みなら、再起動時は設定ウィンドウを出さずトレイへ常駐します。トレイアイコンをダブルクリックすると設定を開けます。ウィンドウを閉じても常駐し、完全終了と自動起動の切替はトレイの右クリックメニューから操作します。
+After setup, Better Flow starts in the system tray without opening the settings window. Double-click the tray icon to open settings. Closing the window keeps the app running in the background. To exit completely or toggle startup with Windows, use the tray icon's right-click menu.
 
-## 使い方
+## Usage
 
-デフォルトのショートカットは **右Alt** です。
+The default shortcut is **Right Alt**.
 
-| 対象 | 操作 |
+| Context | Action |
 | --- | --- |
-| 選択のない入力欄 | 右Altで録音開始、もう一度押すと停止して整形・貼り付け |
-| 編集可能な入力欄の選択文 | 右Altで連続編集を開始。発話の区切りで編集し、もう一度押すとキャンセル |
-| Webページなどの通常の選択文 | 右Altで質問を開始。発話の区切りで回答し、続けて質問可能。もう一度押すと終了 |
-| 通常の音声入力の整形中 | 右Altで処理をキャンセル |
+| Input field with no text selected | Press Right Alt to start recording. Press it again to stop, refine, and paste the text. |
+| Selected text in an editable input field | Press Right Alt to start continuous editing. Edits are applied at speech boundaries. Press it again to cancel. |
+| Selected text on a web page or other non-editable content | Press Right Alt to start asking questions. Answers are generated at speech boundaries, and you can continue asking follow-up questions. Press it again to end the session. |
+| While regular dictation is being refined | Press Right Alt to cancel processing. |
 
-OpenCodeによる連続編集・質問ではSilero VADで発話区間を検出します。通常の音声入力はショートカットで停止します。暫定文字起こしは確認用で、入力欄へ貼り付ける最終結果とは異なる場合があります。
+Continuous editing and question-answering through OpenCode use Silero VAD to detect speech segments. Regular dictation is stopped manually using the shortcut. The provisional transcript is for reference and may differ from the final text pasted into the input field.
 
-通常の音声入力で「送信して」「送って」と指示すると、整形後の貼り付けに続けてEnterを送ります。入力先のアプリのEnter操作に従って送信されるため、送信先を確認して使ってください。
+During regular dictation, saying "Send it" or "Submit it" causes Better Flow to press Enter after pasting the refined text. The result depends on how the target application handles Enter, so check the destination before using this feature.
 
-用語辞書の一覧は設定の **辞書リスト** から開きます。明確な用語訂正は1回で登録し、曖昧な候補は独立した3回の訂正確認後に登録します。削除した語は再学習を抑止し、辞書リストから個別に再学習を許可できます。文章の意味変更や数値変更をそのまま辞書へ登録する仕組みではありません。
+Open **Dictionary List** in settings to view registered terms. Clear terminology corrections are registered after one occurrence; ambiguous candidates require three separate confirmed corrections. Deleted terms are excluded from automatic relearning unless you explicitly re-enable it for individual entries in the dictionary list. Changes to a sentence's meaning or numeric values are not automatically treated as dictionary entries.
 
-## 選択文への音声会話
+## Voice Conversations About Selected Text
 
-選択文への質問では、デフォルトのOpenCodeテキスト回答に加え、設定から **GPT Live** を選べます。ChatGPTへサインインして、選択文について音声で会話する追加モードです。回答テキストも逐次表示します。
+When asking questions about selected text, you can choose **GPT Live** in settings instead of the default OpenCode text responses. This additional mode lets you sign in to ChatGPT and have a spoken conversation about the selected text. Response text is also displayed as it streams in.
 
-GPT Liveは実験的な連携です。選択文の編集はOpenCodeを使います。GPT LiveにはローカルのSilero VADを適用しません。WebView2 Runtimeがない環境では、Microsoft署名を確認したインストーラーで準備します。
+GPT Live integration is experimental. Editing selected text still uses OpenCode. Local Silero VAD is not applied to GPT Live. If the WebView2 Runtime is missing, Better Flow installs it using an installer whose Microsoft signature is verified.
 
-## データの扱い
+## Data Handling
 
-- **OpenCode使用時**：録音と文字起こしはPC内で処理します。文字起こし、選択文、音声指示、質問に必要な文脈は、ローカルOpenCode serverを経由して選択モデルへ送信します。
-- **辞書の自動登録**：手修正の前後と候補周辺の短い文脈を、選択モデルへ送って用語訂正か判定します。採用した正式表記・誤認識例などをローカル設定に保存します。
-- **GPT Live使用時**：選択文とマイク音声をChatGPTの音声会話経路へ送信します。OAuthトークンはローカルに保存し、Windows DPAPIで保護します。
-- **保存先**：モデル・設定・辞書・診断ログは、Windowsユーザーごとの`%LOCALAPPDATA%\Better Flow`に保存します。旧`AutoPrompt`データは移行し、使用中などで移行できない場合は旧フォルダーを引き続き使います。
-- **接続と認証**：OpenCodeのprovider接続・認証はOpenCode側で管理します。Better FlowのOpenCode serverはloopbackで待ち受け、起動ごとに生成したパスワードを使います。一時セッションは処理後に削除を試みます。
+- **When using OpenCode**: Audio recording and transcription are processed locally on your PC. Transcripts, selected text, spoken instructions, and context needed to answer questions are sent to the selected model through a local OpenCode server.
+- **Automatic dictionary registration**: Better Flow sends the text before and after manual corrections, along with a short surrounding context, to the selected model to determine whether a terminology correction was made. Accepted spellings, example misrecognitions, and related entries are stored in local settings.
+- **When using GPT Live**: Selected text and microphone audio are sent through ChatGPT's voice conversation service. OAuth tokens are stored locally and protected using Windows DPAPI.
+- **Storage location**: Models, settings, dictionary entries, and diagnostic logs are stored in `%LOCALAPPDATA%\Better Flow` for each Windows user. Existing `AutoPrompt` data is migrated. If migration cannot be completed, for example because files are in use, the previous folder continues to be used.
+- **Connections and authentication**: Provider connections and authentication are managed by OpenCode. Better Flow's OpenCode server listens on the loopback interface and uses a password generated on each launch. The app attempts to delete temporary sessions after processing.
 
-診断ログは処理段階・所要時間・文字数などを記録し、音声本文や辞書候補の本文を記録しません。モデル提供元やOpenCode側でのデータの保存・利用条件は、それぞれの接続先に従います。[OpenCodeのドキュメント](https://opencode.ai/docs/)
+Diagnostic logs record processing stages, elapsed time, character counts, and similar metadata. They do not log the contents of audio transcripts or dictionary candidates. Data retention and usage policies of model providers and OpenCode depend on the respective services. See the [OpenCode documentation](https://opencode.ai/docs/).
 
-## ソースからビルドする
+## Build from Source
 
-必要なものはWindows x64と **.NET 8 SDK** です。
+Requirements: Windows x64 and the **.NET 8 SDK**.
 
 ```powershell
 git clone https://github.com/aaa-927418924/BetterFlow.git
@@ -72,27 +72,27 @@ dotnet restore AutoPrompt.csproj
 dotnet publish AutoPrompt.csproj -c Release -r win-x64 --self-contained true -o artifacts/publish
 ```
 
-出力は`artifacts/publish/BetterFlow.exe`です。.NETランタイムを含む自己完結型の単体EXEで、このファイルを配布できます。初回の音声モデル・OpenCodeの取得は、受け取ったPCで行います。
+The output is `artifacts/publish/BetterFlow.exe`. This is a standalone, self-contained EXE that includes the .NET runtime and can be distributed directly. The speech model and OpenCode are downloaded during first-time setup on the recipient's PC.
 
-このGitリポジトリには、生成したEXE・Parakeet文字起こしモデル・ユーザー設定・認証情報を含めません。アプリの初回Setupと、接続先ごとの認証は配布先でも必要です。小さいSilero VADモデルはリポジトリとEXEに同梱します。
+This Git repository does not include generated EXEs, the Parakeet transcription model, user settings, or authentication credentials. Initial setup and any required provider authentication must also be completed on the recipient's machine. The small Silero VAD model is included in both the repository and the EXE.
 
-起動効果音は任意です。ローカルで`Assets/universfield-gadget-activation-250072.mp3`を用意した場合だけビルドに含まれ、このファイルはGit対象外です。存在しない場合は効果音なしでビルドできます。
+The startup sound effect is optional. It is included in the build only if `Assets/universfield-gadget-activation-250072.mp3` is present locally. This file is excluded from Git. The app can be built without it, in which case no startup sound is played.
 
-### アイコンの再生成
+### Regenerating Icons
 
-ルートの`icon.svg`から画面用PNGとウィンドウ・タスクバー・EXE用ICOを生成します。
+Generate the PNG used in the UI and the ICO used for the window, taskbar, and EXE from the root-level `icon.svg`:
 
 ```powershell
 pwsh -NoProfile -File tools/Generate-Icons.ps1
 ```
 
-## 音声モデルと依存ライブラリ
+## Speech Models and Dependencies
 
-- 日本語ASR：Parakeet TDT-CTC 0.6B JAのsherpa-onnx INT8 ONNX版。
-- 発話検出：[Silero VAD](https://github.com/snakers4/silero-vad)のSherpa-ONNX互換ONNX版。モデルと[MITライセンス表記](Assets/SileroVAD-LICENSE.txt)を同梱します。
-- 音声入出力：NAudio。
-- モデル実行：sherpa-onnx。
-- 音声会話画面：Microsoft WebView2。
-- セットアップ時の展開：SharpCompress。
+- **Japanese ASR**: The sherpa-onnx INT8 ONNX version of Parakeet TDT-CTC 0.6B JA.
+- **Speech detection**: A Sherpa-ONNX-compatible ONNX version of [Silero VAD](https://github.com/snakers4/silero-vad). The model and its [MIT license notice](Assets/SileroVAD-LICENSE.txt) are included.
+- **Audio input/output**: NAudio.
+- **Model inference**: sherpa-onnx.
+- **Voice conversation interface**: Microsoft WebView2.
+- **Archive extraction during setup**: SharpCompress.
 
-音声モデルの選定は[公開FLEURS日本語ベンチマーク](https://github.com/cm-nakamura-shogo/japanese-asr-l40s-benchmark)を参照しています。公開測定の重み・実行環境と、本アプリのINT8 ONNX版は異なるため、同じ認識精度を保証するものではありません。
+The speech model was selected with reference to the [public Japanese FLEURS benchmark](https://github.com/cm-nakamura-shogo/japanese-asr-l40s-benchmark). The published benchmark uses different model weights and an execution environment that differs from the INT8 ONNX version used in Better Flow, so equivalent recognition accuracy is not guaranteed.
