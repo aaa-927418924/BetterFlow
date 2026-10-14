@@ -490,7 +490,7 @@
 - Release build/publish: 成功、0エラー。NU1900はNuGet脆弱性情報フィードへ接続できない警告。`dist/Better Flow.exe`は82,458,846 bytes、SHA-256 `F323B8E3371FA928D5F9702F217A094F1EA230C39526AF4A718E9CF5521A6B0A`で発行物と一致。更新前版は`artifacts/BetterFlow-before-chatgpt-dictionary-fix-20261014-200238.exe`へ退避。完全一致する配布先プロセスは実行されていなかった。
 - 未確認範囲: Chrome版ChatGPTで送信・UIA再接続・辞書保存までの実利用は未確認。送信本文や追加モデル要求を使うテストは行っていない。
 
-## Chrome版ChatGPTの入力欄再取得失敗 — 調査と改訂計画（2026-10-14、未実装）
+## ChatGPT系入力欄の再取得・送信確認失敗 — 調査、実装、追加修正（2026-10-14）
 
 - 要件: 1回の自動学習成功後も「入力欄を安全に再確認できず、自動登録の監視を終了しました」が繰り返される。今回は原因調査と計画だけを行い、アプリ実装・EXE・実行設定を変更しない。
 - ログ確認（20:07〜20:17 JST、`dictionary-learning-diagnostics.jsonl`）: 監視`683174f9`は20:10:47に同一RuntimeIdの欄でプレースホルダー復帰を確認し、モデル承認を経て20:10:49に1件保存。監視終了8件は`ElementNotAvailableException`の後に復旧失敗し、内訳は`focused-editor-not-found`4件、`editor-fingerprint-mismatch`4件。`same-editor-fingerprint`による再生成欄の復旧成功は0件。複数件は送信候補の作成前に監視を終了しており、学習モデルを呼ぶ前の障害と確認できる。送信未確認の他ログにはIME確定・改行等が含まれる可能性があり、全てを実送信の失敗とは扱わない。
@@ -518,3 +518,10 @@
 - 実地確認: Chrome版ChatGPTとClaude Desktopでの連続送信・欄再生成を使った実操作は未確認。実モデル要求は実行していない。現時点で確認できたのはソース確認とReleaseビルドまで。
 - 配布EXE: `dist/Better Flow.exe`へ発行済み。サイズ82,471,030 bytes、SHA-256 `609A5916DD25D6C7EC5E9EEC116DA6BA86080B43D55FEBC9F38806F202276E28`。発行元と配布先のSHA-256一致を確認。更新前版は`artifacts/BetterFlow-before-dictionary-rebind-20261014-214936.exe`へ退避。置換前に完全一致する配布先プロセスがないことを確認した。
 - Git: 実装コミット後のIDはプロジェクト記録へ追記する。
+
+### ChatGPT Desktop/Chromeの追加失敗に対する修正
+
+- ユーザー報告: Claude Desktopでは自動学習が動く一方、ChatGPT DesktopとChrome版ChatGPTでは「送信後の入力欄の変化を確認できず」または入力欄再検索の表示で止まる。
+- 追加原因: `ProcessSubmissionCandidateAsync`は入力欄の本文が変化し、追跡範囲が空になった後にだけ送信済み表示を照合していた。ChatGPT系でUIAが古い入力欄の値を返し続ける場合や再生成欄を再取得できない場合、送信済み本文の照合まで到達せず、辞書判定モデルを呼ぶ前に監視が終わる。
+- 修正: 入力欄が読み取り不能・同一性不一致・本文不変・追跡範囲未消去のときも、送信前に保存した有効な候補に対応する新しい読み取り専用表示を、対象ウィンドウおよび元文書の範囲から探す。本文のNameとTextPatternを合わせて読み、空白・改行を正規化した完全一致、または12文字以上の候補に限る包含一致で照合する。本文のダイジェストだけを起動時に画面内メモリへ保持し、未送信候補や既存表示を新規送信と誤認しにくくする。文書スコープが取れる場合は元文書内を維持し、読み取り専用表示と有効な送信候補を必須にする。本文・ダイジェストはログやファイルへ保存しない。
+- ビルド/配布: Release win-x64自己完結単体EXEの発行成功。NU1900はNuGet脆弱性情報フィードへの接続警告。発行物は82,471,986 bytes、SHA-256 `DA13D7B9DFF6065E29BF0FC84037A2ABB311FE723D9195E9BB6A0FB1CA933ACE`。実操作でのChatGPT Desktop/Chrome/Claudeの確認は未実施。

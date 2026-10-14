@@ -588,7 +588,7 @@ internal sealed class AutoDictionaryLearningMonitor : IDisposable
                 SetSnapshotLocked(initialText, _pastedText, SnapshotState.Valid, "initial-paste");
             }
             Volatile.Write(ref _baselineTextElementDigests,
-                CaptureReadOnlyTextElementDigests(initialBinding.DocumentRoot, initialBinding.RuntimeId));
+                CaptureInitialReadOnlyTextElementDigests(initialBinding));
             Volatile.Write(ref _initialized, 1);
             UpdateTrackedEditorFocus(initialBinding.Element);
             ReportStatus("tracking_started", "音声入力した文章を送信するまで監視しています。");
@@ -847,6 +847,19 @@ internal sealed class AutoDictionaryLearningMonitor : IDisposable
         var observedClearedText = false;
         var clearEvidence = "none";
 
+        bool TryConfirmFromOutgoingMessage(string reason, int attempt)
+        {
+            if (!HasNewOutgoingTextEvidence(snapshot.FullText, out var outgoingEvidence))
+            {
+                clearEvidence = $"{reason};{outgoingEvidence}";
+                return false;
+            }
+
+            CompleteConfirmedSubmission(candidate, correction,
+                $"{reason};{outgoingEvidence}", "outgoing-message-proof", attempt);
+            return true;
+        }
+
         for (var confirmAttempt = 0; confirmAttempt < 8; confirmAttempt++)
         {
             await Task.Delay(TimeSpan.FromMilliseconds(180), cancellationToken).ConfigureAwait(false);
@@ -861,6 +874,7 @@ internal sealed class AutoDictionaryLearningMonitor : IDisposable
             {
                 if (!tryRebindEditor())
                 {
+                    if (TryConfirmFromOutgoingMessage("editor-unavailable", confirmAttempt)) return false;
                     confirmationReadFailureCount++;
                     Log("submit_confirmation_editor_mismatch", "reason=rebind-unavailable",
                         confirmationReadFailureCount, candidate.Id);
@@ -869,6 +883,7 @@ internal sealed class AutoDictionaryLearningMonitor : IDisposable
                 editorAccess = getEditorAccess();
                 if (editorAccess is null || !IsSameTrackedEditor(editorAccess.Element))
                 {
+                    if (TryConfirmFromOutgoingMessage("editor-identity-changed", confirmAttempt)) return false;
                     confirmationReadFailureCount++;
                     Log("submit_confirmation_editor_mismatch", "reason=target-or-editor-identity-changed",
                         confirmationReadFailureCount, candidate.Id);
@@ -883,6 +898,7 @@ internal sealed class AutoDictionaryLearningMonitor : IDisposable
                     editorAccess = getEditorAccess();
                     if (editorAccess is null || !IsSameTrackedEditor(editorAccess.Element))
                     {
+                        if (TryConfirmFromOutgoingMessage("editor-identity-changed", confirmAttempt)) return false;
                         confirmationReadFailureCount++;
                         clearEvidence = "rebound-editor-identity-mismatch";
                         continue;
@@ -890,6 +906,7 @@ internal sealed class AutoDictionaryLearningMonitor : IDisposable
                     if (!TryReadText(editorAccess.Element, editorAccess.TextPattern, editorAccess.ValuePattern,
                             out afterSubmit, out var reboundReadState))
                     {
+                        if (TryConfirmFromOutgoingMessage("editor-unreadable", confirmAttempt)) return false;
                         confirmationReadFailureCount++;
                         clearEvidence = $"rebind-read-failed:{reboundReadState}";
                         continue;
@@ -898,6 +915,7 @@ internal sealed class AutoDictionaryLearningMonitor : IDisposable
                 }
                 else
                 {
+                    if (TryConfirmFromOutgoingMessage("editor-unavailable", confirmAttempt)) return false;
                     confirmationReadFailureCount++;
                     clearEvidence = readState;
                     continue;
@@ -918,7 +936,12 @@ internal sealed class AutoDictionaryLearningMonitor : IDisposable
             var contentCleared = IsTrackedRangeCleared(afterSubmit, out var evidence);
             observedChangedText |= editorChanged;
             observedClearedText |= contentCleared;
-            if (!editorChanged || !contentCleared) continue;
+            if (!editorChanged || !contentCleared)
+            {
+                var stateReason = !editorChanged ? "field-unchanged" : "tracked-range-not-cleared";
+                if (TryConfirmFromOutgoingMessage(stateReason, confirmationReadCount)) return false;
+                continue;
+            }
 
             var editorWasRecreated = snapshot.EditorRuntimeId is null || editorAccess.RuntimeId is null ||
                                      !string.Equals(snapshot.EditorRuntimeId, editorAccess.RuntimeId,
@@ -939,37 +962,7 @@ internal sealed class AutoDictionaryLearningMonitor : IDisposable
             }
 
             clearEvidence = evidence;
-            var accepted = false;
-            lock (_snapshotLock)
-            {
-                if (_submissionCompleted == 0 && _latestCandidateId == candidate.Id)
-                {
-                    _submissionCompleted = 1;
-                    ClearPendingSubmission(candidate.Id);
-                    accepted = true;
-                }
-            }
-            if (!accepted)
-            {
-                Log("submit_candidate_superseded", "newer-candidate-arrived-before-confirmation",
-                    confirmationReadCount, candidate.Id);
-                return false;
-            }
-
-            Log("submission_confirmed",
-                $"source={candidate.Source};evidence={clearEvidence};snapshot={SnapshotDescription(snapshot)};read={readState}",
-                confirmationReadCount, candidate.Id);
-            if (!correction)
-            {
-                ReportStatus("submitted_without_correction", "手修正が見つからなかったため、辞書は変更していません。",
-                    $"candidate={candidate.Id};evidence={clearEvidence}", confirmationReadCount, candidate.Id);
-                return false;
-            }
-
-            ReportStatus("submission_ready_for_learning", "送信を確認しました。修正候補を判定しています。",
-                $"candidate={candidate.Id};evidence={clearEvidence}", confirmationReadCount, candidate.Id);
-            SubmissionConfirmed?.Invoke(this,
-                new DictionaryCorrectionSubmission(_originalSegment, snapshot.Segment, _monitorId, candidate.Id));
+            CompleteConfirmedSubmission(candidate, correction, clearEvidence, readState, confirmationReadCount);
             return false;
         }
 
@@ -999,6 +992,46 @@ internal sealed class AutoDictionaryLearningMonitor : IDisposable
             confirmationReadCount + confirmationReadFailureCount, candidate.Id);
         ClearPendingSubmission(candidate.Id);
         return false;
+    }
+
+    private void CompleteConfirmedSubmission(
+        SubmitCandidate candidate,
+        bool correction,
+        string evidence,
+        string readState,
+        int confirmationReadCount)
+    {
+        var accepted = false;
+        lock (_snapshotLock)
+        {
+            if (_submissionCompleted == 0 && _latestCandidateId == candidate.Id)
+            {
+                _submissionCompleted = 1;
+                ClearPendingSubmission(candidate.Id);
+                accepted = true;
+            }
+        }
+        if (!accepted)
+        {
+            Log("submit_candidate_superseded", "newer-candidate-arrived-before-confirmation",
+                confirmationReadCount, candidate.Id);
+            return;
+        }
+
+        Log("submission_confirmed",
+            $"source={candidate.Source};evidence={evidence};snapshot={SnapshotDescription(candidate.Snapshot)};read={readState}",
+            confirmationReadCount, candidate.Id);
+        if (!correction)
+        {
+            ReportStatus("submitted_without_correction", "手修正が見つからなかったため、辞書は変更していません。",
+                $"candidate={candidate.Id};evidence={evidence}", confirmationReadCount, candidate.Id);
+            return;
+        }
+
+        ReportStatus("submission_ready_for_learning", "送信を確認しました。修正候補を判定しています。",
+            $"candidate={candidate.Id};evidence={evidence}", confirmationReadCount, candidate.Id);
+        SubmissionConfirmed?.Invoke(this,
+            new DictionaryCorrectionSubmission(_originalSegment, candidate.Snapshot.Segment, _monitorId, candidate.Id));
     }
 
     private bool HasPendingSubmissionIntent()
@@ -1638,7 +1671,6 @@ internal sealed class AutoDictionaryLearningMonitor : IDisposable
                 try
                 {
                     var current = element.Current;
-                    if (current.IsOffscreen) continue;
                     if (current.ControlType != ControlType.Text &&
                         current.ControlType != ControlType.Group &&
                         current.ControlType != ControlType.ListItem &&
@@ -1661,6 +1693,19 @@ internal sealed class AutoDictionaryLearningMonitor : IDisposable
         return result;
     }
 
+    private Dictionary<string, string> CaptureInitialReadOnlyTextElementDigests(EditorBinding binding)
+    {
+        var result = CaptureReadOnlyTextElementDigests(binding.DocumentRoot, binding.RuntimeId);
+        try
+        {
+            var windowRoot = AutomationElement.FromHandle(_targetWindow);
+            foreach (var pair in CaptureReadOnlyTextElementDigests(windowRoot, binding.RuntimeId))
+                result.TryAdd(pair.Key, pair.Value);
+        }
+        catch (Exception ex) when (IsAutomationFailure(ex) || ex is ObjectDisposedException) { }
+        return result;
+    }
+
     private bool HasNewOutgoingTextEvidence(string expectedText, out string evidence)
     {
         var normalizedExpected = NormalizePlaceholderText(expectedText);
@@ -1671,48 +1716,73 @@ internal sealed class AutoDictionaryLearningMonitor : IDisposable
             evidence = "submitted-text-too-short";
             return false;
         }
-        if (currentBinding?.DocumentRoot is null)
+        if (baselineDigests.Count == 0)
         {
-            evidence = "tracked-document-anchor-unavailable";
+            evidence = "outgoing-baseline-unavailable";
+            return false;
+        }
+
+        var roots = new List<AutomationElement>(2);
+        if (currentBinding?.DocumentRoot is { } documentRoot)
+            roots.Add(documentRoot);
+        try
+        {
+            var windowRoot = AutomationElement.FromHandle(_targetWindow);
+            if (!roots.Any(root => AreSameAutomationElement(root, windowRoot)))
+                roots.Add(windowRoot);
+        }
+        catch (Exception ex) when (IsAutomationFailure(ex) || ex is ObjectDisposedException) { }
+        if (roots.Count == 0)
+        {
+            evidence = "tracked-window-anchor-unavailable";
             return false;
         }
 
         try
         {
-            foreach (var element in EnumerateWindowElements(currentBinding.DocumentRoot, MaxAutomationSearchNodes,
-                         MaxAutomationTreeDepth))
+            foreach (var root in roots)
             {
-                try
+                foreach (var element in EnumerateWindowElements(root, MaxAutomationSearchNodes,
+                             MaxAutomationTreeDepth))
                 {
-                    var current = element.Current;
-                    if (current.IsOffscreen) continue;
-                    if (current.ControlType != ControlType.Text &&
-                        current.ControlType != ControlType.Group &&
-                        current.ControlType != ControlType.ListItem &&
-                        current.ControlType != ControlType.Custom)
-                        continue;
-                    var runtimeId = GetRuntimeId(element);
-                    if (runtimeId is null ||
-                        string.Equals(runtimeId, currentBinding?.RuntimeId, StringComparison.Ordinal))
-                        continue;
-                    if (element.TryGetCurrentPattern(ValuePattern.Pattern, out var value) &&
-                        value is ValuePattern valuePattern && !valuePattern.Current.IsReadOnly)
-                        continue;
-
-                    var renderedText = ReadRenderedTextForEvidence(element, current);
-                    if (renderedText.Length > MaxDocumentLength) continue;
-                    var digest = ComputeTextDigest(renderedText);
-                    if (baselineDigests.TryGetValue(runtimeId, out var baselineDigest) &&
-                        string.Equals(digest, baselineDigest, StringComparison.Ordinal))
-                        continue;
-                    if (string.Equals(NormalizePlaceholderText(renderedText), normalizedExpected,
-                            StringComparison.OrdinalIgnoreCase))
+                    try
                     {
-                        evidence = "new-readonly-text-node-contains-submitted-correction";
-                        return true;
+                        if (!IsWithinWindow(element, _targetWindow)) continue;
+                        var trackedIdentity = _trackedEditorIdentity;
+                        var hasDocumentScope = currentBinding?.DocumentRoot is not null ||
+                                               trackedIdentity?.DocumentRuntimeId is not null;
+                        if (hasDocumentScope && !IsWithinDocumentScope(element,
+                                trackedIdentity?.DocumentRuntimeId, currentBinding?.DocumentRoot))
+                            continue;
+                        var current = element.Current;
+                        if (current.IsOffscreen) continue;
+                        if (current.ControlType != ControlType.Text &&
+                            current.ControlType != ControlType.Group &&
+                            current.ControlType != ControlType.ListItem &&
+                            current.ControlType != ControlType.Custom)
+                            continue;
+                        var runtimeId = GetRuntimeId(element);
+                        if (runtimeId is null ||
+                            string.Equals(runtimeId, currentBinding?.RuntimeId, StringComparison.Ordinal))
+                            continue;
+                        if (element.TryGetCurrentPattern(ValuePattern.Pattern, out var value) &&
+                            value is ValuePattern valuePattern && !valuePattern.Current.IsReadOnly)
+                            continue;
+
+                        var renderedText = ReadRenderedTextForEvidence(element, current);
+                        if (renderedText.Length > MaxDocumentLength) continue;
+                        var digest = ComputeTextDigest(renderedText);
+                        if (baselineDigests.TryGetValue(runtimeId, out var baselineDigest) &&
+                            string.Equals(digest, baselineDigest, StringComparison.Ordinal))
+                            continue;
+                        if (ContainsSubmittedText(renderedText, normalizedExpected))
+                        {
+                            evidence = "new-readonly-text-node-contains-submitted-correction";
+                            return true;
+                        }
                     }
+                    catch (Exception ex) when (IsAutomationFailure(ex) || ex is ObjectDisposedException) { }
                 }
-                catch (Exception ex) when (IsAutomationFailure(ex) || ex is ObjectDisposedException) { }
             }
         }
         catch (Exception ex) when (IsAutomationFailure(ex) || ex is ObjectDisposedException) { }
@@ -1725,13 +1795,29 @@ internal sealed class AutoDictionaryLearningMonitor : IDisposable
         AutomationElement element,
         AutomationElement.AutomationElementInformation current)
     {
-        var renderedText = current.Name ?? string.Empty;
-        if (renderedText.Length > 0) return renderedText;
+        var name = current.Name ?? string.Empty;
         if (!element.TryGetCurrentPattern(TextPattern.Pattern, out var textValue) ||
             textValue is not TextPattern textPattern)
-            return string.Empty;
-        try { return textPattern.DocumentRange.GetText(MaxDocumentLength + 1); }
-        catch (Exception ex) when (IsAutomationFailure(ex) || ex is ObjectDisposedException) { return string.Empty; }
+            return name;
+        try
+        {
+            var text = textPattern.DocumentRange.GetText(MaxDocumentLength + 1);
+            if (string.IsNullOrWhiteSpace(name)) return text;
+            if (string.IsNullOrWhiteSpace(text) ||
+                NormalizePlaceholderText(name).Contains(NormalizePlaceholderText(text), StringComparison.Ordinal))
+                return name;
+            return $"{name}\n{text}";
+        }
+        catch (Exception ex) when (IsAutomationFailure(ex) || ex is ObjectDisposedException) { return name; }
+    }
+
+    private static bool ContainsSubmittedText(string renderedText, string normalizedExpected)
+    {
+        var normalizedRendered = NormalizePlaceholderText(renderedText);
+        if (string.Equals(normalizedRendered, normalizedExpected, StringComparison.OrdinalIgnoreCase))
+            return true;
+        return normalizedExpected.Length >= 12 &&
+               normalizedRendered.Contains(normalizedExpected, StringComparison.OrdinalIgnoreCase);
     }
 
     private static string ComputeTextDigest(string value) =>
