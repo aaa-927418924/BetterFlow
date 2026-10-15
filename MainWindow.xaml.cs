@@ -2249,8 +2249,18 @@ public partial class MainWindow : System.Windows.Window
                     }
 
                     var previewParts = segmentStates
-                        .Where(state => TranscriptFormatter.HasMeaningfulText(state.Text))
-                        .Select(state => new TranscriptPreviewPart(state.Text, state.IsVoiceCommand))
+                        .Select(state =>
+                        {
+                            var isLineBreakCommand = state.IsVoiceCommand &&
+                                VoiceCommandParser.TryParseVoiceTextCommand(state.Text, out var command) &&
+                                command == VoiceTextCommand.InsertNewLine;
+                            return new TranscriptPreviewPart(
+                                isLineBreakCommand ? string.Empty : state.Text,
+                                state.IsVoiceCommand,
+                                isLineBreakCommand);
+                        })
+                        .Where(part => part.IsLineBreakCommand ||
+                            TranscriptFormatter.HasMeaningfulText(part.Text))
                         .ToArray();
                     _ = Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Background,
                         new Action(() =>

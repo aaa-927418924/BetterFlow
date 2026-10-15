@@ -41,7 +41,9 @@ public partial class TranscriptPreviewWindow : Window
             return;
         }
 
-        var visibleParts = parts.Where(part => !string.IsNullOrWhiteSpace(part.Text)).ToArray();
+        var visibleParts = parts
+            .Where(part => part.IsLineBreakCommand || !string.IsNullOrWhiteSpace(part.Text))
+            .ToArray();
         if (visibleParts.Length == 0)
         {
             HidePreview();
@@ -52,6 +54,13 @@ public partial class TranscriptPreviewWindow : Window
         string? previousText = null;
         foreach (var part in visibleParts)
         {
+            if (part.IsLineBreakCommand)
+            {
+                PreviewText.Inlines.Add(new LineBreak());
+                previousText = null;
+                continue;
+            }
+
             if (previousText is not null && NeedsAsciiWordSeparator(previousText, part.Text))
                 PreviewText.Inlines.Add(new Run(" ") { Foreground = RegularTextBrush });
 
@@ -107,4 +116,7 @@ public partial class TranscriptPreviewWindow : Window
     private static extern IntPtr SetWindowLongPtr(IntPtr handle, int index, IntPtr value);
 }
 
-internal sealed record TranscriptPreviewPart(string Text, bool IsVoiceCommand);
+internal sealed record TranscriptPreviewPart(
+    string Text,
+    bool IsVoiceCommand,
+    bool IsLineBreakCommand = false);
