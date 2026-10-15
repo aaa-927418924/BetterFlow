@@ -626,3 +626,21 @@
 - 変更（分類: ChatGPT Desktop送信確認、出典: `Services/AutoDictionaryLearningMonitor.cs`、確認日: 2026-10-15 Asia/Tokyo、信頼度: ソース/ビルド結果は高、実アプリ再テストは未確認）: 無名のボタンでも、追跡中の編集欄と同じ限定コンポーザー内にあり、右下側の有効ボタンとUIAで確認できたクリックだけを候補化する。構造から推定したクリックは入力欄のクリアに加え、新しく表示された送信文との一致を必須にする。Enter候補と別経路のクリックを重複扱いで捨てず、実際にボタンが押された場合はその候補で確認する。送信表示の走査では対象文書内の走査後に文書部分を除外したウィンドウ範囲も確認し、Documentルートの変化と走査数を本文なしで記録する。失敗時に現れる本文なしの理由ログを詳しくした。待ち時間上限は変更していない。
 - ビルド/発行: Release buildとwin-x64単体EXE publishが成功（0エラー、NU1900はNuGet脆弱性情報サービスへ接続できなかった警告）。発行物と`dist/Better Flow.exe`は82,477,268 bytes、SHA-256 `A2CF7E5F3241627A2D70BE6EF5EF544BDB5EC9E1BCE68F8A2BCBD008D12DC62C`で一致。旧EXEは`artifacts/BetterFlow-before-chatgpt-desktop-dictionary-confirmation-20261015.exe`へ退避（82,476,407 bytes、SHA-256 `95B4C8994230E55724A413A3BEE0E468CF161E9F13618B22FD6BCFA8CFE8F346`）。置換前に、配布EXEと実行パスが完全一致するPID 6408だけを停止した。
 - 確認範囲: テストスイートとChatGPT Desktopへの実送信は実行していない。コンパイル、発行、配布先とのSHA-256一致を確認済み。実装前チェックポイントは`81fa355`、ソース実装コミットは`b7206ff`。
+
+## 音声入力中のDiscord自動ミュート（2026-10-15、提案・未実装）
+
+- 目的: Better Flowがマイクを使っている間だけ、Discord Desktopへの音声送信を止める。Windowsのマイク全体をミュートするとBetter Flow自身の録音も止まるため、システム入力デバイスのミュートは使わない。
+- 現状: `MainWindow.xaml.cs`は通常録音を`MicrophoneRecorder`、選択文編集・質問・送信音声コマンド監視を`ContinuousMicrophoneRecorder`で行う。GPT Live質問は`GptLiveQuestionSession`が独自に音声を使う。設定には既定マイク選択があり、`Services/AppSettings.cs`で保存する。
+- 技術方針: Discord公式ヘルプにある「Push To Mute」のキーをBetter Flowから押下・保持し、マイク利用終了時に解放する方式を第一候補にする。Discordの「Toggle Mute」は初期状態や手動変更でミュート状態を反転させる恐れがあるため使わない。公式資料はPush To Mute解放後に事前の手動ミュート状態が保持されるかまでは明記していないので、実装前に確認する。Discordのミュート状態とボタン操作をUI Automationから安定して取得できるかも調べ、状態を保てる方法が見つからなければ盲目的な切り替えは実装しない。Push To MuteはDiscordのVoice Activityモード用であることを設定画面に明記する。Discord Social SDKの既存Desktopクライアント音声設定は公式資料上読み取り専用で、取得には承認済み統合が必要なため、制御APIとして前提にしない。WindowsのCore Audioで入力エンドポイントをミュートする方法も、Better Flowを含む同じマイクの利用者に影響し得るため採用しない。
+- 入力方式の制約: DiscordのPush To MuteキーはユーザーがDiscord側で設定し、同じ専用キー組み合わせをBetter Flowにも登録する。Windows `SendInput`でキーを押したままにして解放するが、これはグローバル入力であり、Discord未起動・キー未設定・別アプリとの競合・異なる権限レベルでは機能しない可能性がある。設定は初期状態ではオフにし、キー組み合わせの重複を検出する。設定画面にDiscord側の設定手順、テスト手順、失敗時に音声がDiscordへ届く可能性を明示する。Discord側でミュート状態を確認できない状況を「ミュート済み」と表示しない。
+
+### 実装計画
+
+1. 実装前チェックポイントをGitへコミットする。その前にDiscord DesktopのUI Automationでミュート状態/操作を確実に取得できるか、Push To Muteの押下解放で事前の手動ミュート状態が保たれるかを確認する。どちらも確実でなければ状態を推測して操作せず、実装方法を見直す。
+2. 音声設定に「Discord使用中は自動ミュート」トグルと専用キー組み合わせの入力欄を追加する。DiscordのUser Settings > KeybindsでPush To Muteを設定してから同じキーを登録する案内を表示し、Better Flowショートカットとの競合を拒否する。
+3. ミュート制御を独立サービスとして実装する。音声開始前にDiscord用キーを押下し、同じマイク利用セッションが続く間は保持する。停止時はキーと修飾キーを必ず解放し、開始失敗・例外・キャンセル・通常終了・アプリ終了の全経路で二重操作なく後始末する。複数の録音経路が切り替わるときは参照カウント付きのセッションで一時的な解除を防ぐ。
+4. 通常音声入力、AI整形中の「送信して」監視、選択文編集、選択文質問、GPT Live質問を同じライフサイクルで扱う。マイクを使っていないAI処理中はキーを保持しない。Discordが見つからない場合は通常どおり進行する。Discord起動中で通話状態やミュート成功を確認できない場合は、ミュートできたと誤表示せず録音開始を止めて設定確認を促す。Windowsのマイク全体には触れない。
+5. 手動確認では、DiscordのVoice Activity中に未ミュート状態から録音を始める/終える、最初からミュート状態、途中キャンセル、連続編集、AI処理中の送信コマンド、マイク開始失敗、アプリ終了を確認する。録音開始/終了でDiscordのミュート状態が正確に復元され、Better Flow側の文字起こしが継続することを確認する。手動ミュート状態を保持できない場合は実装を完了扱いにしない。
+6. 実装時はRelease単体EXEをビルドし、対象プロセスを確認して既存EXEを置き換え、ハッシュ一致まで確認する。実装前コミット、配布物、未確認の実機条件を記録する。
+
+- 公開資料（2026-10-15確認）: [Discordのキー割り当て](https://support.discord.com/hc/en-us/articles/217083547-How-do-I-add-different-Keybinds)、[Discord Social SDKのVoiceSettings](https://discord.com/developers/docs/social-sdk/classdiscordpp_1_1VoiceSettings.html)、[Windows SendInput](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-sendinput)、[Windowsの音声エンドポイントミュート](https://learn.microsoft.com/en-us/windows/win32/api/endpointvolume/nf-endpointvolume-iaudioendpointvolume-setmute)。
