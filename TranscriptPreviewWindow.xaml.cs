@@ -1,6 +1,9 @@
 using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Interop;
+using System.Windows.Media;
+using MediaBrushes = System.Windows.Media.Brushes;
+using MediaColor = System.Windows.Media.Color;
 
 namespace BetterFlow;
 
@@ -21,16 +24,29 @@ public partial class TranscriptPreviewWindow : Window
     }
 
     public void ShowPreview(string text)
+        => ShowPreviewCore(text, isVoiceCommand: false);
+
+    public void ShowVoiceCommandPreview(string text)
+        => ShowPreviewCore(text, isVoiceCommand: true);
+
+    private void ShowPreviewCore(string text, bool isVoiceCommand)
     {
         if (!Dispatcher.CheckAccess())
         {
             if (!Dispatcher.HasShutdownStarted && !Dispatcher.HasShutdownFinished)
-                Dispatcher.BeginInvoke(new Action(() => ShowPreview(text)));
+                Dispatcher.BeginInvoke(new Action(() => ShowPreviewCore(text, isVoiceCommand)));
             return;
         }
 
         if (string.IsNullOrWhiteSpace(text)) return;
         PreviewText.Text = text;
+        PreviewHighlight.Background = isVoiceCommand
+            ? new SolidColorBrush(MediaColor.FromRgb(255, 220, 115))
+            : MediaBrushes.Transparent;
+        PreviewHighlight.Padding = isVoiceCommand ? new Thickness(5, 3, 5, 3) : new Thickness(0);
+        PreviewText.Foreground = isVoiceCommand
+            ? new SolidColorBrush(MediaColor.FromRgb(38, 33, 20))
+            : new SolidColorBrush(MediaColor.FromRgb(244, 244, 244));
         if (!IsVisible) Show();
         UpdateLayout();
         Left = Math.Max(0, (SystemParameters.PrimaryScreenWidth - Width) / 2);
@@ -47,6 +63,9 @@ public partial class TranscriptPreviewWindow : Window
             return;
         }
 
+        PreviewHighlight.Background = MediaBrushes.Transparent;
+        PreviewHighlight.Padding = new Thickness(0);
+        PreviewText.Foreground = new SolidColorBrush(MediaColor.FromRgb(244, 244, 244));
         Hide();
     }
 

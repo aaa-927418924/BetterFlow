@@ -244,6 +244,45 @@ internal sealed class MicrophoneRecorder : IDisposable
         }
     }
 
+    public bool TryGetVoiceCommandSnapshot(out float[] samples)
+    {
+        byte[] bytes;
+        lock (_sync)
+        {
+            if (_waveIn is null || !_voiceCommandCaptureActive || _segments is not { Count: > 0 } segments ||
+                !segments[^1].IsVoiceCommand)
+            {
+                samples = Array.Empty<float>();
+                return false;
+            }
+
+            bytes = segments[^1].Audio.ToArray();
+            // Avoid repeatedly decoding the first few microphone frames as speech.
+            if (bytes.Length < 4800 * sizeof(short))
+            {
+                Array.Clear(bytes);
+                samples = Array.Empty<float>();
+                return false;
+            }
+        }
+
+        try
+        {
+            var sampleCount = bytes.Length / sizeof(short);
+            samples = new float[sampleCount];
+            for (var i = 0; i < sampleCount; i++)
+            {
+                var pcm = BinaryPrimitives.ReadInt16LittleEndian(bytes.AsSpan(i * sizeof(short), sizeof(short)));
+                samples[i] = pcm / 32768f;
+            }
+            return true;
+        }
+        finally
+        {
+            Array.Clear(bytes);
+        }
+    }
+
     public void Dispose()
     {
         var recorder = _waveIn;

@@ -55,7 +55,7 @@ internal sealed class GlobalHotkey : IDisposable
     private bool _escapeMonitoring;
     private bool _escapePressed;
     private bool _rightAltPressed;
-    private bool _voiceCommandPushToTalkEnabled;
+    private volatile bool _voiceCommandPushToTalkEnabled;
     private bool _spaceVoiceCommandPressed;
     private bool _leftAltDown;
     private bool _leftControlDown;
@@ -219,10 +219,17 @@ internal sealed class GlobalHotkey : IDisposable
                 if (isKeyDown && _spaceVoiceCommandPressed)
                     return new IntPtr(1);
 
-                if (isKeyDown && _voiceCommandPushToTalkEnabled && !IsAnyModifierDown())
+                // Space is reserved for push-to-talk during ordinary voice recording.
+                // Do not gate it on modifier state: the regular hotkey may itself be
+                // a suppressed Alt key, whose asynchronous state can remain stale.
+                if (isKeyDown && _voiceCommandPushToTalkEnabled)
                 {
                     _spaceVoiceCommandPressed = true;
-                    PostMessage(_handle, VoiceCommandStartMessageId, IntPtr.Zero, IntPtr.Zero);
+                    if (!PostMessage(_handle, VoiceCommandStartMessageId, IntPtr.Zero, IntPtr.Zero))
+                    {
+                        _spaceVoiceCommandPressed = false;
+                        return CallNextHookEx(_keyboardHook, code, wParam, lParam);
+                    }
                     return new IntPtr(1);
                 }
             }

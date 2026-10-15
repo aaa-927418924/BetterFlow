@@ -40,7 +40,7 @@ public partial class MainWindow : System.Windows.Window
     private IntPtr _pasteTarget;
     private bool _isBusy;
     private bool _normalAudioInputActive;
-    private bool _voiceCommandModeActive;
+    private volatile bool _voiceCommandModeActive;
     private bool _rawTranscriptFallbackRequested;
     private bool _closing;
     private bool _hotkeyRegistered;
@@ -60,6 +60,7 @@ public partial class MainWindow : System.Windows.Window
     private Task? _sendCommandListenerTask;
     private CancellationTokenSource? _transcriptPreviewCancellation;
     private Task? _transcriptPreviewTask;
+    private string? _lastRegularTranscriptPreview;
     private IDisposable? _discordMuteLease;
     private long _transcriptPreviewSession;
     private AutoDictionaryLearningMonitor? _autoDictionaryLearningMonitor;
@@ -2185,6 +2186,7 @@ public partial class MainWindow : System.Windows.Window
     {
         if (_asr is null) return;
 
+        _lastRegularTranscriptPreview = null;
         var session = Interlocked.Increment(ref _transcriptPreviewSession);
         var cancellation = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token);
         _transcriptPreviewCancellation = cancellation;
@@ -2195,18 +2197,18 @@ public partial class MainWindow : System.Windows.Window
     {
         try
         {
-            await Task.Delay(TimeSpan.FromSeconds(1), cancellationToken).ConfigureAwait(false);
+            await Task.Delay(TimeSpan.FromMilliseconds(500), cancellationToken).ConfigureAwait(false);
             while (!cancellationToken.IsCancellationRequested)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                if (_voiceCommandModeActive)
+                var isVoiceCommand = _voiceCommandModeActive;
+                var hasSnapshot = isVoiceCommand
+                    ? _recorder.TryGetVoiceCommandSnapshot(out var snapshot)
+                    : _recorder.TryGetRecordingSnapshot(out snapshot);
+                if (!hasSnapshot)
                 {
-                    await Task.Delay(TimeSpan.FromMilliseconds(100), cancellationToken).ConfigureAwait(false);
-                    continue;
-                }
-                if (!_recorder.TryGetRecordingSnapshot(out var snapshot))
-                {
-                    await Task.Delay(TimeSpan.FromMilliseconds(250), cancellationToken).ConfigureAwait(false);
+                    await Task.Delay(isVoiceCommand ? TimeSpan.FromMilliseconds(150) : TimeSpan.FromMilliseconds(250),
+                        cancellationToken).ConfigureAwait(false);
                     continue;
                 }
 
@@ -2224,9 +2226,20 @@ public partial class MainWindow : System.Windows.Window
                         _ = Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Background,
                             new Action(() =>
                             {
-                                if (session == Interlocked.Read(ref _transcriptPreviewSession) &&
-                                    _recorder.IsRecording && !_voiceCommandModeActive && !_closing)
+                                if (session != Interlocked.Read(ref _transcriptPreviewSession) ||
+                                    !_recorder.IsRecording || _closing)
+                                    return;
+
+                                if (isVoiceCommand)
+                                {
+                                    if (_voiceCommandModeActive)
+                                        _transcriptPreviewWindow.ShowVoiceCommandPreview(transcript);
+                                }
+                                else if (!_voiceCommandModeActive)
+                                {
+                                    _lastRegularTranscriptPreview = transcript;
                                     _transcriptPreviewWindow.ShowPreview(transcript);
+                                }
                             }));
                     }
                 }
@@ -2236,15 +2249,32 @@ public partial class MainWindow : System.Windows.Window
                     Array.Clear(snapshot);
                 }
 
-                var nextDelay = TimeSpan.FromMilliseconds(Math.Clamp(
-                    inferenceTimer.Elapsed.TotalMilliseconds * 2, 1500, 10000));
-                await Task.Delay(nextDelay, cancellationToken).ConfigureAwait(false);
+                var nextDelay = isVoiceCommand
+                    ? TimeSpan.FromMilliseconds(Math.Clamp(inferenceTimer.Elapsed.TotalMilliseconds * 0.75, 700, 1500))
+                    : TimeSpan.FromMilliseconds(Math.Clamp(inferenceTimer.Elapsed.TotalMilliseconds * 2, 1500, 10000));
+                await DelayUntilPreviewOrModeChangeAsync(nextDelay, isVoiceCommand, cancellationToken)
+                    .ConfigureAwait(false);
             }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { }
         catch
         {
             // Preview is best-effort. The final full-recording decode remains authoritative.
+        }
+    }
+
+    private async Task DelayUntilPreviewOrModeChangeAsync(
+        TimeSpan delay,
+        bool isVoiceCommand,
+        CancellationToken cancellationToken)
+    {
+        var remaining = delay;
+        var pollInterval = TimeSpan.FromMilliseconds(100);
+        while (remaining > TimeSpan.Zero && _voiceCommandModeActive == isVoiceCommand)
+        {
+            var wait = remaining < pollInterval ? remaining : pollInterval;
+            await Task.Delay(wait, cancellationToken).ConfigureAwait(false);
+            remaining -= wait;
         }
     }
 
@@ -2667,8 +2697,18 @@ public partial class MainWindow : System.Windows.Window
 
     private void BeginVoiceCommandCapture()
     {
-        if (!_normalAudioInputActive || !_recorder.IsRecording || _isBusy || _voiceCommandModeActive)
+        if (_voiceCommandModeActive)
             return;
+
+        if (!_normalAudioInputActive || !_recorder.IsRecording)
+        {
+            if (_normalAudioInputActive && !_closing)
+            {
+                RuntimeStatus.Text = "音声コマンドを開始できませんでした。通常の音声録音が続いているか確認してください。";
+                _indicator.ShowStatus("コマンド開始失敗", TimeSpan.FromSeconds(1));
+            }
+            return;
+        }
 
         try
         {
@@ -2697,6 +2737,10 @@ public partial class MainWindow : System.Windows.Window
         {
             RuntimeStatus.Text = "録音中 · Space長押しで音声コマンド · ショートカットで停止";
             _indicator.ShowStatus("録音中");
+            if (!string.IsNullOrWhiteSpace(_lastRegularTranscriptPreview))
+                _transcriptPreviewWindow.ShowPreview(_lastRegularTranscriptPreview);
+            else
+                _transcriptPreviewWindow.HidePreview();
         }
     }
 
