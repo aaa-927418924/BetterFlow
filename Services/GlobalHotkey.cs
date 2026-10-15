@@ -17,12 +17,14 @@ internal readonly record struct HotkeyBinding(uint Modifiers, uint VirtualKey)
 internal sealed class GlobalHotkey : IDisposable
 {
     public const int MessageId = 0x0312;
+    public const int EscapeCancelMessageId = 0x8000 + 0x150;
     private const int HotkeyId = 0x4150;
     private const int WhKeyboardLl = 13;
     private const int WmKeyDown = 0x0100;
     private const int WmKeyUp = 0x0101;
     private const int WmSysKeyDown = 0x0104;
     private const int WmSysKeyUp = 0x0105;
+    private const int VkEscape = 0x1B;
     private const uint LlkhfExtended = 0x01;
     private const uint LlkhfInjected = 0x10;
     private const uint ModAlt = 0x0001;
@@ -47,6 +49,8 @@ internal sealed class GlobalHotkey : IDisposable
     private LowLevelKeyboardProc? _keyboardProc;
     private bool _registeredAsHotkey;
     private bool _registered;
+    private bool _escapeMonitoring;
+    private bool _escapePressed;
     private bool _rightAltPressed;
     private bool _leftAltDown;
     private bool _leftControlDown;
@@ -73,9 +77,7 @@ internal sealed class GlobalHotkey : IDisposable
             _rightShiftDown = IsKeyDown(VkRShift);
             _leftWindowsDown = IsKeyDown(VkLWin);
             _rightWindowsDown = IsKeyDown(VkRWin);
-            _keyboardProc = KeyboardHookCallback;
-            var module = GetModuleHandle(null);
-            _keyboardHook = SetWindowsHookEx(WhKeyboardLl, _keyboardProc, module, 0);
+            InstallKeyboardHook();
             _registered = _keyboardHook != IntPtr.Zero;
             return _registered;
         }
@@ -96,6 +98,8 @@ internal sealed class GlobalHotkey : IDisposable
         _keyboardHook = IntPtr.Zero;
         _keyboardProc = null;
         _registered = false;
+        _escapeMonitoring = false;
+        _escapePressed = false;
         _rightAltPressed = false;
         _leftAltDown = false;
         _leftControlDown = false;
@@ -107,6 +111,19 @@ internal sealed class GlobalHotkey : IDisposable
     }
 
     public bool IsMessage(int id) => id == HotkeyId;
+
+    public bool IsEscapeCancelMessage(int message) => message == EscapeCancelMessageId;
+
+    public bool SetEscapeMonitoring(bool enabled)
+    {
+        _escapeMonitoring = enabled;
+        if (enabled)
+            return InstallKeyboardHook();
+
+        if (!_binding.IsStandaloneRightAlt)
+            RemoveKeyboardHook();
+        return true;
+    }
 
     public static string Format(HotkeyBinding binding)
     {
@@ -141,12 +158,34 @@ internal sealed class GlobalHotkey : IDisposable
 
     private IntPtr KeyboardHookCallback(int code, IntPtr wParam, IntPtr lParam)
     {
-        if (code >= 0 && _binding.IsStandaloneRightAlt)
+        if (code >= 0)
         {
             var message = wParam.ToInt32();
             var keyInfo = Marshal.PtrToStructure<KeyboardData>(lParam);
             var isKeyDown = message is WmKeyDown or WmSysKeyDown;
             var isKeyUp = message is WmKeyUp or WmSysKeyUp;
+
+            if (keyInfo.VirtualKey == VkEscape)
+            {
+                if (isKeyDown && !_escapePressed)
+                {
+                    _escapePressed = true;
+                    if (_escapeMonitoring
+                        && (keyInfo.Flags & LlkhfInjected) == 0
+                        && !IsAnyModifierDown())
+                    {
+                        PostMessage(_handle, EscapeCancelMessageId, IntPtr.Zero, IntPtr.Zero);
+                    }
+                }
+                else if (isKeyUp)
+                {
+                    _escapePressed = false;
+                }
+            }
+
+            if (!_binding.IsStandaloneRightAlt)
+                return CallNextHookEx(_keyboardHook, code, wParam, lParam);
+
             if (IsRightAltKey(keyInfo))
             {
                 if (isKeyDown && !IsOtherModifierDown())
@@ -171,6 +210,30 @@ internal sealed class GlobalHotkey : IDisposable
 
         return CallNextHookEx(_keyboardHook, code, wParam, lParam);
     }
+
+    private bool InstallKeyboardHook()
+    {
+        if (_keyboardHook != IntPtr.Zero)
+            return true;
+
+        _keyboardProc = KeyboardHookCallback;
+        var module = GetModuleHandle(null);
+        _keyboardHook = SetWindowsHookEx(WhKeyboardLl, _keyboardProc, module, 0);
+        return _keyboardHook != IntPtr.Zero;
+    }
+
+    private void RemoveKeyboardHook()
+    {
+        if (_keyboardHook != IntPtr.Zero)
+            UnhookWindowsHookEx(_keyboardHook);
+        _keyboardHook = IntPtr.Zero;
+        _keyboardProc = null;
+        _escapePressed = false;
+    }
+
+    private static bool IsAnyModifierDown() =>
+        IsKeyDown(VkLMenu) || IsKeyDown(VkMenu) || IsKeyDown(VkControl) || IsKeyDown(VkShift)
+        || IsKeyDown(VkLWin) || IsKeyDown(VkRWin);
 
     private bool IsOtherModifierDown() =>
         _leftAltDown || _leftControlDown || _rightControlDown

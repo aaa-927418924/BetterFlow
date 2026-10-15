@@ -38,6 +38,8 @@ public partial class MainWindow : System.Windows.Window
     private HwndSource? _source;
     private IntPtr _pasteTarget;
     private bool _isBusy;
+    private bool _normalAudioInputActive;
+    private bool _rawTranscriptFallbackRequested;
     private bool _closing;
     private bool _hotkeyRegistered;
     private bool _windowMessageHookAttached;
@@ -51,6 +53,7 @@ public partial class MainWindow : System.Windows.Window
     private bool _loadingMicrophoneDeviceUi;
     private bool _openCodeReady;
     private string? _recordingPrecedingTextContext;
+    private string? _pendingRawTranscriptFallback;
     private CancellationTokenSource? _audioProcessingCancellation;
     private Task? _sendCommandListenerTask;
     private CancellationTokenSource? _transcriptPreviewCancellation;
@@ -196,6 +199,8 @@ public partial class MainWindow : System.Windows.Window
         }
         if (_isBusy)
         {
+            if (HandleNormalAudioProcessingShortcut())
+                return;
             await CancelAudioProcessingAsync();
             return;
         }
@@ -1785,6 +1790,11 @@ public partial class MainWindow : System.Windows.Window
 
                 var selectedInput = MicrophoneDeviceCombo.SelectedItem as AudioInputDeviceOption;
                 StartRecorderWithDiscordMute(_recorder.Start, selectedInput);
+                _normalAudioInputActive = true;
+                _pendingRawTranscriptFallback = null;
+                _rawTranscriptFallbackRequested = false;
+                if (!_hotkey.SetEscapeMonitoring(true))
+                    RuntimeStatus.Text = "録音中です。Escapeキャンセルを登録できませんでした。";
                 StartTranscriptPreview();
                 _activationSoundPlayer.Play();
                 ActionButton.Content = "録音を停止して変換";
@@ -1795,7 +1805,11 @@ public partial class MainWindow : System.Windows.Window
             catch (Exception ex)
             {
                 if (!_recorder.IsRecording)
+                {
+                    _normalAudioInputActive = false;
+                    _hotkey.SetEscapeMonitoring(false);
                     _recordingPrecedingTextContext = null;
+                }
                 if (!_recorder.IsRecording && !_continuousRecorder.IsRecording)
                     ReleaseDiscordMuteForAudioSession();
                 RuntimeStatus.Text = ex.Message;
@@ -2006,6 +2020,78 @@ public partial class MainWindow : System.Windows.Window
 
         _indicator.ShowStatus("キャンセル中");
         audioCancellation.Cancel();
+    }
+
+    private bool HandleNormalAudioProcessingShortcut()
+    {
+        if (!_normalAudioInputActive)
+            return false;
+
+        if (string.IsNullOrWhiteSpace(_pendingRawTranscriptFallback))
+        {
+            RuntimeStatus.Text = "文字起こしが終わるまでお待ちください。";
+            _indicator.ShowStatus("認識中");
+            return true;
+        }
+
+        if (_audioProcessingCancellation is not { IsCancellationRequested: false } cancellation)
+            return true;
+
+        _rawTranscriptFallbackRequested = true;
+        RuntimeStatus.Text = "AI整形を止めて、文字起こしを入力欄へ反映しています…";
+        _indicator.ShowStatus("文字起こしを反映");
+        cancellation.Cancel();
+        return true;
+    }
+
+    private async Task HandleEscapeCancellationAsync()
+    {
+        try
+        {
+            if (!_normalAudioInputActive)
+                return;
+
+            if (_audioProcessingCancellation is { } processingCancellation)
+            {
+                _rawTranscriptFallbackRequested = false;
+                if (!processingCancellation.IsCancellationRequested)
+                    await CancelAudioProcessingAsync();
+                else
+                    _indicator.ShowStatus("キャンセルしました", TimeSpan.FromSeconds(1));
+                return;
+            }
+
+            if (!_recorder.IsRecording)
+                return;
+
+            _normalAudioInputActive = false;
+            _pendingRawTranscriptFallback = null;
+            _hotkey.SetEscapeMonitoring(false);
+            CancelTranscriptPreview();
+            float[]? samples = null;
+            try { samples = await _recorder.StopAsync(CancellationToken.None); }
+            catch { }
+            await StopTranscriptPreviewAsync();
+            if (samples is not null) Array.Clear(samples);
+            _recordingPrecedingTextContext = null;
+            ReleaseDiscordMuteForAudioSession();
+            if (!_closing)
+            {
+                _transcriptPreviewWindow.HidePreview();
+                ActionButton.Content = "録音を開始";
+                RuntimeStatus.Text = "音声入力をキャンセルしました。";
+                _indicator.ShowStatus("キャンセルしました", TimeSpan.FromSeconds(1));
+                UpdateAiModeDisplay();
+            }
+        }
+        catch (Exception ex)
+        {
+            if (!_closing)
+            {
+                RuntimeStatus.Text = "Escapeでのキャンセルに失敗しました。 " + ex.Message;
+                _indicator.ShowStatus("キャンセル失敗", TimeSpan.FromSeconds(1));
+            }
+        }
     }
 
     private void BeginSelectionEditSession(SelectionEditContext context)
@@ -2603,6 +2689,7 @@ public partial class MainWindow : System.Windows.Window
                 if (!TranscriptFormatter.HasMeaningfulText(transcript))
                     throw new InvalidDataException("送信コマンドの前に文章がありません。入力欄は変更していません。");
             }
+            _pendingRawTranscriptFallback = transcript;
             _transcriptPreviewWindow.ShowPreview(transcript);
 
             string text;
@@ -2706,7 +2793,37 @@ public partial class MainWindow : System.Windows.Window
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-            if (_closing) _indicator.HideStatus();
+            if (_rawTranscriptFallbackRequested
+                && !_closing
+                && !string.IsNullOrWhiteSpace(_pendingRawTranscriptFallback))
+            {
+                if (sendCommandListenerTask is not null)
+                {
+                    await StopSendCommandMonitorAsync(sendCommandListenerTask);
+                    if (ReferenceEquals(_sendCommandListenerTask, sendCommandListenerTask))
+                        _sendCommandListenerTask = null;
+                    sendCommandListenerTask = null;
+                }
+
+                if (!_rawTranscriptFallbackRequested)
+                {
+                    _indicator.ShowStatus("キャンセルしました", TimeSpan.FromSeconds(1));
+                    return;
+                }
+
+                var rawTranscript = _pendingRawTranscriptFallback;
+                var pasted = PasteAndShow(rawTranscript, "文字起こしを入力欄へ貼り付けました。");
+                if (pasted)
+                {
+                    StartAutoDictionaryLearningMonitor(rawTranscript);
+                    _indicator.ShowStatus("文字起こしを反映", TimeSpan.FromSeconds(1));
+                }
+                else
+                {
+                    _indicator.ShowStatus("文字起こしをコピー", TimeSpan.FromSeconds(1));
+                }
+            }
+            else if (_closing) _indicator.HideStatus();
             else _indicator.ShowStatus("キャンセルしました", TimeSpan.FromSeconds(1));
         }
         catch (Exception ex)
@@ -2731,6 +2848,10 @@ public partial class MainWindow : System.Windows.Window
             if (ReferenceEquals(_audioProcessingCancellation, processingCancellation))
                 _audioProcessingCancellation = null;
             processingCancellation.Dispose();
+            _normalAudioInputActive = false;
+            _rawTranscriptFallbackRequested = false;
+            _pendingRawTranscriptFallback = null;
+            _hotkey.SetEscapeMonitoring(false);
             _isBusy = false;
             ActionButton.IsEnabled = true;
             ActionButton.Content = "録音を開始";
@@ -3116,6 +3237,13 @@ public partial class MainWindow : System.Windows.Window
 
     private IntPtr WindowMessageHook(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
     {
+        if (_hotkey.IsEscapeCancelMessage(msg))
+        {
+            handled = true;
+            _ = HandleEscapeCancellationAsync();
+            return IntPtr.Zero;
+        }
+
         if (msg == GlobalHotkey.MessageId && _hotkey.IsMessage(wParam.ToInt32()))
         {
             handled = true;
