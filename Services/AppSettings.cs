@@ -9,7 +9,7 @@ internal sealed class AppSettings
     public string SelectionEditEngine { get; set; } = "opencode";
     public string SelectedTextAnswerMode { get; set; } = "opencode";
     public string OpenCodeModelProviderId { get; set; } = "opencode";
-    public string OpenCodeModelId { get; set; } = "muse-spark-1.3-contributor-free";
+    public string OpenCodeModelId { get; set; } = "deepseek-v4.1-flash-free";
     public List<CorrectionDictionaryEntry> CorrectionDictionary { get; set; } = new();
     public List<DictionaryLearningEvidence> PendingDictionaryLearning { get; set; } = new();
     public List<string> SuppressedAutomaticDictionaryTerms { get; set; } = new();

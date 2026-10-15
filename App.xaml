@@ -32,6 +32,11 @@
                        TextTrimming="None" />
         </DataTemplate>
 
+        <DataTemplate x:Key="DarkDropdownItemContentTemplate">
+            <TextBlock Text="{Binding}"
+                       Foreground="{Binding Foreground, RelativeSource={RelativeSource AncestorType={x:Type ComboBoxItem}}, FallbackValue={StaticResource TextBrush}}" />
+        </DataTemplate>
+
         <Style x:Key="DarkDropdownItemStyle" TargetType="ComboBoxItem">
             <Setter Property="Background" Value="#333333" />
             <Setter Property="Foreground" Value="#F4F4F4" />

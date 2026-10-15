@@ -169,9 +169,13 @@
                                       SelectionChanged="SelectedTextAnswerModeCombo_SelectionChanged"
                                       AutomationProperties.Name="選択文章への回答方法">
                                 <ComboBoxItem Content="OpenCodeのテキスト回答" Tag="opencode"
-                                              Style="{StaticResource DarkDropdownItemStyle}" />
+                                              ContentTemplate="{StaticResource DarkDropdownItemContentTemplate}"
+                                              Style="{StaticResource DarkDropdownItemStyle}"
+                                              AutomationProperties.Name="OpenCodeのテキスト回答" />
                                 <ComboBoxItem Content="GPT Liveの音声会話" Tag="gpt-live"
-                                              Style="{StaticResource DarkDropdownItemStyle}" />
+                                              ContentTemplate="{StaticResource DarkDropdownItemContentTemplate}"
+                                              Style="{StaticResource DarkDropdownItemStyle}"
+                                              AutomationProperties.Name="GPT Liveの音声会話" />
                             </ComboBox>
                             <TextBlock Text="GPT LiveにはChatGPTサブスクリプションが必要です。"
                                        FontSize="11" Foreground="{StaticResource MutedBrush}"

@@ -24,7 +24,7 @@ Text refinement is always enabled. Better Flow uses the same user profile as Ope
 
 The initial setup requires an internet connection and approximately 1.2 GB of free space for the Parakeet model. The model is not bundled with the EXE; it is downloaded during setup.
 
-If OpenCode is already available on your PATH, Better Flow uses that installation first. Otherwise, it installs the official Windows x64 baseline release into the application's data folder. The default model ID is `opencode/muse-spark-1.3-contributor-free`. Available models and authentication requirements depend on OpenCode's offerings.
+If OpenCode is already available on your PATH, Better Flow uses that installation first. Otherwise, it installs the official Windows x64 baseline release into the application's data folder. The default model ID for a new setup is `opencode/deepseek-v4.1-flash-free`. Existing model selections are preserved. Available models and authentication requirements depend on OpenCode's offerings.
 
 After setup, Better Flow starts in the system tray without opening the settings window. Double-click the tray icon to open settings. Closing the window keeps the app running in the background. To exit completely or toggle startup with Windows, use the tray icon's right-click menu.
 

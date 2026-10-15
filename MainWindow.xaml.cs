@@ -670,7 +670,7 @@ public partial class MainWindow : System.Windows.Window
             else if (string.IsNullOrWhiteSpace(_settings.OpenCodeModelId))
             {
                 _settings.OpenCodeModelProviderId = "opencode";
-                _settings.OpenCodeModelId = "muse-spark-1.3-contributor-free";
+                _settings.OpenCodeModelId = "deepseek-v4.1-flash-free";
             }
 
             _settings.LegacyAiProviderId = null;
@@ -693,7 +693,7 @@ public partial class MainWindow : System.Windows.Window
         }
         if (string.IsNullOrWhiteSpace(_settings.OpenCodeModelId))
         {
-            _settings.OpenCodeModelId = "muse-spark-1.3-contributor-free";
+            _settings.OpenCodeModelId = "deepseek-v4.1-flash-free";
             shouldSaveSettings = true;
         }
         if (!string.Equals(_settings.SelectionEditEngine, "opencode", StringComparison.Ordinal))
