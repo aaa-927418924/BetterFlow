@@ -2776,7 +2776,8 @@ public partial class MainWindow : System.Windows.Window
         CancellationToken cancellationToken)
     {
         var transcript = new StringBuilder();
-        var actions = new List<(float[]? Samples, VoiceTextCommand? Command)>();
+        var actions = new List<(float[]? Samples, VoiceTextCommand? Command, string? EditInstruction)>();
+        var editInstructions = new List<string>();
         var formatAsPrompt = false;
         var sendAsIs = false;
         var hadUnrecognizedVoiceCommand = false;
@@ -2795,19 +2796,22 @@ public partial class MainWindow : System.Windows.Window
                     cancellationToken.ThrowIfCancellationRequested();
                     recognized = TranscriptFormatter.NormalizeTranscript(recognized);
                     if (!TranscriptFormatter.HasMeaningfulText(recognized))
-                        continue;
-
-                    if (!VoiceCommandParser.TryParseVoiceTextCommand(recognized, out var command))
                     {
                         hadUnrecognizedVoiceCommand = true;
                         continue;
                     }
-                    actions.Add((null, command));
+
+                    if (!VoiceCommandParser.TryParseVoiceTextCommand(recognized, out var command))
+                    {
+                        actions.Add((null, null, recognized));
+                        continue;
+                    }
+                    actions.Add((null, command, null));
                     continue;
                 }
 
                 if (segment.Samples.Length > 0)
-                    actions.Add((segment.Samples, null));
+                    actions.Add((segment.Samples, null, null));
             }
 
             var dictatedAudioSegments = new List<float[]>();
@@ -2842,6 +2846,12 @@ public partial class MainWindow : System.Windows.Window
             foreach (var action in actions)
             {
                 cancellationToken.ThrowIfCancellationRequested();
+                if (action.EditInstruction is { } editInstruction)
+                {
+                    editInstructions.Add(editInstruction);
+                    continue;
+                }
+
                 if (action.Command is not { } command)
                 {
                     if (action.Samples is { Length: > 0 } dictatedSamples)
@@ -2860,6 +2870,9 @@ public partial class MainWindow : System.Windows.Window
                         break;
                     case VoiceTextCommand.FormatAsPrompt:
                         formatAsPrompt = true;
+                        if (!editInstructions.Contains(VoiceCommandParser.PromptFormatInstruction,
+                                StringComparer.Ordinal))
+                            editInstructions.Add(VoiceCommandParser.PromptFormatInstruction);
                         break;
                     case VoiceTextCommand.SendAsIs:
                         sendAsIs = true;
@@ -2873,6 +2886,7 @@ public partial class MainWindow : System.Windows.Window
                 transcript.ToString().Trim(' ', '\t', '\r'),
                 formatAsPrompt,
                 sendAsIs,
+                editInstructions,
                 hadUnrecognizedVoiceCommand);
         }
         finally
@@ -2929,6 +2943,10 @@ public partial class MainWindow : System.Windows.Window
             var transcript = decoded.Transcript;
             var formatAsPrompt = decoded.FormatAsPrompt;
             var sendAsIs = decoded.SendAsIs;
+            var editInstructions = decoded.EditInstructions;
+            var hasNonPromptEditInstructions = editInstructions.Any(instruction =>
+                !string.Equals(instruction, VoiceCommandParser.PromptFormatInstruction, StringComparison.Ordinal));
+            var usePromptStyleRewrite = formatAsPrompt && !hasNonPromptEditInstructions;
             if (!TranscriptFormatter.HasMeaningfulText(transcript))
                 throw new InvalidDataException("文字起こし結果が空、または句読点・記号だけでした。マイクを確認して、もう一度お試しください。");
 
@@ -2957,8 +2975,10 @@ public partial class MainWindow : System.Windows.Window
             else
             {
                 _indicator.ShowStatus("整形中");
-                RuntimeStatus.Text = formatAsPrompt
+                RuntimeStatus.Text = usePromptStyleRewrite
                     ? "音声コマンドに従ってプロンプト風に整えています…"
+                    : editInstructions.Count > 0
+                        ? "音声コマンドの編集指示を反映しています…"
                     : "OpenCodeを準備しています…";
                 if (!sendAfterPaste)
                 {
@@ -2968,8 +2988,10 @@ public partial class MainWindow : System.Windows.Window
                         StartRecorderWithDiscordMute(_continuousRecorder.StartForSendCommands, selectedInput);
                         sendCommandListenerTask = MonitorSendVoiceCommandsAsync(sendCommandDetected, cancellationToken);
                         _sendCommandListenerTask = sendCommandListenerTask;
-                        RuntimeStatus.Text = formatAsPrompt
+                        RuntimeStatus.Text = usePromptStyleRewrite
                             ? "音声コマンドに従ってプロンプト風に整えています。送信も音声で指示できます。"
+                            : editInstructions.Count > 0
+                                ? "音声コマンドの編集指示を反映しています。送信も音声で指示できます。"
                             : "OpenCodeの選択モデルで文章を整えています。音声で送信を指示できます。";
                     }
                     catch
@@ -2980,18 +3002,18 @@ public partial class MainWindow : System.Windows.Window
 
                 try
                 {
-                    if (sendCommandListenerTask is null && !sendAfterPaste)
+                    if (sendCommandListenerTask is null && !sendAfterPaste && editInstructions.Count == 0)
                         RuntimeStatus.Text = "OpenCodeの選択モデルで文章を整えています…";
                     if (!_openCode.IsRunning) await EnsureOpenCodeReadyAsync(cancellationToken);
                     var relevantDictionary = DictionaryTermSelector.SelectRelevant(
                         transcript, _settings.CorrectionDictionary);
-                    var response = formatAsPrompt
+                    var response = usePromptStyleRewrite
                         ? await _openCode.FormatTranscriptAsPromptAsync(
                             transcriptForAi, _settings.OpenCodeModelProviderId, _settings.OpenCodeModelId,
                             relevantDictionary, cancellationToken, precedingTextContext)
                         : await _openCode.RewriteAsync(
                             transcriptForAi, _settings.OpenCodeModelProviderId, _settings.OpenCodeModelId,
-                            relevantDictionary, cancellationToken, precedingTextContext);
+                            relevantDictionary, cancellationToken, precedingTextContext, editInstructions);
                     cancellationToken.ThrowIfCancellationRequested();
                     if (sendCommandListenerTask is not null)
                     {
@@ -3007,9 +3029,11 @@ public partial class MainWindow : System.Windows.Window
                     if (!TranscriptFormatter.HasMeaningfulText(text))
                         throw new InvalidDataException("モデルから文字として使える回答が返りませんでした。入力欄は変更していません。");
                     RecordDictionaryTermUsage(relevantDictionary);
-                    resultStatus = formatAsPrompt
+                    resultStatus = usePromptStyleRewrite
                         ? "プロンプト風に整えた文章を入力欄へ貼り付けました。"
-                        : "整えた文章を入力欄へ貼り付けました。";
+                        : editInstructions.Count > 0
+                            ? "音声コマンドの編集指示を反映した文章を入力欄へ貼り付けました。"
+                            : "整えた文章を入力欄へ貼り付けました。";
                 }
                 catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
                 catch (Exception ex)
@@ -3619,4 +3643,5 @@ internal readonly record struct NormalAudioDecodeResult(
     string Transcript,
     bool FormatAsPrompt,
     bool SendAsIs,
+    IReadOnlyList<string> EditInstructions,
     bool HadUnrecognizedVoiceCommand);

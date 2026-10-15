@@ -118,9 +118,12 @@ internal sealed class OpenCodeService : IDisposable
     public Task<string> RewriteAsync(string transcript, string providerId, string modelId,
         IReadOnlyList<CorrectionDictionaryEntry>? dictionary = null,
         CancellationToken cancellationToken = default,
-        string? precedingContext = null) =>
-        GenerateTextAsync(providerId, modelId, TranscriptRewritePrompt.CreateSystemMessage(precedingContext),
-            TranscriptRewritePrompt.CreateUserMessage(transcript, dictionary, precedingContext), cancellationToken);
+        string? precedingContext = null,
+        IReadOnlyList<string>? voiceEditInstructions = null) =>
+        GenerateTextAsync(providerId, modelId,
+            TranscriptRewritePrompt.CreateSystemMessage(precedingContext, voiceEditInstructions?.Count > 0),
+            TranscriptRewritePrompt.CreateUserMessage(transcript, dictionary, precedingContext, voiceEditInstructions),
+            cancellationToken);
 
     public Task<string> FormatTranscriptAsPromptAsync(
         string transcript,

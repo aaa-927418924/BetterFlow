@@ -6,6 +6,7 @@ internal static partial class VoiceCommandParser
 {
     private static readonly char[] CommandSeparators = [' ', '\t', '\u3000', '、', ',', '，', '.', '．'];
     private const string ExplicitLineBreakMarker = "__BETTERFLOW_EXPLICIT_LINE_BREAK__";
+    public const string PromptFormatInstruction = "発話した内容の意味と要望を保ったまま、プロンプトとして使いやすく整えてください。";
 
     public static string MarkExplicitLineBreaks(string transcript) =>
         transcript.Replace("\n", ExplicitLineBreakMarker, StringComparison.Ordinal);
@@ -25,7 +26,8 @@ internal static partial class VoiceCommandParser
         command = normalized switch
         {
             "ここから改行して" or "ここで改行して" or "ここから改行してください" or "ここで改行してください" or
-                "ここから改行" or "ここで改行" or "改行を入れて" or "改行してください" or "改行して" or "改行" =>
+                "ここから改行" or "ここで改行" or "ここに改行して" or "ここで改行を入れて" or
+                "改行を入れて" or "改行入れて" or "改行してください" or "改行してね" or "改行して" or "改行" =>
                 VoiceTextCommand.InsertNewLine,
             "プロンプト風の文章に整形して" or "文章をプロンプト風に整形して" or
                 "プロンプト風に整形して" or "プロンプト風にして" or "プロンプト形式に整形して" or
@@ -33,7 +35,8 @@ internal static partial class VoiceCommandParser
                 VoiceTextCommand.FormatAsPrompt,
             "そのまま送信して" or "そのまま送って" or "そのまま送信までやって" or "そのまま送信までやってください" or
                 "そのまま送ってください" or "そのまま送信してください" or
-                "文字起こしのまま送って" or "文字起こしのまま送信して" or "そのまま送信" =>
+                "文字起こしのまま送って" or "文字起こしのまま送信して" or
+                "そのまま入力欄に送信して" or "そのまま入力して送信して" or "そのまま送信" =>
                 VoiceTextCommand.SendAsIs,
             _ => VoiceTextCommand.None
         };
