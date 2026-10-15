@@ -208,78 +208,59 @@ internal sealed class MicrophoneRecorder : IDisposable
         return result;
     }
 
-    public bool TryGetRecordingSnapshot(out float[] samples)
+    public bool TryGetPreviewSegmentsSnapshot(
+        out IReadOnlyList<AudioRecordingSegment> segments,
+        out int activeSegmentIndex)
     {
-        byte[] bytes;
+        List<(bool IsVoiceCommand, byte[] Bytes)> snapshots;
         lock (_sync)
         {
-            var dictationBytes = _segments?
-                .Where(segment => !segment.IsVoiceCommand)
-                .Select(segment => segment.Audio.ToArray())
-                .ToArray() ?? Array.Empty<byte[]>();
-            bytes = CombineAndClear(dictationBytes);
-
-            if (_waveIn is null || bytes.Length < 16000 * sizeof(short))
+            if (_waveIn is null || _segments is not { Count: > 0 } currentSegments)
             {
-                Array.Clear(bytes);
-                samples = Array.Empty<float>();
+                segments = Array.Empty<AudioRecordingSegment>();
+                activeSegmentIndex = -1;
                 return false;
             }
+
+            activeSegmentIndex = currentSegments.Count - 1;
+            snapshots = currentSegments
+                .Select(segment => (segment.IsVoiceCommand, segment.Audio.ToArray()))
+                .ToList();
         }
 
-        var sampleCount = bytes.Length / sizeof(short);
+        var result = new List<AudioRecordingSegment>(snapshots.Count);
         try
         {
-            samples = new float[sampleCount];
-            for (var i = 0; i < sampleCount; i++)
+            foreach (var (isVoiceCommand, bytes) in snapshots)
             {
-                var pcm = BinaryPrimitives.ReadInt16LittleEndian(bytes.AsSpan(i * sizeof(short), sizeof(short)));
-                samples[i] = pcm / 32768f;
+                try
+                {
+                    var sampleCount = bytes.Length / sizeof(short);
+                    var samples = new float[sampleCount];
+                    for (var i = 0; i < sampleCount; i++)
+                    {
+                        var pcm = BinaryPrimitives.ReadInt16LittleEndian(
+                            bytes.AsSpan(i * sizeof(short), sizeof(short)));
+                        samples[i] = pcm / 32768f;
+                    }
+                    result.Add(new AudioRecordingSegment(isVoiceCommand, samples));
+                }
+                finally
+                {
+                    Array.Clear(bytes);
+                }
             }
+
+            segments = result;
             return true;
         }
-        finally
+        catch
         {
-            Array.Clear(bytes);
-        }
-    }
-
-    public bool TryGetVoiceCommandSnapshot(out float[] samples)
-    {
-        byte[] bytes;
-        lock (_sync)
-        {
-            if (_waveIn is null || !_voiceCommandCaptureActive || _segments is not { Count: > 0 } segments ||
-                !segments[^1].IsVoiceCommand)
-            {
-                samples = Array.Empty<float>();
-                return false;
-            }
-
-            bytes = segments[^1].Audio.ToArray();
-            // Avoid repeatedly decoding the first few microphone frames as speech.
-            if (bytes.Length < 4800 * sizeof(short))
-            {
-                Array.Clear(bytes);
-                samples = Array.Empty<float>();
-                return false;
-            }
-        }
-
-        try
-        {
-            var sampleCount = bytes.Length / sizeof(short);
-            samples = new float[sampleCount];
-            for (var i = 0; i < sampleCount; i++)
-            {
-                var pcm = BinaryPrimitives.ReadInt16LittleEndian(bytes.AsSpan(i * sizeof(short), sizeof(short)));
-                samples[i] = pcm / 32768f;
-            }
-            return true;
-        }
-        finally
-        {
-            Array.Clear(bytes);
+            foreach (var segment in result)
+                Array.Clear(segment.Samples);
+            activeSegmentIndex = -1;
+            segments = Array.Empty<AudioRecordingSegment>();
+            throw;
         }
     }
 
@@ -348,28 +329,6 @@ internal sealed class MicrophoneRecorder : IDisposable
             _segments = null;
         }
         _voiceCommandCaptureActive = false;
-    }
-
-    private static byte[] CombineAndClear(IEnumerable<byte[]> segments)
-    {
-        var arrays = segments.ToArray();
-        try
-        {
-            var size = arrays.Sum(segment => segment.Length);
-            var combined = new byte[size];
-            var offset = 0;
-            foreach (var segment in arrays)
-            {
-                Buffer.BlockCopy(segment, 0, combined, offset, segment.Length);
-                offset += segment.Length;
-            }
-            return combined;
-        }
-        finally
-        {
-            foreach (var segment in arrays)
-                Array.Clear(segment);
-        }
     }
 
     private sealed class CaptureSegmentBuffer(bool isVoiceCommand)

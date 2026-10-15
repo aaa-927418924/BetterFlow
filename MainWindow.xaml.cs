@@ -60,7 +60,6 @@ public partial class MainWindow : System.Windows.Window
     private Task? _sendCommandListenerTask;
     private CancellationTokenSource? _transcriptPreviewCancellation;
     private Task? _transcriptPreviewTask;
-    private string? _lastRegularTranscriptPreview;
     private IDisposable? _discordMuteLease;
     private long _transcriptPreviewSession;
     private AutoDictionaryLearningMonitor? _autoDictionaryLearningMonitor;
@@ -2186,7 +2185,7 @@ public partial class MainWindow : System.Windows.Window
     {
         if (_asr is null) return;
 
-        _lastRegularTranscriptPreview = null;
+        _transcriptPreviewWindow.HidePreview();
         var session = Interlocked.Increment(ref _transcriptPreviewSession);
         var cancellation = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token);
         _transcriptPreviewCancellation = cancellation;
@@ -2195,64 +2194,89 @@ public partial class MainWindow : System.Windows.Window
 
     private async Task RunTranscriptPreviewAsync(long session, CancellationToken cancellationToken)
     {
+        var segmentStates = new List<TranscriptPreviewSegmentState>();
         try
         {
             await Task.Delay(TimeSpan.FromMilliseconds(500), cancellationToken).ConfigureAwait(false);
             while (!cancellationToken.IsCancellationRequested)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                var isVoiceCommand = _voiceCommandModeActive;
-                var hasSnapshot = isVoiceCommand
-                    ? _recorder.TryGetVoiceCommandSnapshot(out var snapshot)
-                    : _recorder.TryGetRecordingSnapshot(out snapshot);
-                if (!hasSnapshot)
+                if (!_recorder.TryGetPreviewSegmentsSnapshot(out var snapshots, out var activeSegmentIndex))
                 {
-                    await Task.Delay(isVoiceCommand ? TimeSpan.FromMilliseconds(150) : TimeSpan.FromMilliseconds(250),
-                        cancellationToken).ConfigureAwait(false);
+                    await Task.Delay(TimeSpan.FromMilliseconds(250), cancellationToken).ConfigureAwait(false);
                     continue;
                 }
 
-                var inferenceTimer = System.Diagnostics.Stopwatch.StartNew();
                 try
                 {
                     var recognizer = _asr;
                     if (recognizer is null) return;
-                    var transcript = await Task.Run(() => recognizer.Transcribe(snapshot), cancellationToken)
-                        .ConfigureAwait(false);
-                    cancellationToken.ThrowIfCancellationRequested();
-                    transcript = TranscriptFormatter.NormalizeTranscript(transcript);
-                    if (TranscriptFormatter.HasMeaningfulText(transcript))
-                    {
-                        _ = Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Background,
-                            new Action(() =>
-                            {
-                                if (session != Interlocked.Read(ref _transcriptPreviewSession) ||
-                                    !_recorder.IsRecording || _closing)
-                                    return;
 
-                                if (isVoiceCommand)
-                                {
-                                    if (_voiceCommandModeActive)
-                                        _transcriptPreviewWindow.ShowVoiceCommandPreview(transcript);
-                                }
-                                else if (!_voiceCommandModeActive)
-                                {
-                                    _lastRegularTranscriptPreview = transcript;
-                                    _transcriptPreviewWindow.ShowPreview(transcript);
-                                }
-                            }));
+                    for (var i = 0; i < snapshots.Count; i++)
+                    {
+                        cancellationToken.ThrowIfCancellationRequested();
+                        var segment = snapshots[i];
+                        while (segmentStates.Count <= i)
+                            segmentStates.Add(new TranscriptPreviewSegmentState(segment.IsVoiceCommand));
+
+                        var state = segmentStates[i];
+                        if (state.IsVoiceCommand != segment.IsVoiceCommand)
+                        {
+                            state = new TranscriptPreviewSegmentState(segment.IsVoiceCommand);
+                            segmentStates[i] = state;
+                        }
+
+                        var isActiveSegment = i == activeSegmentIndex;
+                        if (state.IsFinalized)
+                            continue;
+
+                        var minimumSamples = segment.IsVoiceCommand ? 4_800 : 16_000;
+                        if (segment.Samples.Length < minimumSamples)
+                        {
+                            if (!isActiveSegment)
+                                state.IsFinalized = true;
+                            continue;
+                        }
+
+                        var transcript = await Task.Run(() => recognizer.Transcribe(segment.Samples), cancellationToken)
+                            .ConfigureAwait(false);
+                        cancellationToken.ThrowIfCancellationRequested();
+                        transcript = TranscriptFormatter.NormalizeTranscript(transcript);
+                        if (TranscriptFormatter.HasMeaningfulText(transcript))
+                            state.Text = transcript;
+                        if (!isActiveSegment)
+                            state.IsFinalized = true;
                     }
+
+                    var previewParts = segmentStates
+                        .Where(state => TranscriptFormatter.HasMeaningfulText(state.Text))
+                        .Select(state => new TranscriptPreviewPart(state.Text, state.IsVoiceCommand))
+                        .ToArray();
+                    _ = Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Background,
+                        new Action(() =>
+                        {
+                            if (session != Interlocked.Read(ref _transcriptPreviewSession) ||
+                                !_recorder.IsRecording || _closing)
+                                return;
+
+                            if (previewParts.Length > 0)
+                                _transcriptPreviewWindow.ShowSegmentedPreview(previewParts);
+                            else
+                                _transcriptPreviewWindow.HidePreview();
+                        }));
                 }
                 finally
                 {
-                    inferenceTimer.Stop();
-                    Array.Clear(snapshot);
+                    foreach (var segment in snapshots)
+                        Array.Clear(segment.Samples);
                 }
 
-                var nextDelay = isVoiceCommand
-                    ? TimeSpan.FromMilliseconds(Math.Clamp(inferenceTimer.Elapsed.TotalMilliseconds * 0.75, 700, 1500))
-                    : TimeSpan.FromMilliseconds(Math.Clamp(inferenceTimer.Elapsed.TotalMilliseconds * 2, 1500, 10000));
-                await DelayUntilPreviewOrModeChangeAsync(nextDelay, isVoiceCommand, cancellationToken)
+                var activeIsVoiceCommand = activeSegmentIndex >= 0 &&
+                    activeSegmentIndex < snapshots.Count && snapshots[activeSegmentIndex].IsVoiceCommand;
+                var nextDelay = activeIsVoiceCommand
+                    ? TimeSpan.FromMilliseconds(900)
+                    : TimeSpan.FromMilliseconds(2000);
+                await DelayUntilPreviewOrModeChangeAsync(nextDelay, activeIsVoiceCommand, cancellationToken)
                     .ConfigureAwait(false);
             }
         }
@@ -2276,6 +2300,13 @@ public partial class MainWindow : System.Windows.Window
             await Task.Delay(wait, cancellationToken).ConfigureAwait(false);
             remaining -= wait;
         }
+    }
+
+    private sealed class TranscriptPreviewSegmentState(bool isVoiceCommand)
+    {
+        public bool IsVoiceCommand { get; } = isVoiceCommand;
+        public string Text { get; set; } = string.Empty;
+        public bool IsFinalized { get; set; }
     }
 
     private async Task StopTranscriptPreviewAsync()
@@ -2737,10 +2768,6 @@ public partial class MainWindow : System.Windows.Window
         {
             RuntimeStatus.Text = "録音中 · Space長押しで音声コマンド · ショートカットで停止";
             _indicator.ShowStatus("録音中");
-            if (!string.IsNullOrWhiteSpace(_lastRegularTranscriptPreview))
-                _transcriptPreviewWindow.ShowPreview(_lastRegularTranscriptPreview);
-            else
-                _transcriptPreviewWindow.HidePreview();
         }
     }
 

@@ -1,8 +1,8 @@
 using System.Runtime.InteropServices;
 using System.Windows;
+using System.Windows.Documents;
 using System.Windows.Interop;
 using System.Windows.Media;
-using MediaBrushes = System.Windows.Media.Brushes;
 using MediaColor = System.Windows.Media.Color;
 
 namespace BetterFlow;
@@ -16,6 +16,9 @@ public partial class TranscriptPreviewWindow : Window
     private const double IndicatorHeight = 38;
     private const double IndicatorBottomGap = 12;
     private const double GapAboveIndicator = 8;
+    private static readonly SolidColorBrush RegularTextBrush = new(MediaColor.FromRgb(244, 244, 244));
+    private static readonly SolidColorBrush VoiceCommandTextBrush = new(MediaColor.FromRgb(38, 33, 20));
+    private static readonly SolidColorBrush VoiceCommandHighlightBrush = new(MediaColor.FromRgb(255, 220, 115));
 
     public TranscriptPreviewWindow()
     {
@@ -24,29 +27,44 @@ public partial class TranscriptPreviewWindow : Window
     }
 
     public void ShowPreview(string text)
-        => ShowPreviewCore(text, isVoiceCommand: false);
+        => ShowSegmentedPreview([new TranscriptPreviewPart(text, IsVoiceCommand: false)]);
 
-    public void ShowVoiceCommandPreview(string text)
-        => ShowPreviewCore(text, isVoiceCommand: true);
-
-    private void ShowPreviewCore(string text, bool isVoiceCommand)
+    internal void ShowSegmentedPreview(IReadOnlyList<TranscriptPreviewPart> parts)
     {
         if (!Dispatcher.CheckAccess())
         {
             if (!Dispatcher.HasShutdownStarted && !Dispatcher.HasShutdownFinished)
-                Dispatcher.BeginInvoke(new Action(() => ShowPreviewCore(text, isVoiceCommand)));
+            {
+                var snapshot = parts.ToArray();
+                Dispatcher.BeginInvoke(new Action(() => ShowSegmentedPreview(snapshot)));
+            }
             return;
         }
 
-        if (string.IsNullOrWhiteSpace(text)) return;
-        PreviewText.Text = text;
-        PreviewHighlight.Background = isVoiceCommand
-            ? new SolidColorBrush(MediaColor.FromRgb(255, 220, 115))
-            : MediaBrushes.Transparent;
-        PreviewHighlight.Padding = isVoiceCommand ? new Thickness(5, 3, 5, 3) : new Thickness(0);
-        PreviewText.Foreground = isVoiceCommand
-            ? new SolidColorBrush(MediaColor.FromRgb(38, 33, 20))
-            : new SolidColorBrush(MediaColor.FromRgb(244, 244, 244));
+        var visibleParts = parts.Where(part => !string.IsNullOrWhiteSpace(part.Text)).ToArray();
+        if (visibleParts.Length == 0)
+        {
+            HidePreview();
+            return;
+        }
+
+        PreviewText.Inlines.Clear();
+        string? previousText = null;
+        foreach (var part in visibleParts)
+        {
+            if (previousText is not null && NeedsAsciiWordSeparator(previousText, part.Text))
+                PreviewText.Inlines.Add(new Run(" ") { Foreground = RegularTextBrush });
+
+            PreviewText.Inlines.Add(part.IsVoiceCommand
+                ? new Run(part.Text)
+                {
+                    Background = VoiceCommandHighlightBrush,
+                    Foreground = VoiceCommandTextBrush
+                }
+                : new Run(part.Text) { Foreground = RegularTextBrush });
+            previousText = part.Text;
+        }
+
         if (!IsVisible) Show();
         UpdateLayout();
         Left = Math.Max(0, (SystemParameters.PrimaryScreenWidth - Width) / 2);
@@ -63,10 +81,15 @@ public partial class TranscriptPreviewWindow : Window
             return;
         }
 
-        PreviewHighlight.Background = MediaBrushes.Transparent;
-        PreviewHighlight.Padding = new Thickness(0);
-        PreviewText.Foreground = new SolidColorBrush(MediaColor.FromRgb(244, 244, 244));
+        PreviewText.Inlines.Clear();
         Hide();
+    }
+
+    private static bool NeedsAsciiWordSeparator(string previousText, string nextText)
+    {
+        var previous = previousText[^1];
+        var next = nextText[0];
+        return char.IsAsciiLetterOrDigit(previous) && char.IsAsciiLetterOrDigit(next);
     }
 
     private void MakeClickThrough()
@@ -83,3 +106,5 @@ public partial class TranscriptPreviewWindow : Window
     [DllImport("user32.dll", EntryPoint = "SetWindowLongPtrW", SetLastError = true)]
     private static extern IntPtr SetWindowLongPtr(IntPtr handle, int index, IntPtr value);
 }
+
+internal sealed record TranscriptPreviewPart(string Text, bool IsVoiceCommand);

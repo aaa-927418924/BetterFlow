@@ -10,11 +10,8 @@
             CornerRadius="19" Padding="13,9" IsHitTestVisible="False">
         <ScrollViewer MaxHeight="98" VerticalScrollBarVisibility="Auto"
                       HorizontalScrollBarVisibility="Disabled" IsHitTestVisible="False">
-            <Border x:Name="PreviewHighlight" Background="Transparent" CornerRadius="6"
-                    Padding="0" HorizontalAlignment="Stretch">
-                <TextBlock x:Name="PreviewText" FontFamily="Yu Gothic UI" FontSize="13"
-                           Foreground="#F4F4F4" TextWrapping="Wrap" />
-            </Border>
+            <TextBlock x:Name="PreviewText" FontFamily="Yu Gothic UI" FontSize="13"
+                       Foreground="#F4F4F4" TextWrapping="Wrap" />
         </ScrollViewer>
     </Border>
 </Window>
