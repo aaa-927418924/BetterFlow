@@ -1,5 +1,6 @@
 using System.IO;
 using System.Globalization;
+using System.Text;
 using Microsoft.Win32;
 using System.Windows;
 using System.Windows.Interop;
@@ -39,6 +40,7 @@ public partial class MainWindow : System.Windows.Window
     private IntPtr _pasteTarget;
     private bool _isBusy;
     private bool _normalAudioInputActive;
+    private bool _voiceCommandModeActive;
     private bool _rawTranscriptFallbackRequested;
     private bool _closing;
     private bool _hotkeyRegistered;
@@ -1698,7 +1700,7 @@ public partial class MainWindow : System.Windows.Window
         _asr = recognizer;
         RegisterConfiguredHotkey();
         TitleText.Visibility = System.Windows.Visibility.Collapsed;
-        BodyText.Text = "入力欄で押すと音声入力を始めます。編集できる文章を選択中なら音声で編集し、通常の文章を選択中ならその文章について質問できます。";
+        BodyText.Text = "入力欄で押すと音声入力を始めます。録音中にSpaceを長押しすると、改行・プロンプト整形・そのまま送信の音声コマンドを使えます。編集できる文章を選択中なら音声で編集し、通常の文章を選択中ならその文章について質問できます。";
         CapacityText.Visibility = System.Windows.Visibility.Collapsed;
         ShortcutSettingsPanel.Visibility = System.Windows.Visibility.Visible;
         MicrophoneSettingsPanel.Visibility = System.Windows.Visibility.Visible;
@@ -1795,10 +1797,13 @@ public partial class MainWindow : System.Windows.Window
                 _rawTranscriptFallbackRequested = false;
                 if (!_hotkey.SetEscapeMonitoring(true))
                     RuntimeStatus.Text = "録音中です。Escapeキャンセルを登録できませんでした。";
+                var voiceCommandHookReady = _hotkey.SetVoiceCommandPushToTalkEnabled(true);
                 StartTranscriptPreview();
                 _activationSoundPlayer.Play();
                 ActionButton.Content = "録音を停止して変換";
-                RuntimeStatus.Text = "録音中 · もう一度ショートカットで停止";
+                RuntimeStatus.Text = voiceCommandHookReady
+                    ? "録音中 · Space長押しで音声コマンド · ショートカットで停止"
+                    : "録音中 · Space音声コマンドを開始できませんでした · ショートカットで停止";
                 _indicator.ShowStatus("録音中");
                 UpdateAiModeDisplay();
             }
@@ -1807,6 +1812,8 @@ public partial class MainWindow : System.Windows.Window
                 if (!_recorder.IsRecording)
                 {
                     _normalAudioInputActive = false;
+                    _hotkey.SetVoiceCommandPushToTalkEnabled(false);
+                    EndVoiceCommandCaptureIfActive();
                     _hotkey.SetEscapeMonitoring(false);
                     _recordingPrecedingTextContext = null;
                 }
@@ -2066,6 +2073,8 @@ public partial class MainWindow : System.Windows.Window
 
             _normalAudioInputActive = false;
             _pendingRawTranscriptFallback = null;
+            _hotkey.SetVoiceCommandPushToTalkEnabled(false);
+            EndVoiceCommandCaptureIfActive();
             _hotkey.SetEscapeMonitoring(false);
             CancelTranscriptPreview();
             float[]? samples = null;
@@ -2190,6 +2199,11 @@ public partial class MainWindow : System.Windows.Window
             while (!cancellationToken.IsCancellationRequested)
             {
                 cancellationToken.ThrowIfCancellationRequested();
+                if (_voiceCommandModeActive)
+                {
+                    await Task.Delay(TimeSpan.FromMilliseconds(100), cancellationToken).ConfigureAwait(false);
+                    continue;
+                }
                 if (!_recorder.TryGetRecordingSnapshot(out var snapshot))
                 {
                     await Task.Delay(TimeSpan.FromMilliseconds(250), cancellationToken).ConfigureAwait(false);
@@ -2211,7 +2225,7 @@ public partial class MainWindow : System.Windows.Window
                             new Action(() =>
                             {
                                 if (session == Interlocked.Read(ref _transcriptPreviewSession) &&
-                                    _recorder.IsRecording && !_closing)
+                                    _recorder.IsRecording && !_voiceCommandModeActive && !_closing)
                                     _transcriptPreviewWindow.ShowPreview(transcript);
                             }));
                     }
@@ -2651,6 +2665,170 @@ public partial class MainWindow : System.Windows.Window
         }
     }
 
+    private void BeginVoiceCommandCapture()
+    {
+        if (!_normalAudioInputActive || !_recorder.IsRecording || _isBusy || _voiceCommandModeActive)
+            return;
+
+        try
+        {
+            _recorder.BeginVoiceCommandCapture();
+            _voiceCommandModeActive = true;
+            RuntimeStatus.Text = "音声コマンド中 · Spaceを離すと通常の音声入力に戻ります。";
+            _indicator.ShowStatus("音声コマンド中");
+        }
+        catch (Exception ex)
+        {
+            _hotkey.SetVoiceCommandPushToTalkEnabled(false);
+            RuntimeStatus.Text = "音声コマンドを開始できませんでした。 " + ex.GetBaseException().Message;
+            _indicator.ShowStatus("コマンド開始失敗", TimeSpan.FromSeconds(1));
+        }
+    }
+
+    private void EndVoiceCommandCaptureIfActive()
+    {
+        if (!_voiceCommandModeActive)
+            return;
+
+        try { _recorder.EndVoiceCommandCapture(); }
+        finally { _voiceCommandModeActive = false; }
+
+        if (_normalAudioInputActive && _recorder.IsRecording && !_closing)
+        {
+            RuntimeStatus.Text = "録音中 · Space長押しで音声コマンド · ショートカットで停止";
+            _indicator.ShowStatus("録音中");
+        }
+    }
+
+    private async Task<NormalAudioDecodeResult> TranscribeNormalAudioSegmentsAsync(
+        IReadOnlyList<AudioRecordingSegment> segments,
+        CancellationToken cancellationToken)
+    {
+        var transcript = new StringBuilder();
+        var actions = new List<(float[]? Samples, VoiceTextCommand? Command)>();
+        var formatAsPrompt = false;
+        var sendAsIs = false;
+        var hadUnrecognizedVoiceCommand = false;
+
+        try
+        {
+            foreach (var segment in segments)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (segment.IsVoiceCommand)
+                {
+                    if (segment.Samples.Length < 1600)
+                        continue;
+
+                    var recognized = await Task.Run(() => _asr!.Transcribe(segment.Samples));
+                    cancellationToken.ThrowIfCancellationRequested();
+                    recognized = TranscriptFormatter.NormalizeTranscript(recognized);
+                    if (!TranscriptFormatter.HasMeaningfulText(recognized))
+                        continue;
+
+                    if (!VoiceCommandParser.TryParseVoiceTextCommand(recognized, out var command))
+                    {
+                        hadUnrecognizedVoiceCommand = true;
+                        continue;
+                    }
+                    actions.Add((null, command));
+                    continue;
+                }
+
+                if (segment.Samples.Length > 0)
+                    actions.Add((segment.Samples, null));
+            }
+
+            var dictatedAudioSegments = new List<float[]>();
+            async Task FlushDictatedAudioAsync()
+            {
+                if (dictatedAudioSegments.Count == 0)
+                    return;
+
+                var combined = CombineDictatedAudio(dictatedAudioSegments);
+                dictatedAudioSegments.Clear();
+                try
+                {
+                    if (combined.Length >= 1600)
+                    {
+                        var recognized = await Task.Run(() => _asr!.Transcribe(combined));
+                        cancellationToken.ThrowIfCancellationRequested();
+                        recognized = TranscriptFormatter.NormalizeTranscript(recognized);
+                        if (TranscriptFormatter.HasMeaningfulText(recognized))
+                        {
+                            if (transcript.Length > 0 && transcript[^1] != '\n')
+                                transcript.Append(' ');
+                            transcript.Append(recognized);
+                        }
+                    }
+                }
+                finally
+                {
+                    Array.Clear(combined);
+                }
+            }
+
+            foreach (var action in actions)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (action.Command is not { } command)
+                {
+                    if (action.Samples is { Length: > 0 } dictatedSamples)
+                        dictatedAudioSegments.Add(dictatedSamples);
+                    continue;
+                }
+
+                switch (command)
+                {
+                    case VoiceTextCommand.InsertNewLine:
+                        await FlushDictatedAudioAsync();
+                        while (transcript.Length > 0 && char.IsWhiteSpace(transcript[^1]))
+                            transcript.Length--;
+                        if (transcript.Length > 0 && transcript[^1] != '\n')
+                            transcript.Append('\n');
+                        break;
+                    case VoiceTextCommand.FormatAsPrompt:
+                        formatAsPrompt = true;
+                        break;
+                    case VoiceTextCommand.SendAsIs:
+                        sendAsIs = true;
+                        break;
+                }
+            }
+
+            await FlushDictatedAudioAsync();
+
+            return new NormalAudioDecodeResult(
+                transcript.ToString().Trim(' ', '\t', '\r'),
+                formatAsPrompt,
+                sendAsIs,
+                hadUnrecognizedVoiceCommand);
+        }
+        finally
+        {
+            foreach (var segment in segments)
+                Array.Clear(segment.Samples);
+        }
+    }
+
+    private static float[] CombineDictatedAudio(IReadOnlyList<float[]> segments)
+    {
+        const int InterSegmentSilenceSamples = 1600;
+        var totalSamples = segments.Sum(segment => segment.Length) +
+                           Math.Max(0, segments.Count - 1) * InterSegmentSilenceSamples;
+        var combined = new float[totalSamples];
+        var offset = 0;
+        for (var index = 0; index < segments.Count; index++)
+        {
+            var segment = segments[index];
+            Array.Copy(segment, 0, combined, offset, segment.Length);
+            offset += segment.Length;
+            if (index < segments.Count - 1)
+                offset += InterSegmentSilenceSamples;
+        }
+        return combined;
+    }
+
     private async Task StopAndProcessAsync()
     {
         var precedingTextContext = _recordingPrecedingTextContext;
@@ -2664,23 +2842,26 @@ public partial class MainWindow : System.Windows.Window
         ActionButton.Content = "音声を文字起こししています…";
         RuntimeStatus.Text = "音声をPC内で文字起こししています…";
         _indicator.ShowStatus("認識中");
-        float[]? samples = null;
+        IReadOnlyList<AudioRecordingSegment>? recordingSegments = null;
         Task? sendCommandListenerTask = null;
         var sendCommandDetected = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         var sendCommandMonitorUnavailable = false;
         var sendAfterPaste = false;
         try
         {
+            _hotkey.SetVoiceCommandPushToTalkEnabled(false);
+            EndVoiceCommandCaptureIfActive();
             CancelTranscriptPreview();
-            samples = await _recorder.StopAsync(cancellationToken);
+            recordingSegments = await _recorder.StopAndGetSegmentsAsync(cancellationToken);
             await StopTranscriptPreviewAsync();
-            var transcript = await Task.Run(() => _asr!.Transcribe(samples), cancellationToken);
-            cancellationToken.ThrowIfCancellationRequested();
-            Array.Clear(samples);
-            samples = null;
-            transcript = TranscriptFormatter.NormalizeTranscript(transcript);
+            var decoded = await TranscribeNormalAudioSegmentsAsync(recordingSegments, cancellationToken);
+            var transcript = decoded.Transcript;
+            var formatAsPrompt = decoded.FormatAsPrompt;
+            var sendAsIs = decoded.SendAsIs;
             if (!TranscriptFormatter.HasMeaningfulText(transcript))
                 throw new InvalidDataException("文字起こし結果が空、または句読点・記号だけでした。マイクを確認して、もう一度お試しください。");
+
+            sendAfterPaste = decoded.SendAsIs;
 
             if (VoiceCommandParser.TryRemoveSendDirective(transcript, out var transcriptWithoutCommand))
             {
@@ -2691,59 +2872,82 @@ public partial class MainWindow : System.Windows.Window
             }
             _pendingRawTranscriptFallback = transcript;
             _transcriptPreviewWindow.ShowPreview(transcript);
+            var explicitLineBreakCount = VoiceCommandParser.CountExplicitLineBreaks(transcript);
+            var transcriptForAi = VoiceCommandParser.MarkExplicitLineBreaks(transcript);
 
             string text;
             string resultStatus;
             _indicator.HideStatus();
-            RuntimeStatus.Text = "OpenCodeを準備しています…";
-            _indicator.ShowStatus("整形中");
-            if (!sendAfterPaste)
+            if (sendAsIs)
             {
+                text = transcript;
+                resultStatus = "文字起こしをそのまま入力欄へ貼り付けました。";
+            }
+            else
+            {
+                _indicator.ShowStatus("整形中");
+                RuntimeStatus.Text = formatAsPrompt
+                    ? "音声コマンドに従ってプロンプト風に整えています…"
+                    : "OpenCodeを準備しています…";
+                if (!sendAfterPaste)
+                {
+                    try
+                    {
+                        var selectedInput = MicrophoneDeviceCombo.SelectedItem as AudioInputDeviceOption;
+                        StartRecorderWithDiscordMute(_continuousRecorder.StartForSendCommands, selectedInput);
+                        sendCommandListenerTask = MonitorSendVoiceCommandsAsync(sendCommandDetected, cancellationToken);
+                        _sendCommandListenerTask = sendCommandListenerTask;
+                        RuntimeStatus.Text = formatAsPrompt
+                            ? "音声コマンドに従ってプロンプト風に整えています。送信も音声で指示できます。"
+                            : "OpenCodeの選択モデルで文章を整えています。音声で送信を指示できます。";
+                    }
+                    catch
+                    {
+                        sendCommandMonitorUnavailable = true;
+                    }
+                }
+
                 try
                 {
-                    var selectedInput = MicrophoneDeviceCombo.SelectedItem as AudioInputDeviceOption;
-                    StartRecorderWithDiscordMute(_continuousRecorder.StartForSendCommands, selectedInput);
-                    sendCommandListenerTask = MonitorSendVoiceCommandsAsync(sendCommandDetected, cancellationToken);
-                    _sendCommandListenerTask = sendCommandListenerTask;
-                    RuntimeStatus.Text = "OpenCodeの選択モデルで文章を整えています。音声で送信を指示できます。";
+                    if (sendCommandListenerTask is null && !sendAfterPaste)
+                        RuntimeStatus.Text = "OpenCodeの選択モデルで文章を整えています…";
+                    if (!_openCode.IsRunning) await EnsureOpenCodeReadyAsync(cancellationToken);
+                    var relevantDictionary = DictionaryTermSelector.SelectRelevant(
+                        transcript, _settings.CorrectionDictionary);
+                    var response = formatAsPrompt
+                        ? await _openCode.FormatTranscriptAsPromptAsync(
+                            transcriptForAi, _settings.OpenCodeModelProviderId, _settings.OpenCodeModelId,
+                            relevantDictionary, cancellationToken, precedingTextContext)
+                        : await _openCode.RewriteAsync(
+                            transcriptForAi, _settings.OpenCodeModelProviderId, _settings.OpenCodeModelId,
+                            relevantDictionary, cancellationToken, precedingTextContext);
+                    cancellationToken.ThrowIfCancellationRequested();
+                    if (sendCommandListenerTask is not null)
+                    {
+                        await StopSendCommandMonitorAsync(sendCommandListenerTask);
+                        if (ReferenceEquals(_sendCommandListenerTask, sendCommandListenerTask))
+                            _sendCommandListenerTask = null;
+                        sendCommandListenerTask = null;
+                        sendAfterPaste = sendCommandDetected.Task.IsCompletedSuccessfully && sendCommandDetected.Task.Result;
+                    }
+                    if (VoiceCommandParser.CountExplicitLineBreakMarkers(response) != explicitLineBreakCount)
+                        throw new InvalidDataException("AIモデルが音声コマンドで指定した改行を保持できませんでした。入力欄は変更していません。");
+                    text = VoiceCommandParser.RestoreExplicitLineBreaks(response).Trim(' ', '\t', '\r');
+                    if (!TranscriptFormatter.HasMeaningfulText(text))
+                        throw new InvalidDataException("モデルから文字として使える回答が返りませんでした。入力欄は変更していません。");
+                    RecordDictionaryTermUsage(relevantDictionary);
+                    resultStatus = formatAsPrompt
+                        ? "プロンプト風に整えた文章を入力欄へ貼り付けました。"
+                        : "整えた文章を入力欄へ貼り付けました。";
                 }
-                catch
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
+                catch (Exception ex)
                 {
-                    sendCommandMonitorUnavailable = true;
+                    _openCode.Stop();
+                    RuntimeStatus.Text = "AI変換に失敗しました。入力欄は変更していません。 " + ex.Message;
+                    _indicator.ShowStatus(GetAiFailureIndicatorText(ex), TimeSpan.FromSeconds(1));
+                    return;
                 }
-            }
-            try
-            {
-                if (sendCommandListenerTask is null && !sendAfterPaste)
-                    RuntimeStatus.Text = "OpenCodeの選択モデルで文章を整えています…";
-                if (!_openCode.IsRunning) await EnsureOpenCodeReadyAsync(cancellationToken);
-                var relevantDictionary = DictionaryTermSelector.SelectRelevant(
-                    transcript, _settings.CorrectionDictionary);
-                var response = await _openCode.RewriteAsync(
-                    transcript, _settings.OpenCodeModelProviderId, _settings.OpenCodeModelId,
-                    relevantDictionary, cancellationToken, precedingTextContext);
-                cancellationToken.ThrowIfCancellationRequested();
-                if (sendCommandListenerTask is not null)
-                {
-                    await StopSendCommandMonitorAsync(sendCommandListenerTask);
-                    if (ReferenceEquals(_sendCommandListenerTask, sendCommandListenerTask))
-                        _sendCommandListenerTask = null;
-                    sendCommandListenerTask = null;
-                    sendAfterPaste = sendCommandDetected.Task.IsCompletedSuccessfully && sendCommandDetected.Task.Result;
-                }
-                text = response.Trim();
-                if (!TranscriptFormatter.HasMeaningfulText(text))
-                    throw new InvalidDataException("モデルから文字として使える回答が返りませんでした。入力欄は変更していません。");
-                RecordDictionaryTermUsage(relevantDictionary);
-                resultStatus = "整えた文章を入力欄へ貼り付けました。";
-            }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
-            catch (Exception ex)
-            {
-                _openCode.Stop();
-                RuntimeStatus.Text = "AI変換に失敗しました。入力欄は変更していません。 " + ex.Message;
-                _indicator.ShowStatus(GetAiFailureIndicatorText(ex), TimeSpan.FromSeconds(1));
-                return;
             }
 
             cancellationToken.ThrowIfCancellationRequested();
@@ -2769,9 +2973,13 @@ public partial class MainWindow : System.Windows.Window
                     return;
                 }
                 await SendPastedTextAsync(cancellationToken);
+                if (decoded.HadUnrecognizedVoiceCommand)
+                    RuntimeStatus.Text += " 一部のSpace音声コマンドを認識できず、文字起こしには含めていません。";
                 return;
             }
 
+            if (decoded.HadUnrecognizedVoiceCommand)
+                RuntimeStatus.Text += " 一部のSpace音声コマンドを認識できず、文字起こしには含めていません。";
             _indicator.ShowStatus("完了", TimeSpan.FromSeconds(1));
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -2780,7 +2988,7 @@ public partial class MainWindow : System.Windows.Window
                 && !_closing
                 && !string.IsNullOrWhiteSpace(_pendingRawTranscriptFallback))
             {
-                if (sendCommandListenerTask is not null)
+            if (sendCommandListenerTask is not null)
                 {
                     await StopSendCommandMonitorAsync(sendCommandListenerTask);
                     if (ReferenceEquals(_sendCommandListenerTask, sendCommandListenerTask))
@@ -2830,11 +3038,17 @@ public partial class MainWindow : System.Windows.Window
             ReleaseDiscordMuteForAudioSession();
             await StopTranscriptPreviewAsync();
             if (!_closing) _transcriptPreviewWindow.HidePreview();
-            if (samples is not null) Array.Clear(samples);
+            if (recordingSegments is not null)
+            {
+                foreach (var segment in recordingSegments)
+                    Array.Clear(segment.Samples);
+            }
             if (ReferenceEquals(_audioProcessingCancellation, processingCancellation))
                 _audioProcessingCancellation = null;
             processingCancellation.Dispose();
             _normalAudioInputActive = false;
+            _voiceCommandModeActive = false;
+            _hotkey.SetVoiceCommandPushToTalkEnabled(false);
             _rawTranscriptFallbackRequested = false;
             _pendingRawTranscriptFallback = null;
             _hotkey.SetEscapeMonitoring(false);
@@ -3258,6 +3472,20 @@ public partial class MainWindow : System.Windows.Window
 
     private IntPtr WindowMessageHook(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
     {
+        if (_hotkey.IsVoiceCommandStartMessage(msg))
+        {
+            handled = true;
+            BeginVoiceCommandCapture();
+            return IntPtr.Zero;
+        }
+
+        if (_hotkey.IsVoiceCommandStopMessage(msg))
+        {
+            handled = true;
+            EndVoiceCommandCaptureIfActive();
+            return IntPtr.Zero;
+        }
+
         if (_hotkey.IsEscapeCancelMessage(msg))
         {
             handled = true;
@@ -3315,3 +3543,9 @@ public partial class MainWindow : System.Windows.Window
         _lifetime.Dispose();
     }
 }
+
+internal readonly record struct NormalAudioDecodeResult(
+    string Transcript,
+    bool FormatAsPrompt,
+    bool SendAsIs,
+    bool HadUnrecognizedVoiceCommand);

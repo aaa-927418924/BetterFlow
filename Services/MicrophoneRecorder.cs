@@ -8,9 +8,10 @@ internal sealed class MicrophoneRecorder : IDisposable
 {
     private readonly object _sync = new();
     private WaveInEvent? _waveIn;
-    private MemoryStream? _audio;
+    private List<CaptureSegmentBuffer>? _segments;
     private TaskCompletionSource? _stopped;
     private Exception? _recordingError;
+    private bool _voiceCommandCaptureActive;
 
     public event Action<float?>? AudioLevelChanged;
 
@@ -54,7 +55,12 @@ internal sealed class MicrophoneRecorder : IDisposable
         if (deviceNumber < -1 || deviceNumber >= WaveInEvent.DeviceCount)
             throw new InvalidOperationException("選択したマイクが見つかりません。一覧を更新するか、システム設定のマイクを選んでください。");
 
-        _audio = new MemoryStream();
+        ClearAudioBuffer();
+        lock (_sync)
+        {
+            _segments = [new CaptureSegmentBuffer(isVoiceCommand: false)];
+            _voiceCommandCaptureActive = false;
+        }
         _recordingError = null;
         _stopped = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         PublishAudioLevel(0);
@@ -63,7 +69,7 @@ internal sealed class MicrophoneRecorder : IDisposable
         {
             DeviceNumber = deviceNumber,
             WaveFormat = new WaveFormat(16000, 16, 1),
-            BufferMilliseconds = 100
+            BufferMilliseconds = 50
         };
         recorder.DataAvailable += OnDataAvailable;
         recorder.RecordingStopped += OnRecordingStopped;
@@ -82,7 +88,63 @@ internal sealed class MicrophoneRecorder : IDisposable
         }
     }
 
+    public void BeginVoiceCommandCapture()
+    {
+        lock (_sync)
+        {
+            if (_waveIn is null || _segments is null)
+                throw new InvalidOperationException("通常の音声入力中にだけ音声コマンドを使えます。");
+            if (_voiceCommandCaptureActive)
+                return;
+
+            _segments.Add(new CaptureSegmentBuffer(isVoiceCommand: true));
+            _voiceCommandCaptureActive = true;
+        }
+    }
+
+    public void EndVoiceCommandCapture()
+    {
+        lock (_sync)
+        {
+            if (!_voiceCommandCaptureActive || _segments is null)
+                return;
+
+            _segments.Add(new CaptureSegmentBuffer(isVoiceCommand: false));
+            _voiceCommandCaptureActive = false;
+        }
+    }
+
     public async Task<float[]> StopAsync(CancellationToken cancellationToken = default)
+    {
+        var segments = await StopAndGetSegmentsAsync(cancellationToken);
+        try
+        {
+            var dictationSegments = segments
+                .Where(segment => !segment.IsVoiceCommand)
+                .Select(segment => segment.Samples)
+                .ToArray();
+            var sampleCount = dictationSegments.Sum(segment => segment.Length);
+            if (sampleCount < 2400)
+                throw new InvalidOperationException("録音が短すぎます。もう少し話してから停止してください。");
+
+            var combined = new float[sampleCount];
+            var offset = 0;
+            foreach (var segment in dictationSegments)
+            {
+                Array.Copy(segment, 0, combined, offset, segment.Length);
+                offset += segment.Length;
+            }
+            return combined;
+        }
+        finally
+        {
+            foreach (var segment in segments)
+                Array.Clear(segment.Samples);
+        }
+    }
+
+    public async Task<IReadOnlyList<AudioRecordingSegment>> StopAndGetSegmentsAsync(
+        CancellationToken cancellationToken = default)
     {
         var recorder = _waveIn ?? throw new InvalidOperationException("録音は開始していません。");
         var stopped = _stopped!;
@@ -114,26 +176,36 @@ internal sealed class MicrophoneRecorder : IDisposable
             throw new InvalidOperationException("マイク音声を読み取れませんでした。", _recordingError);
         }
 
-        byte[] bytes;
+        List<(bool IsVoiceCommand, byte[] Bytes)> bytes;
         lock (_sync)
-            bytes = _audio?.ToArray() ?? Array.Empty<byte>();
-        ClearAudioBuffer();
-
-        var sampleCount = bytes.Length / sizeof(short);
-        if (sampleCount < 2400)
         {
-            Array.Clear(bytes);
-            throw new InvalidOperationException("録音が短すぎます。もう少し話してから停止してください。");
+            bytes = _segments?.Select(segment => (segment.IsVoiceCommand, segment.Audio.ToArray())).ToList()
+                    ?? new List<(bool, byte[])>();
+            ClearAudioBufferUnsafe();
         }
 
-        var samples = new float[sampleCount];
-        for (var i = 0; i < sampleCount; i++)
+        var result = new List<AudioRecordingSegment>(bytes.Count);
+        foreach (var (isVoiceCommand, audioBytes) in bytes)
         {
-            var pcm = BinaryPrimitives.ReadInt16LittleEndian(bytes.AsSpan(i * sizeof(short), sizeof(short)));
-            samples[i] = pcm / 32768f;
+            try
+            {
+                var sampleCount = audioBytes.Length / sizeof(short);
+                var samples = new float[sampleCount];
+                for (var i = 0; i < sampleCount; i++)
+                {
+                    var pcm = BinaryPrimitives.ReadInt16LittleEndian(
+                        audioBytes.AsSpan(i * sizeof(short), sizeof(short)));
+                    samples[i] = pcm / 32768f;
+                }
+                result.Add(new AudioRecordingSegment(isVoiceCommand, samples));
+            }
+            finally
+            {
+                Array.Clear(audioBytes);
+            }
         }
-        Array.Clear(bytes);
-        return samples;
+
+        return result;
     }
 
     public bool TryGetRecordingSnapshot(out float[] samples)
@@ -141,23 +213,21 @@ internal sealed class MicrophoneRecorder : IDisposable
         byte[] bytes;
         lock (_sync)
         {
-            if (_waveIn is null || _audio is null || _audio.Length < 16000 * sizeof(short))
+            var dictationBytes = _segments?
+                .Where(segment => !segment.IsVoiceCommand)
+                .Select(segment => segment.Audio.ToArray())
+                .ToArray() ?? Array.Empty<byte[]>();
+            bytes = CombineAndClear(dictationBytes);
+
+            if (_waveIn is null || bytes.Length < 16000 * sizeof(short))
             {
+                Array.Clear(bytes);
                 samples = Array.Empty<float>();
                 return false;
             }
-
-            bytes = _audio.ToArray();
         }
 
         var sampleCount = bytes.Length / sizeof(short);
-        if (sampleCount < 16000)
-        {
-            Array.Clear(bytes);
-            samples = Array.Empty<float>();
-            return false;
-        }
-
         try
         {
             samples = new float[sampleCount];
@@ -194,7 +264,10 @@ internal sealed class MicrophoneRecorder : IDisposable
         try
         {
             lock (_sync)
-                _audio?.Write(e.Buffer, 0, e.BytesRecorded);
+            {
+                if (_segments is { Count: > 0 } segments)
+                    segments[^1].Audio.Write(e.Buffer, 0, e.BytesRecorded);
+            }
             PublishAudioLevel(AudioInputLevel.GetNormalizedLevel(e.Buffer.AsSpan(0, e.BytesRecorded)));
         }
         catch (Exception ex)
@@ -219,15 +292,52 @@ internal sealed class MicrophoneRecorder : IDisposable
     private void ClearAudioBuffer()
     {
         lock (_sync)
+            ClearAudioBufferUnsafe();
+    }
+
+    private void ClearAudioBufferUnsafe()
+    {
+        if (_segments is not null)
         {
-            if (_audio is not null)
+            foreach (var segment in _segments)
             {
-                if (_audio.TryGetBuffer(out var segment) && segment.Array is not null)
+                if (segment.Audio.TryGetBuffer(out var data) && data.Array is not null)
                     System.Security.Cryptography.CryptographicOperations.ZeroMemory(
-                        segment.Array.AsSpan(segment.Offset, segment.Count));
-                _audio.Dispose();
-                _audio = null;
+                        data.Array.AsSpan(data.Offset, data.Count));
+                segment.Audio.Dispose();
             }
+            _segments = null;
+        }
+        _voiceCommandCaptureActive = false;
+    }
+
+    private static byte[] CombineAndClear(IEnumerable<byte[]> segments)
+    {
+        var arrays = segments.ToArray();
+        try
+        {
+            var size = arrays.Sum(segment => segment.Length);
+            var combined = new byte[size];
+            var offset = 0;
+            foreach (var segment in arrays)
+            {
+                Buffer.BlockCopy(segment, 0, combined, offset, segment.Length);
+                offset += segment.Length;
+            }
+            return combined;
+        }
+        finally
+        {
+            foreach (var segment in arrays)
+                Array.Clear(segment);
         }
     }
+
+    private sealed class CaptureSegmentBuffer(bool isVoiceCommand)
+    {
+        public bool IsVoiceCommand { get; } = isVoiceCommand;
+        public MemoryStream Audio { get; } = new();
+    }
 }
+
+internal sealed record AudioRecordingSegment(bool IsVoiceCommand, float[] Samples);

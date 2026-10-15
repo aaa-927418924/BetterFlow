@@ -43,6 +43,14 @@ Continuous editing and question-answering through OpenCode use Silero VAD to det
 
 During regular dictation, saying "Send it" or "Submit it" causes Better Flow to press Enter after pasting the refined text. The result depends on how the target application handles Enter, so check the destination before using this feature.
 
+While regular dictation is recording, hold **Space** to temporarily enter voice-command mode. The speech recorded while Space is held is treated only as a command and is excluded from the dictated text. Supported text commands are:
+
+- "ここから改行して": insert a line break at that point in the dictated text.
+- "プロンプト風の文章に整形して": rewrite the dictated text as a clear prompt without adding new requirements.
+- "そのまま送信して": paste the raw transcription without AI rewriting, then submit it.
+
+Space is reserved and does not type a space while held in voice-command mode. These commands are available only during regular dictation; they do not control other apps or work in selected-text editing or question sessions.
+
 Open **Dictionary List** in settings to view registered terms. Clear terminology corrections are registered after one occurrence; ambiguous candidates require three separate confirmed corrections. Deleted terms are excluded from automatic relearning unless you explicitly re-enable it for individual entries in the dictionary list. Changes to a sentence's meaning or numeric values are not automatically treated as dictionary entries.
 
 ## Voice Conversations About Selected Text

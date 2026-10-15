@@ -18,6 +18,8 @@ internal sealed class GlobalHotkey : IDisposable
 {
     public const int MessageId = 0x0312;
     public const int EscapeCancelMessageId = 0x8000 + 0x150;
+    public const int VoiceCommandStartMessageId = 0x8000 + 0x151;
+    public const int VoiceCommandStopMessageId = 0x8000 + 0x152;
     private const int HotkeyId = 0x4150;
     private const int WhKeyboardLl = 13;
     private const int WmKeyDown = 0x0100;
@@ -25,6 +27,7 @@ internal sealed class GlobalHotkey : IDisposable
     private const int WmSysKeyDown = 0x0104;
     private const int WmSysKeyUp = 0x0105;
     private const int VkEscape = 0x1B;
+    private const int VkSpace = 0x20;
     private const uint LlkhfExtended = 0x01;
     private const uint LlkhfInjected = 0x10;
     private const uint ModAlt = 0x0001;
@@ -52,6 +55,8 @@ internal sealed class GlobalHotkey : IDisposable
     private bool _escapeMonitoring;
     private bool _escapePressed;
     private bool _rightAltPressed;
+    private bool _voiceCommandPushToTalkEnabled;
+    private bool _spaceVoiceCommandPressed;
     private bool _leftAltDown;
     private bool _leftControlDown;
     private bool _rightControlDown;
@@ -101,6 +106,8 @@ internal sealed class GlobalHotkey : IDisposable
         _escapeMonitoring = false;
         _escapePressed = false;
         _rightAltPressed = false;
+        _voiceCommandPushToTalkEnabled = false;
+        _spaceVoiceCommandPressed = false;
         _leftAltDown = false;
         _leftControlDown = false;
         _rightControlDown = false;
@@ -114,6 +121,10 @@ internal sealed class GlobalHotkey : IDisposable
 
     public bool IsEscapeCancelMessage(int message) => message == EscapeCancelMessageId;
 
+    public bool IsVoiceCommandStartMessage(int message) => message == VoiceCommandStartMessageId;
+
+    public bool IsVoiceCommandStopMessage(int message) => message == VoiceCommandStopMessageId;
+
     public bool SetEscapeMonitoring(bool enabled)
     {
         _escapeMonitoring = enabled;
@@ -123,6 +134,19 @@ internal sealed class GlobalHotkey : IDisposable
         if (!_binding.IsStandaloneRightAlt)
             RemoveKeyboardHook();
         return true;
+    }
+
+    public bool SetVoiceCommandPushToTalkEnabled(bool enabled)
+    {
+        _voiceCommandPushToTalkEnabled = enabled;
+        if (!enabled)
+            return true;
+
+        if (InstallKeyboardHook())
+            return true;
+
+        _voiceCommandPushToTalkEnabled = false;
+        return false;
     }
 
     public static string Format(HotkeyBinding binding)
@@ -180,6 +204,26 @@ internal sealed class GlobalHotkey : IDisposable
                 else if (isKeyUp)
                 {
                     _escapePressed = false;
+                }
+            }
+
+            if (keyInfo.VirtualKey == VkSpace && (keyInfo.Flags & LlkhfInjected) == 0)
+            {
+                if (isKeyUp && _spaceVoiceCommandPressed)
+                {
+                    _spaceVoiceCommandPressed = false;
+                    PostMessage(_handle, VoiceCommandStopMessageId, IntPtr.Zero, IntPtr.Zero);
+                    return new IntPtr(1);
+                }
+
+                if (isKeyDown && _spaceVoiceCommandPressed)
+                    return new IntPtr(1);
+
+                if (isKeyDown && _voiceCommandPushToTalkEnabled && !IsAnyModifierDown())
+                {
+                    _spaceVoiceCommandPressed = true;
+                    PostMessage(_handle, VoiceCommandStartMessageId, IntPtr.Zero, IntPtr.Zero);
+                    return new IntPtr(1);
                 }
             }
 
