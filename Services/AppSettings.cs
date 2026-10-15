@@ -10,7 +10,8 @@ internal sealed class AppSettings
     public string SelectedTextAnswerMode { get; set; } = "opencode";
     public string OpenCodeModelProviderId { get; set; } = "opencode";
     public string OpenCodeModelId { get; set; } = "deepseek-v4.1-flash-free";
-    public bool UsePrecedingTextForAiRewrite { get; set; }
+    public bool UsePrecedingTextForAiRewrite { get; set; } = true;
+    public int PrecedingTextContextPreferenceVersion { get; set; } = 1;
     public List<CorrectionDictionaryEntry> CorrectionDictionary { get; set; } = new();
     public List<DictionaryLearningEvidence> PendingDictionaryLearning { get; set; } = new();
     public List<string> SuppressedAutomaticDictionaryTerms { get; set; } = new();
@@ -88,7 +89,18 @@ internal sealed class SettingsStore
                 }
             }
 
-            if (hasObsoleteSpeechModelSettings)
+            var needsSave = hasObsoleteSpeechModelSettings;
+            if (settings.PrecedingTextContextPreferenceVersion < 1)
+            {
+                // The preceding-context trial used to default to off. Make the
+                // new default take effect once for existing installs, then keep
+                // any later user choice across restarts.
+                settings.UsePrecedingTextForAiRewrite = true;
+                settings.PrecedingTextContextPreferenceVersion = 1;
+                needsSave = true;
+            }
+
+            if (needsSave)
                 Save(settings);
             return settings;
         }

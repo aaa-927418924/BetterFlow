@@ -5,7 +5,7 @@
         Background="Transparent" ResizeMode="NoResize" ShowInTaskbar="False"
         ShowActivated="False" Topmost="True" WindowStartupLocation="Manual"
         Focusable="False" UseLayoutRounding="True" SnapsToDevicePixels="True">
-    <Border Background="#303030" BorderBrush="#2B2B2B" BorderThickness="2.5"
+    <Border Background="#E6303030" BorderBrush="#E62B2B2B" BorderThickness="2.5"
             CornerRadius="19" Padding="2.5" IsHitTestVisible="False">
         <Grid>
             <Grid.ColumnDefinitions>
