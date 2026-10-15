@@ -711,3 +711,10 @@
 - 新規設定の文脈機能をオンに変更。設定バージョンが未設定の既存ユーザーも初回だけオンへ移行し、次回以降はユーザーがオフにした選択も保存して維持。
 - Release build/publish成功（0エラー、NU1900警告1件）。発行物と`dist/Better Flow.exe`は82,485,439 bytes、SHA-256 `90675A9A355D840B3C87CD4CF4C2DF23D2B26D56128CAF9E0D3F99327FFAD9F2`で一致。更新前EXEは`artifacts/BetterFlow-before-indicator-transparency-20261015.exe`（82,482,955 bytes、SHA-256 `D6A05B15FCA63F2CB5476C9A024AEA22057229CAE2A12E08E492131D476BFE7A`）へ保存。配布EXEと完全一致するプロセスを停止後、一時的なファイルロックが解消して置換成功。
 - 画面のライブ表示、実録音、既存設定からの初回移行とオフ選択の再起動保持は未確認。テストスイートは実行していない。
+
+### 透過率25%・文脈参考の常時有効化（2026-10-15）
+
+- 変更前チェックポイント: `8b1133c chore: checkpoint before permanent context and indicator update`。
+- 録音インジケーターの背景・輪郭をARGB `#BF`（約75%不透明、25%透過）に変更。文字・アイコンは不透明のまま。
+- 直前文脈の取得を通常音声入力で常時行い、設定画面の切替UIと関連説明を削除。保存済みの旧トグル値は参照せず、他のアプリ設定は保持。
+- Release build/publish成功（0エラー、NU1900警告1件）。発行物と`dist/Better Flow.exe`は82,482,761 bytes、SHA-256 `77ED27F58BBFBB0C2819950110077C196EB78B97EBBB8C858FA7D8A0381A5449`で一致。更新前EXEは`artifacts/BetterFlow-before-permanent-context-20261015.exe`（82,485,439 bytes、SHA-256 `90675A9A355D840B3C87CD4CF4C2DF23D2B26D56128CAF9E0D3F99327FFAD9F2`）へ保存。配布先と一致する実行プロセスはなく、停止対象はなかった。実画面表示・実録音・文脈のAI効果は未確認。テストスイートは実行していない。

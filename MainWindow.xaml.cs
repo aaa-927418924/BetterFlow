@@ -49,7 +49,6 @@ public partial class MainWindow : System.Windows.Window
     private bool _isRefreshingOpenCodeModels;
     private bool _loadingOpenCodeModelUi;
     private bool _loadingMicrophoneDeviceUi;
-    private bool _loadingPrecedingTextContextUi;
     private bool _openCodeReady;
     private string? _recordingPrecedingTextContext;
     private CancellationTokenSource? _audioProcessingCancellation;
@@ -122,7 +121,6 @@ public partial class MainWindow : System.Windows.Window
         }
         NormalizeAiSettings();
         InitializeOpenCodeModelUi();
-        InitializePrecedingTextContextUi();
         RefreshCorrectionDictionaryItems();
         InitializeSelectedTextAnswerModeUi();
         InitializeMicrophoneDeviceUi();
@@ -336,7 +334,6 @@ public partial class MainWindow : System.Windows.Window
         var canChooseModel = _asr is not null && !_isBusy && !IsAnyRecording && !_isRefreshingOpenCodeModels;
         OpenCodeModelCombo.IsEnabled = canChooseModel;
         RefreshOpenCodeModelsButton.IsEnabled = canChooseModel && !_isRefreshingOpenCodeModels;
-        PrecedingTextContextCheckBox.IsEnabled = _asr is not null && !_isBusy && !IsAnyRecording;
         CorrectionDictionarySettingsPanel.IsEnabled = _asr is not null && !_isBusy && !IsAnyRecording;
         UpdateDiscordMuteControlsEnabled();
         UpdateSelectedTextAnswerModeDisplay();
@@ -777,42 +774,6 @@ public partial class MainWindow : System.Windows.Window
             ? "OpenCode Desktopで現在接続中のproviderのモデルだけを一覧更新して読み込みます。"
             : string.Empty;
         _loadingOpenCodeModelUi = false;
-    }
-
-    private void InitializePrecedingTextContextUi()
-    {
-        _loadingPrecedingTextContextUi = true;
-        PrecedingTextContextCheckBox.IsChecked = _settings.UsePrecedingTextForAiRewrite;
-        _loadingPrecedingTextContextUi = false;
-    }
-
-    private void PrecedingTextContextCheckBox_Changed(object sender, System.Windows.RoutedEventArgs e)
-    {
-        if (_loadingPrecedingTextContextUi) return;
-
-        var previous = _settings.UsePrecedingTextForAiRewrite;
-        var requested = PrecedingTextContextCheckBox.IsChecked == true;
-        if (_asr is null || _isBusy || IsAnyRecording)
-        {
-            _loadingPrecedingTextContextUi = true;
-            PrecedingTextContextCheckBox.IsChecked = previous;
-            _loadingPrecedingTextContextUi = false;
-            return;
-        }
-
-        _settings.UsePrecedingTextForAiRewrite = requested;
-        try
-        {
-            _settingsStore.Save(_settings);
-        }
-        catch
-        {
-            _settings.UsePrecedingTextForAiRewrite = previous;
-            _loadingPrecedingTextContextUi = true;
-            PrecedingTextContextCheckBox.IsChecked = previous;
-            _loadingPrecedingTextContextUi = false;
-            _indicator.ShowStatus("設定を保存できません", TimeSpan.FromSeconds(1));
-        }
     }
 
     private void InitializeMicrophoneDeviceUi() => RefreshMicrophoneDeviceList(updateStatus: false);
@@ -1820,8 +1781,7 @@ public partial class MainWindow : System.Windows.Window
                     return;
                 }
 
-                if (_settings.UsePrecedingTextForAiRewrite)
-                    _recordingPrecedingTextContext = PrecedingTextContextService.Capture(_pasteTarget);
+                _recordingPrecedingTextContext = PrecedingTextContextService.Capture(_pasteTarget);
 
                 var selectedInput = MicrophoneDeviceCombo.SelectedItem as AudioInputDeviceOption;
                 StartRecorderWithDiscordMute(_recorder.Start, selectedInput);
