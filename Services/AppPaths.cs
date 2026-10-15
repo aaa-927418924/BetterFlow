@@ -13,11 +13,6 @@ internal static class AppPaths
     public static string ModelDirectory => Path.Combine(Root, "models", "parakeet-ja-int8");
     public static string ModelFile => Path.Combine(ModelDirectory, "model.int8.onnx");
     public static string TokensFile => Path.Combine(ModelDirectory, "tokens.txt");
-    public static string WhisperModelDirectory => Path.Combine(Root, "models", "whisper-large-v3-turbo-int8");
-    public static string WhisperEncoderFile => Path.Combine(WhisperModelDirectory, "turbo-encoder.int8.onnx");
-    public static string WhisperDecoderFile => Path.Combine(WhisperModelDirectory, "turbo-decoder.int8.onnx");
-    public static string WhisperTokensFile => Path.Combine(WhisperModelDirectory, "turbo-tokens.txt");
-    public static string WhisperModelMarkerFile => Path.Combine(WhisperModelDirectory, "model.ready");
     public static string SettingsFile => Path.Combine(Root, "settings.json");
     public static string ModelSetupLockFile => Path.Combine(Root, "model-setup.lock");
     public static string DownloadDirectory => Path.Combine(Root, "downloads");
@@ -32,7 +27,6 @@ internal static class AppPaths
     {
         Directory.CreateDirectory(Root);
         Directory.CreateDirectory(ModelDirectory);
-        Directory.CreateDirectory(WhisperModelDirectory);
         Directory.CreateDirectory(DownloadDirectory);
         Directory.CreateDirectory(TemporaryDirectory);
     }

@@ -33,25 +33,10 @@
                     <StackPanel>
                         <TextBlock x:Name="TitleText" Text="起動には初回セットアップが必要です。"
                                    FontSize="23" FontWeight="Normal" LineHeight="34" />
-                        <TextBlock x:Name="BodyText" Text="日本語音声モデルとOpenCodeを自動で準備します。&#10;OpenCode Zenの利用には別途サインインが必要です。"
+                        <TextBlock x:Name="BodyText" Text="Parakeet日本語音声モデルとOpenCodeを自動で準備します。&#10;OpenCode Zenの利用には別途サインインが必要です。"
                                    FontSize="16" LineHeight="22" Margin="0,20,0,0" />
                         <TextBlock x:Name="CapacityText" Text="必要な空き容量: 約1.2 GB"
                                    FontSize="15" Margin="0,18,0,0" />
-                        <StackPanel x:Name="SpeechModelSettingsPanel" Margin="0,16,0,0">
-                            <TextBlock Text="文字起こしモデル" FontSize="14" FontWeight="SemiBold" />
-                            <ComboBox x:Name="SpeechRecognitionModelCombo" IsEditable="False" MinHeight="40"
-                                      Background="#333333" Foreground="#F4F4F4" BorderBrush="#686868"
-                                      FontFamily="Yu Gothic UI" FontSize="13" Margin="0,8,0,0"
-                                      Style="{StaticResource DarkComboBoxStyle}"
-                                      SelectedValuePath="Tag"
-                                      SelectionChanged="SpeechRecognitionModelCombo_SelectionChanged"
-                                      AutomationProperties.Name="文字起こしモデル">
-                                <ComboBoxItem Content="Whisper Large V3 Turbo" Tag="whisper-large-v3-turbo" />
-                                <ComboBoxItem Content="Parakeet 0.6B 日本語" Tag="parakeet-ja-int8" />
-                            </ComboBox>
-                            <TextBlock x:Name="SpeechModelStatus" FontSize="11" Foreground="{StaticResource MutedBrush}"
-                                       LineHeight="18" Margin="0,5,0,0" AutomationProperties.LiveSetting="Polite" />
-                        </StackPanel>
                         <StackPanel x:Name="ShortcutSettingsPanel" Margin="0,18,0,0" Visibility="Collapsed">
                             <TextBlock Text="ショートカットキー" FontSize="13" Foreground="{StaticResource MutedBrush}" />
                             <DockPanel Margin="0,4,0,0" LastChildFill="True">
@@ -78,6 +63,7 @@
                                           FontFamily="Yu Gothic UI" FontSize="13"
                                           ItemTemplate="{StaticResource AudioInputDisplayNameTemplate}"
                                           Style="{StaticResource DarkComboBoxStyle}"
+                                          PreviewMouseWheel="SettingsComboBox_PreviewMouseWheel"
                                           DropDownOpened="MicrophoneDeviceCombo_DropDownOpened"
                                           SelectionChanged="MicrophoneDeviceCombo_SelectionChanged"
                                           ToolTip="{Binding SelectedItem.DisplayName, RelativeSource={RelativeSource Self}}"
@@ -99,6 +85,7 @@
                                           FontFamily="Yu Gothic UI" FontSize="13"
                                           ItemTemplate="{StaticResource DropdownDisplayNameTemplate}"
                                           Style="{StaticResource DarkComboBoxStyle}"
+                                          PreviewMouseWheel="SettingsComboBox_PreviewMouseWheel"
                                           SelectionChanged="OpenCodeModelCombo_SelectionChanged"
                                           AutomationProperties.Name="OpenCode Desktopのモデル" />
                             </DockPanel>
@@ -146,11 +133,15 @@
                                       Background="#333333" Foreground="#F4F4F4" BorderBrush="#686868"
                                       FontFamily="Yu Gothic UI" FontSize="13" Margin="0,8,0,0"
                                       Style="{StaticResource DarkComboBoxStyle}"
+                                      PreviewMouseWheel="SettingsComboBox_PreviewMouseWheel"
                                       SelectionChanged="SelectedTextAnswerModeCombo_SelectionChanged"
                                       AutomationProperties.Name="選択文章への回答方法">
                                 <ComboBoxItem Content="OpenCodeのテキスト回答" Tag="opencode" />
                                 <ComboBoxItem Content="GPT Liveの音声会話" Tag="gpt-live" />
                             </ComboBox>
+                            <TextBlock Text="GPT LiveにはChatGPTサブスクリプションが必要です。"
+                                       FontSize="11" Foreground="{StaticResource MutedBrush}"
+                                       TextWrapping="Wrap" Margin="0,5,0,0" />
                             <DockPanel x:Name="GptLiveSignInPanel" Margin="0,8,0,0" LastChildFill="True"
                                        Visibility="Collapsed">
                                 <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">

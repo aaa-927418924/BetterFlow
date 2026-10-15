@@ -4,9 +4,6 @@ namespace BetterFlow.Services;
 
 internal sealed class AsrService : IDisposable
 {
-    public const string WhisperLargeV3TurboModelId = "whisper-large-v3-turbo";
-    public const string ParakeetJapaneseModelId = "parakeet-ja-int8";
-
     private readonly OfflineRecognizer _recognizer;
 
     private AsrService(OfflineRecognizer recognizer)
@@ -23,25 +20,6 @@ internal sealed class AsrService : IDisposable
         config.ModelConfig.NeMoCtc.Model = modelPath;
         config.ModelConfig.NumThreads = Math.Clamp(Environment.ProcessorCount / 2, 1, 8);
         config.ModelConfig.Provider = "cpu";
-        config.ModelConfig.Debug = 0;
-        config.DecodingMethod = "greedy_search";
-        return new AsrService(new OfflineRecognizer(config));
-    }
-
-    public static AsrService LoadWhisperLargeV3Turbo(string encoderPath, string decoderPath, string tokensPath)
-    {
-        var config = new OfflineRecognizerConfig();
-        config.FeatConfig.SampleRate = 16000;
-        config.FeatConfig.FeatureDim = 80;
-        config.ModelConfig.Tokens = tokensPath;
-        config.ModelConfig.Whisper.Encoder = encoderPath;
-        config.ModelConfig.Whisper.Decoder = decoderPath;
-        config.ModelConfig.Whisper.Language = "ja";
-        config.ModelConfig.Whisper.Task = "transcribe";
-        config.ModelConfig.Whisper.TailPaddings = -1;
-        config.ModelConfig.NumThreads = Math.Clamp(Environment.ProcessorCount / 2, 1, 8);
-        config.ModelConfig.Provider = "cpu";
-        config.ModelConfig.ModelType = "whisper";
         config.ModelConfig.Debug = 0;
         config.DecodingMethod = "greedy_search";
         return new AsrService(new OfflineRecognizer(config));

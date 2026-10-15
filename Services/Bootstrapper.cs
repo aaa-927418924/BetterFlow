@@ -15,22 +15,13 @@ internal sealed class Bootstrapper
 
     private static readonly HttpClient Client = new() { Timeout = Timeout.InfiniteTimeSpan };
 
-    public async Task EnsureModelAsync(IProgress<SetupProgress> progress, CancellationToken cancellationToken, string modelId)
+    public async Task EnsureModelAsync(IProgress<SetupProgress> progress, CancellationToken cancellationToken)
     {
         AppPaths.EnsureDirectories();
         progress.Report(new SetupProgress("音声モデルのセットアップ状態を確認しています…", 0));
         await using var setupLock = await AcquireSetupLockAsync(cancellationToken);
 
-        if (modelId == AsrService.WhisperLargeV3TurboModelId)
-        {
-            await new WhisperAsrSetupService().EnsureReadyAsync(progress, cancellationToken);
-        }
-        else if (modelId == AsrService.ParakeetJapaneseModelId)
-        {
-            await EnsureParakeetModelAsync(progress, cancellationToken);
-        }
-        else
-            throw new InvalidDataException("認識モデルの選択が正しくありません。設定からモデルを選び直してください。");
+        await EnsureParakeetModelAsync(progress, cancellationToken);
 
         progress.Report(new SetupProgress("音声モデルを起動しています…", 98));
     }
@@ -84,10 +75,7 @@ internal sealed class Bootstrapper
     private static bool IsSharingViolation(IOException exception) =>
         (exception.HResult & 0xFFFF) is 32 or 33;
 
-    public static bool IsModelReady(string? modelId) =>
-        modelId == AsrService.WhisperLargeV3TurboModelId
-            ? WhisperAsrSetupService.IsReady()
-            : modelId == AsrService.ParakeetJapaneseModelId && IsParakeetModelReady();
+    public static bool IsModelReady() => IsParakeetModelReady();
 
     private static bool IsParakeetModelReady() =>
         File.Exists(AppPaths.ModelFile) && new FileInfo(AppPaths.ModelFile).Length > 500_000_000 &&

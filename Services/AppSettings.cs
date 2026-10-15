@@ -10,8 +10,6 @@ internal sealed class AppSettings
     public string SelectedTextAnswerMode { get; set; } = "opencode";
     public string OpenCodeModelProviderId { get; set; } = "opencode";
     public string OpenCodeModelId { get; set; } = "muse-spark-1.3-contributor-free";
-    public string SpeechRecognitionModelId { get; set; } = AsrService.ParakeetJapaneseModelId;
-    public int SpeechRecognitionModelPreferenceVersion { get; set; }
     public List<CorrectionDictionaryEntry> CorrectionDictionary { get; set; } = new();
     public List<DictionaryLearningEvidence> PendingDictionaryLearning { get; set; } = new();
     public List<string> SuppressedAutomaticDictionaryTerms { get; set; } = new();
@@ -75,6 +73,19 @@ internal sealed class SettingsStore
 
             var json = File.ReadAllText(AppPaths.SettingsFile);
             var settings = System.Text.Json.JsonSerializer.Deserialize<AppSettings>(json) ?? new AppSettings();
+            var hasObsoleteSpeechModelSettings = false;
+            using (var document = System.Text.Json.JsonDocument.Parse(json))
+            {
+                if (document.RootElement.ValueKind == System.Text.Json.JsonValueKind.Object)
+                {
+                    hasObsoleteSpeechModelSettings = document.RootElement.EnumerateObject().Any(property =>
+                        property.Name.Equals("SpeechRecognitionModelId", StringComparison.OrdinalIgnoreCase) ||
+                        property.Name.Equals("SpeechRecognitionModelPreferenceVersion", StringComparison.OrdinalIgnoreCase));
+                }
+            }
+
+            if (hasObsoleteSpeechModelSettings)
+                Save(settings);
             return settings;
         }
         catch
