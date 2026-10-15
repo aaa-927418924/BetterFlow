@@ -119,10 +119,14 @@ internal sealed class OpenCodeService : IDisposable
         IReadOnlyList<CorrectionDictionaryEntry>? dictionary = null,
         CancellationToken cancellationToken = default,
         string? precedingContext = null,
-        IReadOnlyList<string>? voiceEditInstructions = null) =>
+        IReadOnlyList<string>? voiceEditInstructions = null,
+        IReadOnlyList<VoiceEditCommandInstruction>? voiceEditCommands = null) =>
         GenerateTextAsync(providerId, modelId,
-            TranscriptRewritePrompt.CreateSystemMessage(precedingContext, voiceEditInstructions?.Count > 0),
-            TranscriptRewritePrompt.CreateUserMessage(transcript, dictionary, precedingContext, voiceEditInstructions),
+            TranscriptRewritePrompt.CreateSystemMessage(precedingContext,
+                voiceEditInstructions?.Count > 0,
+                voiceEditCommands?.Count > 0),
+            TranscriptRewritePrompt.CreateUserMessage(
+                transcript, dictionary, precedingContext, voiceEditInstructions, voiceEditCommands),
             cancellationToken);
 
     public Task<string> FormatTranscriptAsPromptAsync(

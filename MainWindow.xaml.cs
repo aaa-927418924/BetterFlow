@@ -2778,6 +2778,8 @@ public partial class MainWindow : System.Windows.Window
         var transcript = new StringBuilder();
         var actions = new List<(float[]? Samples, VoiceTextCommand? Command, string? EditInstruction)>();
         var editInstructions = new List<string>();
+        var voiceEditCommands = new List<VoiceEditCommandInstruction>();
+        var voiceCommandSessionId = Guid.NewGuid().ToString("N");
         var formatAsPrompt = false;
         var sendAsIs = false;
         var hadUnrecognizedVoiceCommand = false;
@@ -2831,7 +2833,7 @@ public partial class MainWindow : System.Windows.Window
                         recognized = TranscriptFormatter.NormalizeTranscript(recognized);
                         if (TranscriptFormatter.HasMeaningfulText(recognized))
                         {
-                            if (transcript.Length > 0 && transcript[^1] != '\n')
+                            if (transcript.Length > 0 && transcript[^1] != '\n' && !char.IsWhiteSpace(transcript[^1]))
                                 transcript.Append(' ');
                             transcript.Append(recognized);
                         }
@@ -2848,7 +2850,13 @@ public partial class MainWindow : System.Windows.Window
                 cancellationToken.ThrowIfCancellationRequested();
                 if (action.EditInstruction is { } editInstruction)
                 {
-                    editInstructions.Add(editInstruction);
+                    await FlushDictatedAudioAsync();
+                    var marker = VoiceCommandParser.CreateVoiceCommandMarker(
+                        voiceCommandSessionId, voiceEditCommands.Count);
+                    if (transcript.Length > 0 && !char.IsWhiteSpace(transcript[^1]))
+                        transcript.Append(' ');
+                    transcript.Append(marker).Append(' ');
+                    voiceEditCommands.Add(new VoiceEditCommandInstruction(marker, editInstruction));
                     continue;
                 }
 
@@ -2875,6 +2883,7 @@ public partial class MainWindow : System.Windows.Window
                             editInstructions.Add(VoiceCommandParser.PromptFormatInstruction);
                         break;
                     case VoiceTextCommand.SendAsIs:
+                        await FlushDictatedAudioAsync();
                         sendAsIs = true;
                         break;
                 }
@@ -2887,6 +2896,7 @@ public partial class MainWindow : System.Windows.Window
                 formatAsPrompt,
                 sendAsIs,
                 editInstructions,
+                voiceEditCommands,
                 hadUnrecognizedVoiceCommand);
         }
         finally
@@ -2944,10 +2954,13 @@ public partial class MainWindow : System.Windows.Window
             var formatAsPrompt = decoded.FormatAsPrompt;
             var sendAsIs = decoded.SendAsIs;
             var editInstructions = decoded.EditInstructions;
-            var hasNonPromptEditInstructions = editInstructions.Any(instruction =>
+            var voiceEditCommands = decoded.VoiceEditCommands;
+            var hasVoiceEditInstructions = editInstructions.Count > 0 || voiceEditCommands.Count > 0;
+            var hasNonPromptEditInstructions = voiceEditCommands.Count > 0 || editInstructions.Any(instruction =>
                 !string.Equals(instruction, VoiceCommandParser.PromptFormatInstruction, StringComparison.Ordinal));
             var usePromptStyleRewrite = formatAsPrompt && !hasNonPromptEditInstructions;
-            if (!TranscriptFormatter.HasMeaningfulText(transcript))
+            var transcriptForPaste = VoiceCommandParser.RemoveVoiceCommandMarkers(transcript);
+            if (!TranscriptFormatter.HasMeaningfulText(transcriptForPaste))
                 throw new InvalidDataException("文字起こし結果が空、または句読点・記号だけでした。マイクを確認して、もう一度お試しください。");
 
             sendAfterPaste = decoded.SendAsIs;
@@ -2956,11 +2969,12 @@ public partial class MainWindow : System.Windows.Window
             {
                 sendAfterPaste = true;
                 transcript = transcriptWithoutCommand;
-                if (!TranscriptFormatter.HasMeaningfulText(transcript))
+                transcriptForPaste = VoiceCommandParser.RemoveVoiceCommandMarkers(transcript);
+                if (!TranscriptFormatter.HasMeaningfulText(transcriptForPaste))
                     throw new InvalidDataException("送信コマンドの前に文章がありません。入力欄は変更していません。");
             }
-            _pendingRawTranscriptFallback = transcript;
-            _transcriptPreviewWindow.ShowPreview(transcript);
+            _pendingRawTranscriptFallback = transcriptForPaste;
+            _transcriptPreviewWindow.ShowPreview(transcriptForPaste);
             var explicitLineBreakCount = VoiceCommandParser.CountExplicitLineBreaks(transcript);
             var transcriptForAi = VoiceCommandParser.MarkExplicitLineBreaks(transcript);
 
@@ -2969,7 +2983,7 @@ public partial class MainWindow : System.Windows.Window
             _indicator.HideStatus();
             if (sendAsIs)
             {
-                text = transcript;
+                text = transcriptForPaste;
                 resultStatus = "文字起こしをそのまま入力欄へ貼り付けました。";
             }
             else
@@ -2977,7 +2991,7 @@ public partial class MainWindow : System.Windows.Window
                 _indicator.ShowStatus("整形中");
                 RuntimeStatus.Text = usePromptStyleRewrite
                     ? "音声コマンドに従ってプロンプト風に整えています…"
-                    : editInstructions.Count > 0
+                    : hasVoiceEditInstructions
                         ? "音声コマンドの編集指示を反映しています…"
                     : "OpenCodeを準備しています…";
                 if (!sendAfterPaste)
@@ -2990,7 +3004,7 @@ public partial class MainWindow : System.Windows.Window
                         _sendCommandListenerTask = sendCommandListenerTask;
                         RuntimeStatus.Text = usePromptStyleRewrite
                             ? "音声コマンドに従ってプロンプト風に整えています。送信も音声で指示できます。"
-                            : editInstructions.Count > 0
+                            : hasVoiceEditInstructions
                                 ? "音声コマンドの編集指示を反映しています。送信も音声で指示できます。"
                             : "OpenCodeの選択モデルで文章を整えています。音声で送信を指示できます。";
                     }
@@ -3002,18 +3016,19 @@ public partial class MainWindow : System.Windows.Window
 
                 try
                 {
-                    if (sendCommandListenerTask is null && !sendAfterPaste && editInstructions.Count == 0)
+                    if (sendCommandListenerTask is null && !sendAfterPaste && !hasVoiceEditInstructions)
                         RuntimeStatus.Text = "OpenCodeの選択モデルで文章を整えています…";
                     if (!_openCode.IsRunning) await EnsureOpenCodeReadyAsync(cancellationToken);
                     var relevantDictionary = DictionaryTermSelector.SelectRelevant(
-                        transcript, _settings.CorrectionDictionary);
+                        transcriptForPaste, _settings.CorrectionDictionary);
                     var response = usePromptStyleRewrite
                         ? await _openCode.FormatTranscriptAsPromptAsync(
                             transcriptForAi, _settings.OpenCodeModelProviderId, _settings.OpenCodeModelId,
                             relevantDictionary, cancellationToken, precedingTextContext)
                         : await _openCode.RewriteAsync(
                             transcriptForAi, _settings.OpenCodeModelProviderId, _settings.OpenCodeModelId,
-                            relevantDictionary, cancellationToken, precedingTextContext, editInstructions);
+                            relevantDictionary, cancellationToken, precedingTextContext, editInstructions,
+                            voiceEditCommands);
                     cancellationToken.ThrowIfCancellationRequested();
                     if (sendCommandListenerTask is not null)
                     {
@@ -3023,15 +3038,18 @@ public partial class MainWindow : System.Windows.Window
                         sendCommandListenerTask = null;
                         sendAfterPaste = sendCommandDetected.Task.IsCompletedSuccessfully && sendCommandDetected.Task.Result;
                     }
-                    if (VoiceCommandParser.CountExplicitLineBreakMarkers(response) != explicitLineBreakCount)
-                        throw new InvalidDataException("AIモデルが音声コマンドで指定した改行を保持できませんでした。入力欄は変更していません。");
+                    var returnedLineBreakMarkers = VoiceCommandParser.CountExplicitLineBreakMarkers(response);
+                    if (returnedLineBreakMarkers < explicitLineBreakCount ||
+                        returnedLineBreakMarkers > explicitLineBreakCount + voiceEditCommands.Count ||
+                        VoiceCommandParser.HasUnresolvedVoiceCommandMarker(response))
+                        throw new InvalidDataException("AIモデルが音声コマンドを解釈できませんでした。入力欄は変更していません。");
                     text = VoiceCommandParser.RestoreExplicitLineBreaks(response).Trim(' ', '\t', '\r');
                     if (!TranscriptFormatter.HasMeaningfulText(text))
                         throw new InvalidDataException("モデルから文字として使える回答が返りませんでした。入力欄は変更していません。");
                     RecordDictionaryTermUsage(relevantDictionary);
                     resultStatus = usePromptStyleRewrite
                         ? "プロンプト風に整えた文章を入力欄へ貼り付けました。"
-                        : editInstructions.Count > 0
+                        : hasVoiceEditInstructions
                             ? "音声コマンドの編集指示を反映した文章を入力欄へ貼り付けました。"
                             : "整えた文章を入力欄へ貼り付けました。";
                 }
@@ -3644,4 +3662,5 @@ internal readonly record struct NormalAudioDecodeResult(
     bool FormatAsPrompt,
     bool SendAsIs,
     IReadOnlyList<string> EditInstructions,
+    IReadOnlyList<VoiceEditCommandInstruction> VoiceEditCommands,
     bool HadUnrecognizedVoiceCommand);
