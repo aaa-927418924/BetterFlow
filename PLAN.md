@@ -650,3 +650,11 @@
 - 変更（分類: 設定・音声セッション連携、出典: `MainWindow.xaml`、`MainWindow.xaml.cs`、`Services/AppSettings.cs`、`Services/DiscordPushToMuteController.cs`、確認日: 2026-10-15 Asia/Tokyo、信頼度: ソース・ビルド・配布ハッシュは高、Discord実機動作は未確認）: オプトインのDiscordミュート設定と専用ショートカット割り当てを追加。Discord設定の手順を独立ページに表示し、左上の戻るボタンで設定へ戻る。ミュートのオン/オフとは別にショートカットを保存し、オン/オフを切り替えても保持。通常音声入力、選択文編集/質問、GPT Live、AI整形中の送信音声監視の各マイク利用区間でDiscordの「プッシュしてミュート」キーを押下保持し、終了・キャンセル・開始失敗・アプリ終了で解放する。Discord Desktopが動作していない場合はキーを送らず、キー送信エラー時は録音開始を止める。Windows全体のマイクミュートとDiscordのToggle Muteは使用しない。
 - Release発行: `dotnet publish AutoPrompt.csproj --configuration Release --no-restore --output artifacts/publish-discord-auto-mute`が成功。NuGetの脆弱性情報を取得できず`NU1900`警告1件。発行物と`dist/Better Flow.exe`はいずれも82,481,669 bytes、SHA-256 `1A252A9E12B6C0C57B6E5B9660AF855D5E6B64782ACFCD98CDD66974FDC923C0`で一致。旧EXEは`artifacts/BetterFlow-before-discord-auto-mute-de862c1.exe`へ退避（82,477,268 bytes、SHA-256 `A2CF7E5F3241627A2D70BE6EF5EF544BDB5EC9E1BCE68F8A2BCBD008D12DC62C`）。配布EXEと完全一致するPID 39260を停止してから置換した。
 - 確認範囲: Release publishと単体EXE、配布先とのSHA-256一致を確認。テストスイート、UI操作、Discordでの実ミュート、手動ミュート状態の復元は未確認。実装前チェックポイントは`de862c1`。
+
+## Discord設定画面の微調整（2026-10-15）
+
+- Discordミュートのキー設定に関する説明2件を設定画面から削除。オン/オフやキー保存時の状態表示からも、キーを無効化後に保持する案内と、Discordへ同じキーを設定する案内を除いた。
+- 設定画面のスクロールバーを6px右へ移動し、本文領域幅とボタン配置を保った。辞書リストとDiscord設定方法ページの戻る行には、アイコン下に8pxの余白を追加した。
+- 「選択した文章への回答方法」の2項目に既存のカスタムドロップダウン項目スタイルを指定し、選択中の明るい背景に濃い文字が表示されるようにした。
+- Release publish成功。`NU1900`（NuGet脆弱性情報フィードへ接続できない警告）1件。発行物と`dist/Better Flow.exe`はいずれも82,481,558 bytes、SHA-256 `D28C038F784CE67B9478FFBDCF559AAB8D1694C94D1896633E85DE0358C47357`。変更前のEXEを`artifacts/BetterFlow-before-settings-ui-fixes-11bd8c9.exe`へ退避（82,481,669 bytes、SHA-256 `1A252A9E12B6C0C57B6E5B9660AF855D5E6B64782ACFCD98CDD66974FDC923C0`）。置換前に配布先と完全一致するBetter Flowプロセスだけを停止。
+- 確認範囲: `git diff --check`、Release publish、発行物と配布先のSHA-256一致を確認。テストスイート、実画面の目視確認、Discord実機動作は未確認。

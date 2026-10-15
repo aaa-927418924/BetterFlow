@@ -28,9 +28,9 @@
                                 ToolTip="閉じる" AutomationProperties.Name="閉じる" />
                     </Grid>
 
-                    <ScrollViewer Grid.Row="1" Margin="0,16,0,14" VerticalScrollBarVisibility="Auto"
+                    <ScrollViewer Grid.Row="1" Margin="0,16,-6,14" VerticalScrollBarVisibility="Auto"
                                   HorizontalScrollBarVisibility="Disabled" Focusable="False">
-                    <StackPanel>
+                    <StackPanel Margin="0,0,6,0">
                         <TextBlock x:Name="TitleText" Text="起動には初回セットアップが必要です。"
                                    FontSize="23" FontWeight="Normal" LineHeight="34" />
                         <TextBlock x:Name="BodyText" Text="Parakeet日本語音声モデルとOpenCodeを自動で準備します。&#10;OpenCode Zenの利用には別途サインインが必要です。"
@@ -88,9 +88,6 @@
                                           Unchecked="DiscordMuteEnabledCheckBox_Changed"
                                           AutomationProperties.Name="音声入力中にDiscordを自動ミュート" />
                             </DockPanel>
-                            <TextBlock Text="Discordの「プッシュしてミュート」に同じキーを設定します。キー設定は機能をオフにしても保存されます。"
-                                       FontSize="11" Foreground="{StaticResource MutedBrush}"
-                                       TextWrapping="Wrap" Margin="0,4,0,0" />
                             <DockPanel Margin="0,8,0,0" LastChildFill="True">
                                 <Button x:Name="DiscordMuteShortcutChangeButton" DockPanel.Dock="Right" Content="変更"
                                         MinWidth="88" Height="38" Padding="14,0" Margin="12,0,0,0"
@@ -171,8 +168,10 @@
                                       PreviewMouseWheel="SettingsComboBox_PreviewMouseWheel"
                                       SelectionChanged="SelectedTextAnswerModeCombo_SelectionChanged"
                                       AutomationProperties.Name="選択文章への回答方法">
-                                <ComboBoxItem Content="OpenCodeのテキスト回答" Tag="opencode" />
-                                <ComboBoxItem Content="GPT Liveの音声会話" Tag="gpt-live" />
+                                <ComboBoxItem Content="OpenCodeのテキスト回答" Tag="opencode"
+                                              Style="{StaticResource DarkDropdownItemStyle}" />
+                                <ComboBoxItem Content="GPT Liveの音声会話" Tag="gpt-live"
+                                              Style="{StaticResource DarkDropdownItemStyle}" />
                             </ComboBox>
                             <TextBlock Text="GPT LiveにはChatGPTサブスクリプションが必要です。"
                                        FontSize="11" Foreground="{StaticResource MutedBrush}"
@@ -210,10 +209,10 @@
                     <Grid x:Name="DictionaryListPage" Grid.Row="1" Grid.RowSpan="2"
                           Background="{StaticResource PanelBrush}" Visibility="Collapsed" Panel.ZIndex="10">
                         <Grid.RowDefinitions>
-                            <RowDefinition Height="54" />
+                            <RowDefinition Height="66" />
                             <RowDefinition Height="*" />
                         </Grid.RowDefinitions>
-                        <StackPanel Grid.Row="0" Orientation="Horizontal" VerticalAlignment="Top">
+                        <StackPanel Grid.Row="0" Orientation="Horizontal" VerticalAlignment="Top" Margin="0,8,0,0">
                             <Button Content="← 戻る" Height="38" MinWidth="88" Padding="12,0"
                                     Style="{StaticResource SecondaryButtonStyle}"
                                     Click="BackFromDictionaryList_Click"
@@ -279,10 +278,10 @@
                     <Grid x:Name="DiscordMuteTutorialPage" Grid.Row="1" Grid.RowSpan="2"
                           Background="{StaticResource PanelBrush}" Visibility="Collapsed" Panel.ZIndex="11">
                         <Grid.RowDefinitions>
-                            <RowDefinition Height="54" />
+                            <RowDefinition Height="66" />
                             <RowDefinition Height="*" />
                         </Grid.RowDefinitions>
-                        <StackPanel Grid.Row="0" Orientation="Horizontal" VerticalAlignment="Top">
+                        <StackPanel Grid.Row="0" Orientation="Horizontal" VerticalAlignment="Top" Margin="0,8,0,0">
                             <Button Content="← 戻る" Height="38" MinWidth="88" Padding="12,0"
                                     Style="{StaticResource SecondaryButtonStyle}"
                                     Click="BackFromDiscordMuteTutorial_Click"

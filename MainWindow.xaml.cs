@@ -348,7 +348,7 @@ public partial class MainWindow : System.Windows.Window
             DiscordMuteStatus.Text = !_settings.DiscordAutoMuteEnabled
                 ? string.Empty
                 : DiscordPushToMuteController.IsSupportedBinding(GetDiscordMuteShortcut())
-                    ? "Discord側にも同じ「プッシュしてミュート」キーを設定してください。"
+                    ? "有効です。"
                     : "有効です。Discord側にキーを登録した後、Better Flowでも「変更」から同じキーを設定してください。";
         }
         finally { _loadingDiscordMuteSettingsUi = false; }
@@ -393,11 +393,11 @@ public partial class MainWindow : System.Windows.Window
         {
             _settingsStore.Save(_settings);
             if (!requested)
-                DiscordMuteStatus.Text = "無効にしました。ショートカットキーの設定は保存されています。";
+                DiscordMuteStatus.Text = "無効にしました。";
             else if (!DiscordPushToMuteController.IsSupportedBinding(GetDiscordMuteShortcut()))
                 DiscordMuteStatus.Text = "有効にしました。Discord側にキーを登録した後、Better Flowでも「変更」から同じキーを設定してください。";
             else
-                DiscordMuteStatus.Text = "有効にしました。Discord側にも同じ「プッシュしてミュート」キーを設定してください。";
+                DiscordMuteStatus.Text = "有効にしました。";
         }
         catch (Exception ex)
         {
@@ -496,9 +496,7 @@ public partial class MainWindow : System.Windows.Window
         DiscordMuteShortcutChangeButton.Content = "変更";
         UpdateDiscordMuteShortcutDisplay();
         DiscordMuteShortcutCaptureStatus.Text = string.Empty;
-        DiscordMuteStatus.Text = _settings.DiscordAutoMuteEnabled
-            ? "キーを保存しました。Discord側にも同じキーを設定してください。"
-            : "キーを保存しました。機能をオフにしてもこの設定は保持されます。";
+        DiscordMuteStatus.Text = "キーを保存しました。";
         RegisterConfiguredHotkey();
         UpdateDiscordMuteControlsEnabled();
     }
