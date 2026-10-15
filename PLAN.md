@@ -625,4 +625,4 @@
 
 - 変更（分類: ChatGPT Desktop送信確認、出典: `Services/AutoDictionaryLearningMonitor.cs`、確認日: 2026-10-15 Asia/Tokyo、信頼度: ソース/ビルド結果は高、実アプリ再テストは未確認）: 無名のボタンでも、追跡中の編集欄と同じ限定コンポーザー内にあり、右下側の有効ボタンとUIAで確認できたクリックだけを候補化する。構造から推定したクリックは入力欄のクリアに加え、新しく表示された送信文との一致を必須にする。Enter候補と別経路のクリックを重複扱いで捨てず、実際にボタンが押された場合はその候補で確認する。送信表示の走査では対象文書内の走査後に文書部分を除外したウィンドウ範囲も確認し、Documentルートの変化と走査数を本文なしで記録する。失敗時に現れる本文なしの理由ログを詳しくした。待ち時間上限は変更していない。
 - ビルド/発行: Release buildとwin-x64単体EXE publishが成功（0エラー、NU1900はNuGet脆弱性情報サービスへ接続できなかった警告）。発行物と`dist/Better Flow.exe`は82,477,268 bytes、SHA-256 `A2CF7E5F3241627A2D70BE6EF5EF544BDB5EC9E1BCE68F8A2BCBD008D12DC62C`で一致。旧EXEは`artifacts/BetterFlow-before-chatgpt-desktop-dictionary-confirmation-20261015.exe`へ退避（82,476,407 bytes、SHA-256 `95B4C8994230E55724A413A3BEE0E468CF161E9F13618B22FD6BCFA8CFE8F346`）。置換前に、配布EXEと実行パスが完全一致するPID 6408だけを停止した。
-- 確認範囲: テストスイートとChatGPT Desktopへの実送信は実行していない。コンパイル、発行、配布先とのSHA-256一致を確認済み。Git実装コミットIDはコミット後にこの記録へ反映する。
+- 確認範囲: テストスイートとChatGPT Desktopへの実送信は実行していない。コンパイル、発行、配布先とのSHA-256一致を確認済み。実装前チェックポイントは`81fa355`、ソース実装コミットは`b7206ff`。
