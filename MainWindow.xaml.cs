@@ -2772,19 +2772,27 @@ public partial class MainWindow : System.Windows.Window
                 await Task.Delay(TimeSpan.FromMilliseconds(150), cancellationToken);
                 cancellationToken.ThrowIfCancellationRequested();
                 var learningMonitor = _autoDictionaryLearningMonitor;
-                var learningPrepared = learningMonitor?.PrepareApplicationSubmit() == true;
-                if (PasteService.SendEnter(_pasteTarget))
+                if (PasteService.TryInvokeSendButton(_pasteTarget))
                 {
-                    if (learningPrepared)
-                        learningMonitor?.NotifyApplicationSubmit();
                     RuntimeStatus.Text = "文章を入力欄へ貼り付けて送信しました。";
                     _indicator.ShowStatus("送信しました", TimeSpan.FromSeconds(1));
                 }
                 else
                 {
-                    learningMonitor?.CancelPreparedApplicationSubmit();
-                    RuntimeStatus.Text = "文章は貼り付けましたが、入力欄のフォーカスを確認できず送信していません。";
-                    _indicator.ShowStatus("送信未完了", TimeSpan.FromSeconds(1));
+                    var learningPrepared = learningMonitor?.PrepareApplicationSubmit() == true;
+                    if (PasteService.SendEnterKey(_pasteTarget))
+                    {
+                        if (learningPrepared)
+                            learningMonitor?.NotifyApplicationSubmit();
+                        RuntimeStatus.Text = "文章を入力欄へ貼り付けてEnter送信しました。";
+                        _indicator.ShowStatus("送信しました", TimeSpan.FromSeconds(1));
+                    }
+                    else
+                    {
+                        learningMonitor?.CancelPreparedApplicationSubmit();
+                        RuntimeStatus.Text = "文章は貼り付けましたが、送信ボタンと入力欄のフォーカスを確認できず、送信していません。";
+                        _indicator.ShowStatus("送信未完了", TimeSpan.FromSeconds(1));
+                    }
                 }
                 return;
             }
