@@ -1018,6 +1018,7 @@ internal sealed class OpenCodeService : IDisposable
     private static void ConfigureWorkspaceToolPermissions(string workspace)
     {
         const string safeContextFile = "better-flow-context.txt";
+        const string forcedReasoningEffort = "low";
         var safeContextAbsolutePath = Path.GetFullPath(Path.Combine(workspace, safeContextFile))
             .Replace(Path.DirectorySeparatorChar, '/');
         // Zen free-tier requests can be rejected when read/bash are denied. Keep only
@@ -1037,7 +1038,18 @@ internal sealed class OpenCodeService : IDisposable
                 ["echo *"] = "allow"
             }
         };
-        var config = new Dictionary<string, object> { ["permission"] = permissions };
+        // All Better Flow model requests use the build agent. Keep this test override
+        // in the app's ephemeral workspace so it never changes the user's OpenCode profile.
+        var agentSettings = new Dictionary<string, object>
+        {
+            ["reasoningEffort"] = forcedReasoningEffort
+        };
+        var agents = new Dictionary<string, object> { ["build"] = agentSettings };
+        var config = new Dictionary<string, object>
+        {
+            ["permission"] = permissions,
+            ["agent"] = agents
+        };
         File.WriteAllText(Path.Combine(workspace, "opencode.json"), JsonSerializer.Serialize(config), new UTF8Encoding(false));
         File.WriteAllText(Path.Combine(workspace, safeContextFile), "Better Flow temporary formatter workspace.", new UTF8Encoding(false));
     }
