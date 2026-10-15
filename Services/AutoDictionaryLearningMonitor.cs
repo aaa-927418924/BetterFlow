@@ -484,8 +484,13 @@ internal sealed class AutoDictionaryLearningMonitor : IDisposable
                     {
                         if (TryFindSendButtonAtPoint(notice.X, notice.Y, out _, out var hitTestResult))
                         {
-                            Log("send_button_click_detected", "source=mouse;control=enabled-send-button");
-                            SignalSubmit("mouse-send-button", notice.PreparedCandidate);
+                            var structuralMatch = hitTestResult == "composer-structural-button";
+                            Log("send_button_click_detected",
+                                structuralMatch
+                                    ? "source=mouse;control=unnamed-button-in-tracked-composer"
+                                    : "source=mouse;control=enabled-send-button");
+                            SignalSubmit(structuralMatch ? "mouse-composer-button" : "mouse-send-button",
+                                notice.PreparedCandidate);
                         }
                         else if (hitTestResult == "button-name-not-recognized")
                         {
@@ -791,6 +796,13 @@ internal sealed class AutoDictionaryLearningMonitor : IDisposable
                 if (IsSendButton(element))
                 {
                     sendButton = element;
+                    hitTestResult = "named-send-button";
+                    return true;
+                }
+                if (IsLikelyComposerActionButton(element, point))
+                {
+                    sendButton = element;
+                    hitTestResult = "composer-structural-button";
                     return true;
                 }
                 element = walker.GetParent(element);
@@ -812,6 +824,12 @@ internal sealed class AutoDictionaryLearningMonitor : IDisposable
                     hitTestResult = "window-scoped-send-button-bounds";
                     return true;
                 }
+                if (IsLikelyComposerActionButton(element, point))
+                {
+                    sendButton = element;
+                    hitTestResult = "composer-structural-button";
+                    return true;
+                }
                 var current = element.Current;
                 var isButton = current.ControlType == ControlType.Button ||
                                current.ControlType == ControlType.Custom &&
@@ -822,6 +840,110 @@ internal sealed class AutoDictionaryLearningMonitor : IDisposable
         catch (Exception ex) when (IsAutomationFailure(ex) || ex is ObjectDisposedException) { }
         if (hitTestResult == "no-button-at-point") hitTestResult = "window-scoped-send-button-not-found";
         return false;
+    }
+
+    private bool IsLikelyComposerActionButton(AutomationElement element, System.Windows.Point point)
+    {
+        try
+        {
+            var current = element.Current;
+            var isButton = current.ControlType == ControlType.Button ||
+                           current.ControlType == ControlType.Custom &&
+                           element.TryGetCurrentPattern(InvokePattern.Pattern, out _);
+            if (!isButton || !current.IsEnabled || !IsWithinWindow(element, _targetWindow)) return false;
+
+            var binding = Volatile.Read(ref _editorBinding);
+            var identity = _trackedEditorIdentity;
+            if (binding is null || identity is null || !IsSameTrackedEditor(binding.Element) ||
+                !IsWithinDocumentScope(element, identity.DocumentRuntimeId, binding.DocumentRoot))
+                return false;
+
+            var buttonBounds = current.BoundingRectangle;
+            if (buttonBounds.IsEmpty || !buttonBounds.Contains(point)) return false;
+            var commonAncestor = FindNearestCommonAncestor(element, binding.Element,
+                maxDepth: 8, out var buttonDepth, out var editorDepth);
+            if (commonAncestor is null || buttonDepth > 4 || editorDepth > 4) return false;
+
+            var container = commonAncestor.Current;
+            if (container.ControlType != ControlType.Group &&
+                container.ControlType != ControlType.Custom &&
+                container.ControlType != ControlType.Pane)
+                return false;
+            var containerBounds = container.BoundingRectangle;
+            var windowBounds = AutomationElement.FromHandle(_targetWindow).Current.BoundingRectangle;
+            if (containerBounds.IsEmpty || windowBounds.IsEmpty ||
+                containerBounds.Width < 120 || containerBounds.Height < 24 ||
+                containerBounds.Width >= windowBounds.Width * 0.95 ||
+                containerBounds.Height >= windowBounds.Height * 0.7 ||
+                !containerBounds.Contains(point) ||
+                point.X < containerBounds.Left + containerBounds.Width * 0.62 ||
+                point.Y < containerBounds.Top + containerBounds.Height * 0.35)
+                return false;
+
+            var rightmostActionEdge = buttonBounds.Right;
+            foreach (var sibling in EnumerateWindowElements(commonAncestor, 96, 8))
+            {
+                var siblingCurrent = sibling.Current;
+                var siblingIsButton = siblingCurrent.ControlType == ControlType.Button ||
+                                      siblingCurrent.ControlType == ControlType.Custom &&
+                                      sibling.TryGetCurrentPattern(InvokePattern.Pattern, out _);
+                if (siblingIsButton && siblingCurrent.IsEnabled &&
+                    !siblingCurrent.BoundingRectangle.IsEmpty)
+                    rightmostActionEdge = Math.Max(rightmostActionEdge,
+                        siblingCurrent.BoundingRectangle.Right);
+            }
+
+            return buttonBounds.Right >= rightmostActionEdge - Math.Max(36, buttonBounds.Width * 0.8);
+        }
+        catch (Exception ex) when (IsAutomationFailure(ex) || ex is ObjectDisposedException)
+        {
+            return false;
+        }
+    }
+
+    private static AutomationElement? FindNearestCommonAncestor(
+        AutomationElement left,
+        AutomationElement right,
+        int maxDepth,
+        out int leftDepth,
+        out int rightDepth)
+    {
+        leftDepth = int.MaxValue;
+        rightDepth = int.MaxValue;
+        var walker = TreeWalker.ControlViewWalker;
+        var leftAncestors = new List<AutomationElement>();
+        var rightAncestors = new List<AutomationElement>();
+        try
+        {
+            var current = left;
+            for (var depth = 0; current is not null && depth <= maxDepth; depth++)
+            {
+                leftAncestors.Add(current);
+                current = walker.GetParent(current);
+            }
+            current = right;
+            for (var depth = 0; current is not null && depth <= maxDepth; depth++)
+            {
+                rightAncestors.Add(current);
+                current = walker.GetParent(current);
+            }
+        }
+        catch (Exception ex) when (IsAutomationFailure(ex) || ex is ObjectDisposedException)
+        {
+            return null;
+        }
+
+        for (var leftIndex = 0; leftIndex < leftAncestors.Count; leftIndex++)
+        {
+            for (var rightIndex = 0; rightIndex < rightAncestors.Count; rightIndex++)
+            {
+                if (!AreSameAutomationElement(leftAncestors[leftIndex], rightAncestors[rightIndex])) continue;
+                leftDepth = leftIndex;
+                rightDepth = rightIndex;
+                return leftAncestors[leftIndex];
+            }
+        }
+        return null;
     }
 
     private IntPtr MouseHookCallback(int code, IntPtr wParam, IntPtr lParam)
@@ -899,13 +1021,10 @@ internal sealed class AutoDictionaryLearningMonitor : IDisposable
                 var now = Stopwatch.GetTimestamp();
                 var sameSignalWindow = now - _lastSignalTimestamp < Stopwatch.Frequency / 4;
                 var candidateSnapshotVersion = preparedCandidate?.Snapshot.Version ?? _snapshot.Version;
-                var duplicateCrossSource = sameSignalWindow &&
-                                           candidateSnapshotVersion == _lastSignalSnapshotVersion &&
-                                           !string.Equals(source, _lastSignalSource, StringComparison.Ordinal);
-                var duplicateButtonInvoke = (source is "send-button" or "mouse-send-button") &&
-                                            (_lastSignalSource is "send-button" or "mouse-send-button") &&
+                var duplicateButtonInvoke = IsButtonSubmitSource(source) &&
+                                            IsButtonSubmitSource(_lastSignalSource) &&
                                             candidateSnapshotVersion == _lastSignalSnapshotVersion && sameSignalWindow;
-                if (duplicateCrossSource || duplicateButtonInvoke)
+                if (duplicateButtonInvoke)
                 {
                     deduplicated = true;
                 }
@@ -1238,7 +1357,7 @@ internal sealed class AutoDictionaryLearningMonitor : IDisposable
             var editorWasRecreated = snapshot.EditorRuntimeId is null || editorAccess.RuntimeId is null ||
                                      !string.Equals(snapshot.EditorRuntimeId, editorAccess.RuntimeId,
                                          StringComparison.Ordinal);
-            var requiresOutgoingTextEvidence = editorWasRecreated ||
+            var requiresOutgoingTextEvidence = candidate.Source == "mouse-composer-button" || editorWasRecreated ||
                                                string.Equals(_trackedEditorIdentity?.FrameworkId, "Chrome",
                                                    StringComparison.OrdinalIgnoreCase);
             if (requiresOutgoingTextEvidence)
@@ -1391,6 +1510,9 @@ internal sealed class AutoDictionaryLearningMonitor : IDisposable
         if (state == SnapshotState.Valid) _lastValidSnapshot = _snapshot;
     }
 
+    private static bool IsButtonSubmitSource(string source) =>
+        source is "send-button" or "mouse-send-button" or "mouse-composer-button";
+
     private SubmitCandidate CreateCandidateLocked(string source, DateTimeOffset signalTime)
     {
         var snapshot = _snapshot;
@@ -1399,7 +1521,7 @@ internal sealed class AutoDictionaryLearningMonitor : IDisposable
                                   snapshot.State == SnapshotState.RangeLost &&
                                   (string.IsNullOrWhiteSpace(snapshot.FullText) ||
                                    IsComposerPlaceholder(snapshot.FullText));
-        if ((source is "send-button" or "mouse-send-button") && currentFieldCleared &&
+        if (IsButtonSubmitSource(source) && currentFieldCleared &&
             _lastValidSnapshot.State == SnapshotState.Valid &&
             GetSnapshotAgeMilliseconds(_lastValidSnapshot) <= RecentPreClearSnapshotMs)
         {
@@ -1867,7 +1989,8 @@ internal sealed class AutoDictionaryLearningMonitor : IDisposable
     private static IReadOnlyList<AutomationElement> EnumerateWindowElements(
         AutomationElement root,
         int maximumNodes,
-        int maximumDepth)
+        int maximumDepth,
+        AutomationElement? excludedSubtree = null)
     {
         var walker = TreeWalker.ControlViewWalker;
         var pending = new Stack<(AutomationElement Element, int Depth)>();
@@ -1893,6 +2016,7 @@ internal sealed class AutoDictionaryLearningMonitor : IDisposable
         while (pending.Count > 0 && result.Count < maximumNodes)
         {
             var (element, depth) = pending.Pop();
+            if (excludedSubtree is not null && AreSameAutomationElement(element, excludedSubtree)) continue;
             result.Add(element);
             if (depth >= maximumDepth) continue;
             try
@@ -1947,6 +2071,16 @@ internal sealed class AutoDictionaryLearningMonitor : IDisposable
         if (documentRoot is null) return result;
         try
         {
+            var rootCurrent = documentRoot.Current;
+            if (rootCurrent.ControlType == ControlType.Document)
+            {
+                var rootRuntimeId = GetRuntimeId(documentRoot);
+                var rootText = ReadRenderedTextForEvidence(documentRoot, rootCurrent);
+                if (rootRuntimeId is not null && rootText.Length <= MaxDocumentLength &&
+                    !string.Equals(rootRuntimeId, trackedEditorRuntimeId, StringComparison.Ordinal))
+                    result[rootRuntimeId] = ComputeTextDigest(rootText);
+            }
+
             foreach (var element in EnumerateWindowElements(documentRoot, MaxAutomationSearchNodes,
                          MaxAutomationTreeDepth))
             {
@@ -1956,7 +2090,8 @@ internal sealed class AutoDictionaryLearningMonitor : IDisposable
                     if (current.ControlType != ControlType.Text &&
                         current.ControlType != ControlType.Group &&
                         current.ControlType != ControlType.ListItem &&
-                        current.ControlType != ControlType.Custom)
+                        current.ControlType != ControlType.Custom &&
+                        current.ControlType != ControlType.Document)
                         continue;
                     var runtimeId = GetRuntimeId(element);
                     if (runtimeId is null || string.Equals(runtimeId, trackedEditorRuntimeId, StringComparison.Ordinal))
@@ -2021,14 +2156,38 @@ internal sealed class AutoDictionaryLearningMonitor : IDisposable
         }
 
         var examinedNodes = 0;
+        var changedReadOnlyNodes = 0;
+        var changedDocumentRoots = 0;
+        var rootsVisited = 0;
         try
         {
             foreach (var root in roots)
             {
-                var remainingNodes = MaxOutgoingProofNodes - examinedNodes;
-                if (remainingNodes <= 0) break;
-                foreach (var element in EnumerateWindowElements(root.Element, remainingNodes,
-                             MaxAutomationTreeDepth))
+                rootsVisited++;
+                if (root.IsOriginalDocument)
+                {
+                    try
+                    {
+                        var rootCurrent = root.Element.Current;
+                        var rootRuntimeId = GetRuntimeId(root.Element);
+                        if (rootCurrent.ControlType == ControlType.Document && rootRuntimeId is not null &&
+                            baselineDigests.TryGetValue(rootRuntimeId, out var baselineRootDigest))
+                        {
+                            var rootText = ReadRenderedTextForEvidence(root.Element, rootCurrent);
+                            if (rootText.Length <= MaxDocumentLength &&
+                                !string.Equals(ComputeTextDigest(rootText), baselineRootDigest, StringComparison.Ordinal))
+                                changedDocumentRoots++;
+                        }
+                    }
+                    catch (Exception ex) when (IsAutomationFailure(ex) || ex is ObjectDisposedException) { }
+                }
+
+                var rootBudget = roots.Count > 1 && !root.IsOriginalDocument
+                    ? MaxOutgoingProofNodes / 3
+                    : MaxOutgoingProofNodes;
+                var excludedSubtree = root.IsOriginalDocument ? null : currentBinding?.DocumentRoot;
+                foreach (var element in EnumerateWindowElements(root.Element, rootBudget,
+                             MaxAutomationTreeDepth, excludedSubtree))
                 {
                     examinedNodes++;
                     try
@@ -2062,6 +2221,7 @@ internal sealed class AutoDictionaryLearningMonitor : IDisposable
                         if (baselineDigests.TryGetValue(runtimeId, out var baselineDigest) &&
                             string.Equals(digest, baselineDigest, StringComparison.Ordinal))
                             continue;
+                        changedReadOnlyNodes++;
                         var normalizedRendered = NormalizePlaceholderText(renderedText);
                         var matchesSubmittedText = root.IsOriginalDocument
                             ? requireExactMatch
@@ -2086,7 +2246,7 @@ internal sealed class AutoDictionaryLearningMonitor : IDisposable
         }
         catch (Exception ex) when (IsAutomationFailure(ex) || ex is ObjectDisposedException) { }
 
-        evidence = "no-new-exact-outgoing-text-node";
+        evidence = $"no-new-exact-outgoing-text-node;roots={rootsVisited};nodes={examinedNodes};changed-readonly={changedReadOnlyNodes};document-root-changed={changedDocumentRoots}";
         return false;
     }
 
