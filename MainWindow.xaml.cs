@@ -2768,32 +2768,7 @@ public partial class MainWindow : System.Windows.Window
                     _indicator.ShowStatus("送信できません", TimeSpan.FromSeconds(1));
                     return;
                 }
-
-                await Task.Delay(TimeSpan.FromMilliseconds(150), cancellationToken);
-                cancellationToken.ThrowIfCancellationRequested();
-                var learningMonitor = _autoDictionaryLearningMonitor;
-                if (PasteService.TryInvokeSendButton(_pasteTarget))
-                {
-                    RuntimeStatus.Text = "文章を入力欄へ貼り付けて送信しました。";
-                    _indicator.ShowStatus("送信しました", TimeSpan.FromSeconds(1));
-                }
-                else
-                {
-                    var learningPrepared = learningMonitor?.PrepareApplicationSubmit() == true;
-                    if (PasteService.SendEnterKey(_pasteTarget))
-                    {
-                        if (learningPrepared)
-                            learningMonitor?.NotifyApplicationSubmit();
-                        RuntimeStatus.Text = "文章を入力欄へ貼り付けてEnter送信しました。";
-                        _indicator.ShowStatus("送信しました", TimeSpan.FromSeconds(1));
-                    }
-                    else
-                    {
-                        learningMonitor?.CancelPreparedApplicationSubmit();
-                        RuntimeStatus.Text = "文章は貼り付けましたが、送信ボタンと入力欄のフォーカスを確認できず、送信していません。";
-                        _indicator.ShowStatus("送信未完了", TimeSpan.FromSeconds(1));
-                    }
-                }
+                await SendPastedTextAsync(cancellationToken);
                 return;
             }
 
@@ -2824,11 +2799,14 @@ public partial class MainWindow : System.Windows.Window
                 if (pasted)
                 {
                     StartAutoDictionaryLearningMonitor(rawTranscript);
-                    _indicator.ShowStatus("文字起こしを反映", TimeSpan.FromSeconds(1));
+                    if (sendAfterPaste)
+                        await SendPastedTextAsync(CancellationToken.None);
+                    else
+                        _indicator.ShowStatus("文字起こしを反映", TimeSpan.FromSeconds(1));
                 }
                 else
                 {
-                    _indicator.ShowStatus("文字起こしをコピー", TimeSpan.FromSeconds(1));
+                    _indicator.ShowStatus(sendAfterPaste ? "送信未完了" : "文字起こしをコピー", TimeSpan.FromSeconds(1));
                 }
             }
             else if (_closing) _indicator.HideStatus();
@@ -2865,6 +2843,41 @@ public partial class MainWindow : System.Windows.Window
             ActionButton.Content = "録音を開始";
             UpdateAiModeDisplay();
         }
+    }
+
+    private async Task SendPastedTextAsync(CancellationToken cancellationToken)
+    {
+        var learningMonitor = _autoDictionaryLearningMonitor;
+        if (learningMonitor is not null)
+        {
+            var monitorReady = await learningMonitor.WaitUntilReadyAsync(
+                TimeSpan.FromSeconds(4), cancellationToken);
+            if (!monitorReady)
+                DictionaryLearningDiagnosticLog.Write("monitor_not_ready_before_auto_send", "timeout");
+        }
+
+        await Task.Delay(TimeSpan.FromMilliseconds(150), cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
+        if (PasteService.TryInvokeSendButton(_pasteTarget))
+        {
+            RuntimeStatus.Text = "文章を入力欄へ貼り付けて送信しました。";
+            _indicator.ShowStatus("送信しました", TimeSpan.FromSeconds(1));
+            return;
+        }
+
+        var learningPrepared = learningMonitor?.PrepareApplicationSubmit() == true;
+        if (PasteService.SendEnterKey(_pasteTarget))
+        {
+            if (learningPrepared)
+                learningMonitor?.NotifyApplicationSubmit();
+            RuntimeStatus.Text = "文章を入力欄へ貼り付けてEnter送信しました。";
+            _indicator.ShowStatus("送信しました", TimeSpan.FromSeconds(1));
+            return;
+        }
+
+        learningMonitor?.CancelPreparedApplicationSubmit();
+        RuntimeStatus.Text = "文章は貼り付けましたが、送信ボタンと入力欄のフォーカスを確認できず、送信していません。";
+        _indicator.ShowStatus("送信未完了", TimeSpan.FromSeconds(1));
     }
 
     private static string GetAiFailureIndicatorText(Exception exception)
