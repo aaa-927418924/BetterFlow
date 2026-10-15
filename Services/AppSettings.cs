@@ -21,6 +21,9 @@ internal sealed class AppSettings
     public string MicrophoneDeviceId { get; set; } = AudioInputDeviceOption.SystemDefaultId;
     public uint ShortcutModifiers { get; set; }
     public uint ShortcutVirtualKey { get; set; } = HotkeyBinding.RightAltVirtualKey;
+    public bool DiscordAutoMuteEnabled { get; set; }
+    public uint DiscordMuteShortcutModifiers { get; set; }
+    public uint DiscordMuteShortcutVirtualKey { get; set; }
 
     [JsonPropertyName("AiProviderId")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]

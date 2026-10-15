@@ -72,6 +72,41 @@
                             <TextBlock x:Name="MicrophoneDeviceStatus" FontSize="11" Foreground="{StaticResource MutedBrush}"
                                        Margin="0,5,0,0" AutomationProperties.LiveSetting="Polite" />
                         </StackPanel>
+                        <StackPanel x:Name="DiscordMuteSettingsPanel" Margin="0,16,0,0" Visibility="Collapsed">
+                            <TextBlock Text="Discordの自動ミュート" FontSize="14" FontWeight="SemiBold" />
+                            <DockPanel Margin="0,6,0,0" LastChildFill="True">
+                                <Button x:Name="DiscordMuteTutorialButton" DockPanel.Dock="Right" Content="設定方法"
+                                        MinWidth="92" Height="38" Padding="12,0" Margin="10,0,0,0"
+                                        Style="{StaticResource SecondaryButtonStyle}"
+                                        Click="DiscordMuteTutorialButton_Click"
+                                        AutomationProperties.Name="Discordミュートの設定方法を表示" />
+                                <CheckBox x:Name="DiscordMuteEnabledCheckBox"
+                                          Content="音声入力中はDiscordをミュートする"
+                                          Foreground="{StaticResource TextBrush}" FontSize="13"
+                                          VerticalAlignment="Center" IsThreeState="False"
+                                          Checked="DiscordMuteEnabledCheckBox_Changed"
+                                          Unchecked="DiscordMuteEnabledCheckBox_Changed"
+                                          AutomationProperties.Name="音声入力中にDiscordを自動ミュート" />
+                            </DockPanel>
+                            <TextBlock Text="Discordの「プッシュしてミュート」に同じキーを設定します。キー設定は機能をオフにしても保存されます。"
+                                       FontSize="11" Foreground="{StaticResource MutedBrush}"
+                                       TextWrapping="Wrap" Margin="0,4,0,0" />
+                            <DockPanel Margin="0,8,0,0" LastChildFill="True">
+                                <Button x:Name="DiscordMuteShortcutChangeButton" DockPanel.Dock="Right" Content="変更"
+                                        MinWidth="88" Height="38" Padding="14,0" Margin="12,0,0,0"
+                                        Style="{StaticResource SecondaryButtonStyle}"
+                                        Click="DiscordMuteShortcutChangeButton_Click"
+                                        AutomationProperties.Name="Discordミュート用ショートカットを変更" />
+                                <TextBlock x:Name="DiscordMuteShortcutCurrentText" FontSize="15"
+                                           VerticalAlignment="Center" Text="未設定" />
+                            </DockPanel>
+                            <TextBlock x:Name="DiscordMuteShortcutCaptureStatus" Text="" FontSize="11"
+                                       Foreground="{StaticResource MutedBrush}" LineHeight="17"
+                                       Margin="0,4,0,0" AutomationProperties.LiveSetting="Polite" />
+                            <TextBlock x:Name="DiscordMuteStatus" FontSize="11"
+                                       Foreground="{StaticResource MutedBrush}" Margin="0,4,0,0"
+                                       AutomationProperties.LiveSetting="Polite" />
+                        </StackPanel>
                         <StackPanel x:Name="OpenCodeModelSettingsPanel" Margin="0,16,0,0" Visibility="Collapsed">
                             <TextBlock Text="OpenCodeモデル" FontSize="14" FontWeight="SemiBold" />
                             <TextBlock Text="モデル" FontSize="12" Foreground="{StaticResource MutedBrush}" Margin="0,12,0,4" />
@@ -237,6 +272,49 @@
                                 <TextBlock x:Name="DictionaryListStatus" FontSize="11"
                                            Foreground="{StaticResource MutedBrush}" Margin="0,6,0,0"
                                            AutomationProperties.LiveSetting="Polite" />
+                            </StackPanel>
+                        </ScrollViewer>
+                    </Grid>
+
+                    <Grid x:Name="DiscordMuteTutorialPage" Grid.Row="1" Grid.RowSpan="2"
+                          Background="{StaticResource PanelBrush}" Visibility="Collapsed" Panel.ZIndex="11">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="54" />
+                            <RowDefinition Height="*" />
+                        </Grid.RowDefinitions>
+                        <StackPanel Grid.Row="0" Orientation="Horizontal" VerticalAlignment="Top">
+                            <Button Content="← 戻る" Height="38" MinWidth="88" Padding="12,0"
+                                    Style="{StaticResource SecondaryButtonStyle}"
+                                    Click="BackFromDiscordMuteTutorial_Click"
+                                    AutomationProperties.Name="Discordミュート設定に戻る" />
+                            <TextBlock Text="Discordの設定方法" FontSize="17" FontWeight="SemiBold"
+                                       VerticalAlignment="Center" Margin="14,0,0,0" />
+                        </StackPanel>
+                        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto"
+                                      HorizontalScrollBarVisibility="Disabled" Focusable="False">
+                            <StackPanel Margin="0,2,0,0">
+                                <TextBlock Text="Discordの入力モードを「音声検出」にしてから設定してください。「プッシュしてミュート」は、登録したキーを押している間だけマイク送信を止めます。"
+                                           FontSize="12" Foreground="{StaticResource MutedBrush}"
+                                           TextWrapping="Wrap" Margin="0,0,0,12" />
+                                <TextBlock Text="1. Discordの左下にある歯車から「ユーザー設定」を開きます。"
+                                           FontSize="13" Margin="0,0,0,10" />
+                                <TextBlock Text="2. 左側の「システム設定」を開きます。"
+                                           FontSize="13" Margin="0,0,0,10" />
+                                <TextBlock Text="3. 「カスタムキーバインド」を選びます。"
+                                           FontSize="13" Margin="0,0,0,10" />
+                                <TextBlock Text="4. 「キーバインドを追加」を押します。"
+                                           FontSize="13" Margin="0,0,0,10" />
+                                <TextBlock Text="5. アクションに「プッシュしてミュート」を選びます。"
+                                           FontSize="13" Margin="0,0,0,10" />
+                                <TextBlock Text="6. Discordで使うキーの組み合わせを押して登録します。ほかのアプリで使っていない組み合わせがおすすめです。"
+                                           FontSize="13" Margin="0,0,0,10" />
+                                <TextBlock Text="7. Better Flowの設定に戻り、「変更」を押して同じキーの組み合わせを登録します。"
+                                           FontSize="13" Margin="0,0,0,10" />
+                                <Border Background="#2B2B2B" CornerRadius="10" Padding="10" Margin="0,4,0,0">
+                                    <TextBlock Text="Better Flowがマイクを使っている間だけキーを押し続け、音声入力が終わるとキーを離します。録音できないときは、Discord側とBetter Flow側のキーが同じか確認してください。"
+                                               FontSize="11" Foreground="{StaticResource MutedBrush}"
+                                               TextWrapping="Wrap" />
+                                </Border>
                             </StackPanel>
                         </ScrollViewer>
                     </Grid>

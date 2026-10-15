@@ -19,6 +19,7 @@ public partial class MainWindow : System.Windows.Window
     private readonly GlobalHotkey _hotkey = new();
     private readonly MicrophoneRecorder _recorder = new();
     private readonly ContinuousMicrophoneRecorder _continuousRecorder = new();
+    private readonly DiscordPushToMuteController _discordPushToMute = new();
     private readonly CancellationTokenSource _lifetime = new();
     private readonly OpenCodeService _openCode = new();
     private readonly GptLiveAuthService _gptLiveAuth = new();
@@ -43,6 +44,8 @@ public partial class MainWindow : System.Windows.Window
     private bool _exitRequested;
     private bool _syncingStartupMenu;
     private bool _isCapturingShortcut;
+    private bool _isCapturingDiscordMuteShortcut;
+    private bool _loadingDiscordMuteSettingsUi;
     private bool _isRefreshingOpenCodeModels;
     private bool _loadingOpenCodeModelUi;
     private bool _loadingMicrophoneDeviceUi;
@@ -51,6 +54,7 @@ public partial class MainWindow : System.Windows.Window
     private Task? _sendCommandListenerTask;
     private CancellationTokenSource? _transcriptPreviewCancellation;
     private Task? _transcriptPreviewTask;
+    private IDisposable? _discordMuteLease;
     private long _transcriptPreviewSession;
     private AutoDictionaryLearningMonitor? _autoDictionaryLearningMonitor;
     private readonly SemaphoreSlim _dictionaryReviewSemaphore = new(1, 1);
@@ -119,6 +123,7 @@ public partial class MainWindow : System.Windows.Window
         RefreshCorrectionDictionaryItems();
         InitializeSelectedTextAnswerModeUi();
         InitializeMicrophoneDeviceUi();
+        InitializeDiscordMuteSettingsUi();
         InitializeTrayIcon();
         Closing += MainWindow_Closing;
         SystemEvents.SessionEnding += SystemEvents_SessionEnding;
@@ -329,7 +334,183 @@ public partial class MainWindow : System.Windows.Window
         OpenCodeModelCombo.IsEnabled = canChooseModel;
         RefreshOpenCodeModelsButton.IsEnabled = canChooseModel && !_isRefreshingOpenCodeModels;
         CorrectionDictionarySettingsPanel.IsEnabled = _asr is not null && !_isBusy && !IsAnyRecording;
+        UpdateDiscordMuteControlsEnabled();
         UpdateSelectedTextAnswerModeDisplay();
+    }
+
+    private void InitializeDiscordMuteSettingsUi()
+    {
+        _loadingDiscordMuteSettingsUi = true;
+        try
+        {
+            DiscordMuteEnabledCheckBox.IsChecked = _settings.DiscordAutoMuteEnabled;
+            UpdateDiscordMuteShortcutDisplay();
+            DiscordMuteStatus.Text = !_settings.DiscordAutoMuteEnabled
+                ? string.Empty
+                : DiscordPushToMuteController.IsSupportedBinding(GetDiscordMuteShortcut())
+                    ? "Discord側にも同じ「プッシュしてミュート」キーを設定してください。"
+                    : "有効です。Discord側にキーを登録した後、Better Flowでも「変更」から同じキーを設定してください。";
+        }
+        finally { _loadingDiscordMuteSettingsUi = false; }
+    }
+
+    private void UpdateDiscordMuteShortcutDisplay()
+    {
+        var binding = GetDiscordMuteShortcut();
+        var label = DiscordPushToMuteController.IsSupportedBinding(binding)
+            ? GlobalHotkey.Format(binding)
+            : "未設定";
+        DiscordMuteShortcutCurrentText.Text = label;
+        System.Windows.Automation.AutomationProperties.SetName(
+            DiscordMuteShortcutChangeButton, $"Discordミュート用ショートカットを変更。現在: {label}");
+    }
+
+    private void UpdateDiscordMuteControlsEnabled()
+    {
+        var canChange = _asr is not null && !_isBusy && !IsAnyRecording;
+        DiscordMuteEnabledCheckBox.IsEnabled = canChange && !_isCapturingDiscordMuteShortcut;
+        DiscordMuteShortcutChangeButton.IsEnabled = canChange;
+        DiscordMuteTutorialButton.IsEnabled = true;
+    }
+
+    private void DiscordMuteEnabledCheckBox_Changed(object sender, System.Windows.RoutedEventArgs e)
+    {
+        if (_loadingDiscordMuteSettingsUi) return;
+
+        var previous = _settings.DiscordAutoMuteEnabled;
+        var requested = DiscordMuteEnabledCheckBox.IsChecked == true;
+        if (_asr is null || _isBusy || IsAnyRecording)
+        {
+            _loadingDiscordMuteSettingsUi = true;
+            DiscordMuteEnabledCheckBox.IsChecked = previous;
+            _loadingDiscordMuteSettingsUi = false;
+            DiscordMuteStatus.Text = "録音や処理を終えてから変更してください。";
+            return;
+        }
+
+        _settings.DiscordAutoMuteEnabled = requested;
+        try
+        {
+            _settingsStore.Save(_settings);
+            if (!requested)
+                DiscordMuteStatus.Text = "無効にしました。ショートカットキーの設定は保存されています。";
+            else if (!DiscordPushToMuteController.IsSupportedBinding(GetDiscordMuteShortcut()))
+                DiscordMuteStatus.Text = "有効にしました。Discord側にキーを登録した後、Better Flowでも「変更」から同じキーを設定してください。";
+            else
+                DiscordMuteStatus.Text = "有効にしました。Discord側にも同じ「プッシュしてミュート」キーを設定してください。";
+        }
+        catch (Exception ex)
+        {
+            _settings.DiscordAutoMuteEnabled = previous;
+            _loadingDiscordMuteSettingsUi = true;
+            DiscordMuteEnabledCheckBox.IsChecked = previous;
+            _loadingDiscordMuteSettingsUi = false;
+            DiscordMuteStatus.Text = "設定を保存できませんでした。";
+            RuntimeStatus.Text = ex.Message;
+        }
+    }
+
+    private HotkeyBinding GetDiscordMuteShortcut() =>
+        new(_settings.DiscordMuteShortcutModifiers, _settings.DiscordMuteShortcutVirtualKey);
+
+    private void DiscordMuteTutorialButton_Click(object sender, System.Windows.RoutedEventArgs e) =>
+        DiscordMuteTutorialPage.Visibility = System.Windows.Visibility.Visible;
+
+    private void BackFromDiscordMuteTutorial_Click(object sender, System.Windows.RoutedEventArgs e) =>
+        DiscordMuteTutorialPage.Visibility = System.Windows.Visibility.Collapsed;
+
+    private void DiscordMuteShortcutChangeButton_Click(object sender, System.Windows.RoutedEventArgs e)
+    {
+        if (_asr is null || _isBusy || IsAnyRecording || _isCapturingShortcut || _isCapturingDiscordMuteShortcut)
+            return;
+
+        _isCapturingDiscordMuteShortcut = true;
+        _hotkey.Unregister();
+        _hotkeyRegistered = false;
+        DiscordMuteShortcutChangeButton.Content = "入力中…";
+        DiscordMuteShortcutCaptureStatus.Text = "Discordに登録したキーの組み合わせを押してください。右Alt単独またはF1～F24も使えます。Escでキャンセルします。";
+        UpdateDiscordMuteControlsEnabled();
+        DiscordMuteShortcutChangeButton.Focus();
+    }
+
+    private void HandleDiscordMuteShortcutCapture(Key key)
+    {
+        if (key == Key.Escape)
+        {
+            CancelDiscordMuteShortcutCapture();
+            return;
+        }
+
+        var modifiers = Keyboard.Modifiers;
+        var otherModifiers = ModifierKeys.Control | ModifierKeys.Shift | ModifierKeys.Windows;
+        if (key == Key.RightAlt && (modifiers & otherModifiers) == ModifierKeys.None && !Keyboard.IsKeyDown(Key.LeftAlt))
+        {
+            ApplyDiscordMuteShortcut(new HotkeyBinding(0, HotkeyBinding.RightAltVirtualKey));
+            return;
+        }
+
+        if (IsModifierKey(key))
+        {
+            DiscordMuteShortcutCaptureStatus.Text = $"{FormatPressedModifiers(modifiers)}を押しています。続けて組み合わせるキーを押してください。";
+            return;
+        }
+
+        var binding = new HotkeyBinding(ToNativeModifiers(modifiers), (uint)KeyInterop.VirtualKeyFromKey(key));
+        if (!DiscordPushToMuteController.IsSupportedBinding(binding))
+        {
+            DiscordMuteShortcutCaptureStatus.Text = "修飾キーとの組み合わせ、右Alt単独、またはF1～F24を設定してください。";
+            return;
+        }
+
+        ApplyDiscordMuteShortcut(binding);
+    }
+
+    private void ApplyDiscordMuteShortcut(HotkeyBinding binding)
+    {
+        var appShortcut = GetConfiguredHotkey();
+        if (binding == appShortcut)
+        {
+            DiscordMuteShortcutCaptureStatus.Text = "Better Flowの録音キーと重なっています。別のキーを設定してください。";
+            return;
+        }
+
+        var oldModifiers = _settings.DiscordMuteShortcutModifiers;
+        var oldVirtualKey = _settings.DiscordMuteShortcutVirtualKey;
+        _settings.DiscordMuteShortcutModifiers = binding.Modifiers;
+        _settings.DiscordMuteShortcutVirtualKey = binding.VirtualKey;
+        try
+        {
+            _settingsStore.Save(_settings);
+        }
+        catch (Exception ex)
+        {
+            _settings.DiscordMuteShortcutModifiers = oldModifiers;
+            _settings.DiscordMuteShortcutVirtualKey = oldVirtualKey;
+            DiscordMuteStatus.Text = "ショートカットを保存できませんでした。";
+            RuntimeStatus.Text = ex.Message;
+            CancelDiscordMuteShortcutCapture(announceCancellation: false);
+            return;
+        }
+
+        _isCapturingDiscordMuteShortcut = false;
+        DiscordMuteShortcutChangeButton.Content = "変更";
+        UpdateDiscordMuteShortcutDisplay();
+        DiscordMuteShortcutCaptureStatus.Text = string.Empty;
+        DiscordMuteStatus.Text = _settings.DiscordAutoMuteEnabled
+            ? "キーを保存しました。Discord側にも同じキーを設定してください。"
+            : "キーを保存しました。機能をオフにしてもこの設定は保持されます。";
+        RegisterConfiguredHotkey();
+        UpdateDiscordMuteControlsEnabled();
+    }
+
+    private void CancelDiscordMuteShortcutCapture(bool announceCancellation = true)
+    {
+        if (!_isCapturingDiscordMuteShortcut) return;
+        _isCapturingDiscordMuteShortcut = false;
+        DiscordMuteShortcutChangeButton.Content = "変更";
+        DiscordMuteShortcutCaptureStatus.Text = announceCancellation ? "変更をキャンセルしました。" : string.Empty;
+        RegisterConfiguredHotkey();
+        UpdateDiscordMuteControlsEnabled();
     }
 
     private void SettingsComboBox_PreviewMouseWheel(object sender, MouseWheelEventArgs e)
@@ -1517,10 +1698,13 @@ public partial class MainWindow : System.Windows.Window
         CapacityText.Visibility = System.Windows.Visibility.Collapsed;
         ShortcutSettingsPanel.Visibility = System.Windows.Visibility.Visible;
         MicrophoneSettingsPanel.Visibility = System.Windows.Visibility.Visible;
+        DiscordMuteSettingsPanel.Visibility = System.Windows.Visibility.Visible;
         OpenCodeModelSettingsPanel.Visibility = System.Windows.Visibility.Visible;
         CorrectionDictionarySettingsPanel.Visibility = System.Windows.Visibility.Visible;
         SelectedTextAnswerSettingsPanel.Visibility = System.Windows.Visibility.Visible;
         ShortcutCaptureStatus.Text = string.Empty;
+        UpdateDiscordMuteShortcutDisplay();
+        UpdateDiscordMuteControlsEnabled();
         UpdateShortcutDisplay();
         UpdateAiModeDisplay();
         ActionButton.Visibility = System.Windows.Visibility.Collapsed;
@@ -1598,7 +1782,7 @@ public partial class MainWindow : System.Windows.Window
                 }
 
                 var selectedInput = MicrophoneDeviceCombo.SelectedItem as AudioInputDeviceOption;
-                StartRecorderWithFallback(_recorder.Start, selectedInput);
+                StartRecorderWithDiscordMute(_recorder.Start, selectedInput);
                 StartTranscriptPreview();
                 _activationSoundPlayer.Play();
                 ActionButton.Content = "録音を停止して変換";
@@ -1606,7 +1790,14 @@ public partial class MainWindow : System.Windows.Window
                 _indicator.ShowStatus("録音中");
                 UpdateAiModeDisplay();
             }
-            catch (Exception ex) { RuntimeStatus.Text = ex.Message; }
+            catch (Exception ex)
+            {
+                if (!_recorder.IsRecording && !_continuousRecorder.IsRecording)
+                    ReleaseDiscordMuteForAudioSession();
+                RuntimeStatus.Text = ex.Message;
+                if (ex.Message.Contains("Discord", StringComparison.Ordinal))
+                    _indicator.ShowStatus("Discordキーを確認", TimeSpan.FromSeconds(1));
+            }
             return;
         }
 
@@ -1619,7 +1810,7 @@ public partial class MainWindow : System.Windows.Window
         var cancellation = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token);
         try
         {
-            StartRecorderWithFallback(_continuousRecorder.Start, selectedInput);
+            StartRecorderWithDiscordMute(_continuousRecorder.Start, selectedInput);
             _selectedTextQuestionCancellation = cancellation;
             _selectedTextQuestionHistory.Clear();
             _selectedTextQuestionSessionActive = true;
@@ -1638,6 +1829,7 @@ public partial class MainWindow : System.Windows.Window
                 _selectedTextQuestionCancellation = null;
             _selectedTextQuestionSessionActive = false;
             _selectedTextQuestionSessionStopping = false;
+            ReleaseDiscordMuteForAudioSession();
             cancellation.Dispose();
             throw;
         }
@@ -1657,16 +1849,29 @@ public partial class MainWindow : System.Windows.Window
             ? "system-default"
             : selectedInput.DisplayName;
         var cancellation = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token);
-        var session = new GptLiveQuestionSession(_gptLiveAuth);
-        _selectedTextQuestionCancellation = cancellation;
-        _gptLiveQuestionSession = session;
-        _gptLiveQuestionActive = true;
-        _activationSoundPlayer.Play();
-        _answerWindow.ResetAnswer();
-        RuntimeStatus.Text = "GPT Liveの音声会話を準備しています…";
-        _indicator.ShowStatus("GPT Live接続中");
-        UpdateAiModeDisplay();
-        _ = RunGptLiveSelectedTextQuestionAsync(context, microphoneLabel, session, cancellation);
+        try
+        {
+            AcquireDiscordMuteForAudioSession();
+            var session = new GptLiveQuestionSession(_gptLiveAuth);
+            _selectedTextQuestionCancellation = cancellation;
+            _gptLiveQuestionSession = session;
+            _gptLiveQuestionActive = true;
+            _activationSoundPlayer.Play();
+            _answerWindow.ResetAnswer();
+            RuntimeStatus.Text = "GPT Liveの音声会話を準備しています…";
+            _indicator.ShowStatus("GPT Live接続中");
+            UpdateAiModeDisplay();
+            _ = RunGptLiveSelectedTextQuestionAsync(context, microphoneLabel, session, cancellation);
+        }
+        catch
+        {
+            _selectedTextQuestionCancellation = null;
+            _gptLiveQuestionSession = null;
+            _gptLiveQuestionActive = false;
+            cancellation.Dispose();
+            ReleaseDiscordMuteForAudioSession();
+            throw;
+        }
     }
 
     private async Task RunGptLiveSelectedTextQuestionAsync(
@@ -1712,6 +1917,7 @@ public partial class MainWindow : System.Windows.Window
         finally
         {
             try { await session.DisposeAsync(); } catch { }
+            ReleaseDiscordMuteForAudioSession();
             if (ReferenceEquals(_gptLiveQuestionSession, session)) _gptLiveQuestionSession = null;
             if (ReferenceEquals(_selectedTextQuestionCancellation, cancellation)) _selectedTextQuestionCancellation = null;
             _gptLiveQuestionActive = false;
@@ -1804,7 +2010,7 @@ public partial class MainWindow : System.Windows.Window
         var cancellation = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token);
         try
         {
-            StartRecorderWithFallback(_continuousRecorder.Start, selectedInput);
+            StartRecorderWithDiscordMute(_continuousRecorder.Start, selectedInput);
             _selectionEditCancellation = cancellation;
             _selectionEditSessionActive = true;
             _selectionEditSessionStopping = false;
@@ -1820,9 +2026,38 @@ public partial class MainWindow : System.Windows.Window
             if (_selectionEditCancellation == cancellation) _selectionEditCancellation = null;
             _selectionEditSessionActive = false;
             _selectionEditSessionStopping = false;
+            ReleaseDiscordMuteForAudioSession();
             cancellation.Dispose();
             throw;
         }
+    }
+
+    private void StartRecorderWithDiscordMute(Action<int> start, AudioInputDeviceOption? selectedInput)
+    {
+        AcquireDiscordMuteForAudioSession();
+        try
+        {
+            StartRecorderWithFallback(start, selectedInput);
+        }
+        catch
+        {
+            ReleaseDiscordMuteForAudioSession();
+            throw;
+        }
+    }
+
+    private void AcquireDiscordMuteForAudioSession()
+    {
+        _discordMuteLease ??= _discordPushToMute.Acquire(
+            _settings.DiscordAutoMuteEnabled,
+            GetDiscordMuteShortcut());
+    }
+
+    private void ReleaseDiscordMuteForAudioSession()
+    {
+        var lease = _discordMuteLease;
+        _discordMuteLease = null;
+        lease?.Dispose();
     }
 
     private void StartRecorderWithFallback(Action<int> start, AudioInputDeviceOption? selectedInput)
@@ -2065,6 +2300,7 @@ public partial class MainWindow : System.Windows.Window
             var wasCanceled = !endedDuringShutdown && cancellationToken.IsCancellationRequested;
             _selectionEditSessionActive = false;
             _selectionEditSessionStopping = false;
+            ReleaseDiscordMuteForAudioSession();
             _isBusy = false;
             if (!_undoWindow.IsUndoVisible)
             {
@@ -2305,6 +2541,7 @@ public partial class MainWindow : System.Windows.Window
             _continuousRecorder.DiscardPendingUtterances();
 
             var wasCanceled = !_closing && cancellationToken.IsCancellationRequested;
+            ReleaseDiscordMuteForAudioSession();
             _selectedTextQuestionSessionActive = false;
             _selectedTextQuestionSessionStopping = false;
             _selectedTextQuestionHistory.Clear();
@@ -2372,7 +2609,7 @@ public partial class MainWindow : System.Windows.Window
                 try
                 {
                     var selectedInput = MicrophoneDeviceCombo.SelectedItem as AudioInputDeviceOption;
-                    StartRecorderWithFallback(_continuousRecorder.StartForSendCommands, selectedInput);
+                    StartRecorderWithDiscordMute(_continuousRecorder.StartForSendCommands, selectedInput);
                     sendCommandListenerTask = MonitorSendVoiceCommandsAsync(sendCommandDetected, cancellationToken);
                     _sendCommandListenerTask = sendCommandListenerTask;
                     RuntimeStatus.Text = "OpenCodeの選択モデルで文章を整えています。音声で送信を指示できます。";
@@ -2481,6 +2718,7 @@ public partial class MainWindow : System.Windows.Window
                 if (ReferenceEquals(_sendCommandListenerTask, sendCommandListenerTask))
                     _sendCommandListenerTask = null;
             }
+            ReleaseDiscordMuteForAudioSession();
             await StopTranscriptPreviewAsync();
             if (!_closing) _transcriptPreviewWindow.HidePreview();
             if (samples is not null) Array.Clear(samples);
@@ -2585,7 +2823,7 @@ public partial class MainWindow : System.Windows.Window
 
     private void ShortcutChangeButton_Click(object sender, System.Windows.RoutedEventArgs e)
     {
-        if (_asr is null || _isBusy || _isCapturingShortcut) return;
+        if (_asr is null || _isBusy || _isCapturingShortcut || _isCapturingDiscordMuteShortcut) return;
 
         _isCapturingShortcut = true;
         _hotkey.Unregister();
@@ -2597,9 +2835,16 @@ public partial class MainWindow : System.Windows.Window
 
     private void MainWindow_PreviewKeyDown(object sender, System.Windows.Input.KeyEventArgs e)
     {
+        var key = e.Key == Key.System ? e.SystemKey : e.Key;
+        if (_isCapturingDiscordMuteShortcut)
+        {
+            HandleDiscordMuteShortcutCapture(key);
+            e.Handled = true;
+            return;
+        }
+
         if (!_isCapturingShortcut) return;
 
-        var key = e.Key == Key.System ? e.SystemKey : e.Key;
         if (key == Key.Escape)
         {
             CancelShortcutCapture();
@@ -2766,7 +3011,11 @@ public partial class MainWindow : System.Windows.Window
         catch (InvalidOperationException) { }
     }
 
-    private void CloseButton_Click(object sender, System.Windows.RoutedEventArgs e) => Close();
+    private void CloseButton_Click(object sender, System.Windows.RoutedEventArgs e)
+    {
+        CancelDiscordMuteShortcutCapture();
+        Close();
+    }
 
     private void InitializeTrayIcon()
     {
@@ -2873,6 +3122,7 @@ public partial class MainWindow : System.Windows.Window
     {
         if (!_exitRequested)
         {
+            CancelDiscordMuteShortcutCapture();
             e.Cancel = true;
             HideToTray();
             return;
@@ -2886,6 +3136,8 @@ public partial class MainWindow : System.Windows.Window
         _selectedTextQuestionCancellation?.Cancel();
         SystemEvents.SessionEnding -= SystemEvents_SessionEnding;
         _hotkey.Dispose();
+        ReleaseDiscordMuteForAudioSession();
+        _discordPushToMute.Dispose();
         _source?.RemoveHook(WindowMessageHook);
         _indicator.Close();
         _transcriptPreviewWindow.Close();
