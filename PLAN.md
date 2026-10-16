@@ -1057,3 +1057,10 @@
 - 実装前チェックポイントは`1c8e07c`、前回実装の復元ポイントは`ac0ad32`。今回のRelease単一EXE発行に成功。発行物と`dist/Better Flow.exe`はいずれも82,534,931 bytes、SHA-256 `654020C5408D37305DC8A7A33A72DB1B92BB758499ECD78AE3885ECDFD7AA131`。旧EXEは`artifacts/BetterFlow-before-smooth-gauge-pause-20261016-1620.exe`へ退避し、ハッシュ`F5FC8AF0987150F60AA979B27E10BBB4FC2DBEC0471A2EC2894785114737697D`を確認。正確な実行パスが一致するPID 32780だけを停止して置換した。`git diff --check`成功。テストスイート、実マイク、ゲージの実画面挙動は未確認。NuGet脆弱性データ取得先に接続できずNU1900警告が出た。
 
 分類: 音声UI進捗・VAD連続会話制御。出典: `IndicatorWindow.xaml.cs`、`MainWindow.xaml.cs`、`Services/OpenCodeService.cs`、`Services/ContinuousMicrophoneRecorder.cs`、NAudio 2.2.1 `WaveInEvent.cs`、Release publish、ファイル/ハッシュ確認。確認日: 2026-10-16 Asia/Tokyo。信頼度: ソース・ビルド・発行EXEハッシュ・配布先置換は高、実マイク動作と画面上の滑らかさは実機での再確認待ち。
+
+## 2026-10-16: インジケーターの操作ヒント（実装前チェックポイント）
+
+- 要件: 音声入力中、状態テキストのすぐ下に小さな操作ヒントを既定で表示する。既定ショートカットなら「右Altで確定」、別キーを設定している場合はそのキー名を使う。設定画面から表示をオフにでき、選択は再起動後も維持する。
+- 実装方針: `AppSettings`に既定trueの設定値を追加し、ショートカット設定付近にラベル付きトグルを置く。インジケーターの状態ラベル下へ第二行を追加し、通常音声録音中だけ確定操作を案内する。設定オフ時や録音外の状態では第二行を隠す。
+- 確認方針: 設定の初期値・保存・復元、任意ショートカット表示への追従、録音中以外での非表示をソース確認し、Release単体EXEを発行して`dist/Better Flow.exe`を更新する。実際の画面表示は、起動して確認できた範囲のみ報告する。
+- 分類: UI操作ヒントの実装前チェックポイント。出典: ユーザー要件、`IndicatorWindow.xaml(.cs)`、`Services/AppSettings.cs`、`MainWindow.xaml(.cs)`の読み取り確認。確認日: 2026-10-16 Asia/Tokyo。信頼度: 要件と現行の録音状態・設定保存経路は高、視覚サイズは実機表示確認待ち。
