@@ -386,6 +386,9 @@
                 </Grid.Resources>
                 <Border Background="{StaticResource SettingsOuterBrush}" CornerRadius="43" ClipToBounds="True">
                     <Canvas Width="945" Height="747" ClipToBounds="True">
+                        <Border Canvas.Left="0" Canvas.Top="0" Width="226" Height="747"
+                                Background="Transparent"
+                                MouseLeftButtonDown="DragRegion_MouseLeftButtonDown" />
                         <Border Canvas.Left="226" Canvas.Top="28" Width="691" Height="691"
                                 Background="{StaticResource SettingsSurfaceBrush}" CornerRadius="43" />
 
