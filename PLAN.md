@@ -914,3 +914,10 @@
 - テストスイートは未実行。Releaseコンパイル・発行・配置一致を確認したが、実マイクの最終認識、Parakeet経路、OpenCodeモデルの実生成、箇条書きの実出力は未確認。
 
 分類: PTT編集コマンドの実装・配布。出典: `MainWindow.xaml.cs`、`Services/AudioInputDiagnosticLog.cs`、`Services/OpenCodeService.cs`、`Services/TranscriptRewritePrompt.cs`、`Services/VoiceCommandParser.cs`、Git、Release build/publishと配布EXE照合。確認日: 2026-10-16 Asia/Tokyo。信頼度: ソース・コンパイル・配置一致は高、実マイクと実モデル動作は未確認。
+
+## PTT整形失敗の再現診断（2026-10-16）
+
+- ユーザー報告: 英訳は動作するが、「箇条書きにして」「プロンプトとして整形して」では文章がほぼ変わらない。前の診断では認識本文やモデル返答を保存していなかったため、ASR経路・要求構築・モデル出力・機械検証のどこで失敗しているか確定できない。
+- Services/VoiceCommandDiagnosticLog.csを追加し、%LOCALAPPDATA%\Better Flow\voice-command-diagnostics.jsonlへ処理IDで関連付けた診断メタデータを保存する。PTTプレビュー/最終認識の結果と経路、認識指示の分類・文字数、OpenCode要求に渡す指示数/各フラグ、返答と元文の一致・文字n-gram類似度、箇条書き判定、marker結果数、例外型を記録する。音声、文字起こし本文、指示文、モデル返答、例外メッセージは保存しない。ログは128 KiBで循環する。
+- Releaseビルドは成功（0エラー、NU1900警告1件）。まだ新EXEの発行・置換および実マイク/モデルでの再現確認はしていない。
+- 次の段階: 診断版EXEで「箇条書きにして」「プロンプトとして整形して」を各1回再現し、voice-command-diagnostics.jsonlを確認する。その証拠で原因を絞ってから処理を修正する。現時点で根本原因は確定していない。

@@ -2373,6 +2373,15 @@ public partial class MainWindow : System.Windows.Window
             route: TranscriptFormatter.HasMeaningfulText(recognizedText)
                 ? VoiceCommandParser.GetVoiceCommandRoute(recognizedText)
                 : "unrecognized");
+        VoiceCommandDiagnosticLog.Write(
+            operationId,
+            "segment-preview",
+            outcome,
+            segmentIndex,
+            TranscriptFormatter.HasMeaningfulText(recognizedText)
+                ? VoiceCommandParser.GetVoiceCommandRoute(recognizedText)
+                : "unrecognized",
+            recognizedInstruction: recognizedText);
     }
 
     private async Task StopTranscriptPreviewAsync()
@@ -2873,6 +2882,8 @@ public partial class MainWindow : System.Windows.Window
                         AudioInputDiagnosticLog.Write(
                             "voice-command-final", "rejected-short", operationId: operationId,
                             segmentIndex: segmentIndex, route: "unrecognized");
+                        VoiceCommandDiagnosticLog.Write(
+                            operationId, "segment-final", "rejected-short", segmentIndex, "unrecognized");
                         continue;
                     }
 
@@ -2883,6 +2894,8 @@ public partial class MainWindow : System.Windows.Window
                         AudioInputDiagnosticLog.Write(
                             "voice-command-final", "rejected-vad", operationId: operationId,
                             segmentIndex: segmentIndex, route: "unrecognized");
+                        VoiceCommandDiagnosticLog.Write(
+                            operationId, "segment-final", "rejected-vad", segmentIndex, "unrecognized");
                         continue;
                     }
 
@@ -2895,6 +2908,8 @@ public partial class MainWindow : System.Windows.Window
                         AudioInputDiagnosticLog.Write(
                             "voice-command-final", "empty", recognizedText: recognized,
                             operationId: operationId, segmentIndex: segmentIndex, route: "unrecognized");
+                        VoiceCommandDiagnosticLog.Write(
+                            operationId, "segment-final", "empty", segmentIndex, "unrecognized");
                         continue;
                     }
 
@@ -2903,6 +2918,13 @@ public partial class MainWindow : System.Windows.Window
                         "voice-command-final", "recognized", recognizedText: recognized,
                         operationId: operationId, segmentIndex: segmentIndex,
                         route: VoiceCommandParser.GetVoiceCommandRoute(recognized));
+                    VoiceCommandDiagnosticLog.Write(
+                        operationId,
+                        "segment-final",
+                        recognizedCommand ? "recognized-known" : "recognized-generic",
+                        segmentIndex,
+                        VoiceCommandParser.GetVoiceCommandRoute(recognized),
+                        recognizedInstruction: recognized);
                     if (!recognizedCommand)
                     {
                         actions.Add((null, null, recognized, recognized));
@@ -3153,6 +3175,23 @@ public partial class MainWindow : System.Windows.Window
                     if (!_openCode.IsRunning) await EnsureOpenCodeReadyAsync(cancellationToken);
                     var relevantDictionary = DictionaryTermSelector.SelectRelevant(
                         transcriptForPaste, _settings.CorrectionDictionary);
+                    var bulletListRequired = VoiceCommandParser.RequiresBulletListOutput(
+                        voiceEditCommands, editInstructions);
+                    var diagnosticInstructions = string.Join("\n", voiceEditCommands
+                        .Select(command => command.RecognizedText));
+                    VoiceCommandDiagnosticLog.Write(
+                        operationId,
+                        "rewrite-request",
+                        "dispatch",
+                        route: isPromptFormattingRequest ? "ai-prompt-format" : "ai-edit",
+                        recognizedInstruction: diagnosticInstructions,
+                        editInstructions: editInstructions,
+                        transcript: transcriptForPaste,
+                        requestHasVoiceCommandSegments: voiceEditCommands.Count > 0,
+                        requestHasEditInstructions: editInstructions.Count > 0,
+                        formatAsPrompt: formatAsPrompt,
+                        bulletListRequired: bulletListRequired,
+                        expectedCommandCount: voiceEditCommands.Count);
                     var response = await _openCode.RewriteAsync(
                         transcriptForAi, _settings.OpenCodeModelProviderId, _settings.OpenCodeModelId,
                         relevantDictionary, cancellationToken, precedingTextContext, editInstructions,
@@ -3162,6 +3201,20 @@ public partial class MainWindow : System.Windows.Window
                         response, transcript, voiceEditCommands, out var removedCommandEcho);
                     if (removedCommandEcho)
                     {
+                        VoiceCommandDiagnosticLog.Write(
+                            operationId,
+                            "rewrite-result",
+                            "command-echo-detected",
+                            route: isPromptFormattingRequest ? "ai-prompt-format" : "ai-edit",
+                            recognizedInstruction: diagnosticInstructions,
+                            editInstructions: editInstructions,
+                            transcript: transcriptForPaste,
+                            response: response,
+                            requestHasVoiceCommandSegments: voiceEditCommands.Count > 0,
+                            requestHasEditInstructions: editInstructions.Count > 0,
+                            formatAsPrompt: formatAsPrompt,
+                            bulletListRequired: bulletListRequired,
+                            expectedCommandCount: voiceEditCommands.Count);
                         AudioInputDiagnosticLog.Write(
                             "voice-command-output", "echo-detected", operationId: operationId,
                             route: isPromptFormattingRequest ? "ai-prompt-format" : "ai-edit");
@@ -3177,15 +3230,57 @@ public partial class MainWindow : System.Windows.Window
                         sendAfterPaste = sendCommandDetected.Task.IsCompletedSuccessfully && sendCommandDetected.Task.Result;
                     }
                     var returnedLineBreakMarkers = VoiceCommandParser.CountExplicitLineBreakMarkers(response);
-                    if (returnedLineBreakMarkers != explicitLineBreakCount ||
-                        !VoiceCommandParser.HasExactlyOneResolvedMarkerPerCommand(response, voiceEditCommands))
+                    var markersValid = returnedLineBreakMarkers == explicitLineBreakCount &&
+                        VoiceCommandParser.HasExactlyOneResolvedMarkerPerCommand(response, voiceEditCommands);
+                    if (!markersValid)
+                    {
+                        var markerCounts = CountVoiceCommandOutcomeMarkers(response, voiceEditCommands);
+                        VoiceCommandDiagnosticLog.Write(
+                            operationId,
+                            "rewrite-result",
+                            "marker-validation-failed",
+                            route: isPromptFormattingRequest ? "ai-prompt-format" : "ai-edit",
+                            recognizedInstruction: diagnosticInstructions,
+                            editInstructions: editInstructions,
+                            transcript: transcriptForPaste,
+                            response: response,
+                            requestHasVoiceCommandSegments: voiceEditCommands.Count > 0,
+                            requestHasEditInstructions: editInstructions.Count > 0,
+                            formatAsPrompt: formatAsPrompt,
+                            bulletListRequired: bulletListRequired,
+                            expectedCommandCount: voiceEditCommands.Count,
+                            resolvedCommandCount: markerCounts.Resolved,
+                            lineBreakOutcomeCount: markerCounts.LineBreak,
+                            appliedOutcomeCount: markerCounts.Applied,
+                            unresolvedOutcomeCount: markerCounts.Unresolved);
                         throw new InvalidDataException("AIモデルが音声コマンドを適用できませんでした。指示の読み上げ方を変えて、もう一度お試しください。入力欄は変更していません。");
+                    }
                     var responseWithVoiceOutcomes = VoiceCommandParser.RestoreVoiceCommandOutcomes(response, voiceEditCommands);
                     text = VoiceCommandParser.RestoreExplicitLineBreaks(responseWithVoiceOutcomes).Trim(' ', '\t', '\r');
                     if (!TranscriptFormatter.HasMeaningfulText(text))
                         throw new InvalidDataException("モデルから文字として使える回答が返りませんでした。入力欄は変更していません。");
-                    if (VoiceCommandParser.RequiresBulletListOutput(voiceEditCommands, editInstructions) &&
-                        !VoiceCommandParser.HasBulletListOutput(text))
+                    var responseHasBulletList = VoiceCommandParser.HasBulletListOutput(text);
+                    var markerCountsAfterRestore = CountVoiceCommandOutcomeMarkers(response, voiceEditCommands);
+                    VoiceCommandDiagnosticLog.Write(
+                        operationId,
+                        "rewrite-result",
+                        bulletListRequired && !responseHasBulletList ? "bullet-format-missing" : "validated",
+                        route: isPromptFormattingRequest ? "ai-prompt-format" : "ai-edit",
+                        recognizedInstruction: diagnosticInstructions,
+                        editInstructions: editInstructions,
+                        transcript: transcriptForPaste,
+                        response: text,
+                        requestHasVoiceCommandSegments: voiceEditCommands.Count > 0,
+                        requestHasEditInstructions: editInstructions.Count > 0,
+                        formatAsPrompt: formatAsPrompt,
+                        bulletListRequired: bulletListRequired,
+                        responseHasBulletList: responseHasBulletList,
+                        expectedCommandCount: voiceEditCommands.Count,
+                        resolvedCommandCount: markerCountsAfterRestore.Resolved,
+                        lineBreakOutcomeCount: markerCountsAfterRestore.LineBreak,
+                        appliedOutcomeCount: markerCountsAfterRestore.Applied,
+                        unresolvedOutcomeCount: markerCountsAfterRestore.Unresolved);
+                    if (bulletListRequired && !responseHasBulletList)
                         throw new InvalidDataException(
                             "箇条書きの指示を結果で確認できませんでした。認識した文章を入力欄へ反映し、自動送信は行いません。");
                     if (voiceEditCommands.Count > 0)
@@ -3202,6 +3297,22 @@ public partial class MainWindow : System.Windows.Window
                 catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
                 catch (Exception ex)
                 {
+                    VoiceCommandDiagnosticLog.Write(
+                        operationId,
+                        "rewrite-result",
+                        "exception",
+                        route: isPromptFormattingRequest ? "ai-prompt-format" : "ai-edit",
+                        recognizedInstruction: string.Join("\n", voiceEditCommands
+                            .Select(command => command.RecognizedText)),
+                        editInstructions: editInstructions,
+                        transcript: transcriptForPaste,
+                        requestHasVoiceCommandSegments: voiceEditCommands.Count > 0,
+                        requestHasEditInstructions: editInstructions.Count > 0,
+                        formatAsPrompt: formatAsPrompt,
+                        bulletListRequired: VoiceCommandParser.RequiresBulletListOutput(
+                            voiceEditCommands, editInstructions),
+                        expectedCommandCount: voiceEditCommands.Count,
+                        exception: ex);
                     _openCode.Stop();
                     AudioInputDiagnosticLog.Write(
                         "ai-processing", "raw-transcript-fallback", ex, transcriptForPaste,
@@ -3389,6 +3500,45 @@ public partial class MainWindow : System.Windows.Window
             ActionButton.Content = "録音を開始";
             UpdateAiModeDisplay();
         }
+    }
+
+    private static (int Resolved, int LineBreak, int Applied, int Unresolved)
+        CountVoiceCommandOutcomeMarkers(
+            string response,
+            IReadOnlyList<VoiceEditCommandInstruction> commands)
+    {
+        var resolved = 0;
+        var lineBreak = 0;
+        var applied = 0;
+        var unresolved = 0;
+        foreach (var command in commands)
+        {
+            var commandLineBreak = CountMarkerOccurrences(
+                response, VoiceCommandParser.CreateVoiceCommandLineBreakMarker(command.Marker));
+            var commandApplied = CountMarkerOccurrences(
+                response, VoiceCommandParser.CreateVoiceCommandAppliedMarker(command.Marker));
+            var commandUnresolved = CountMarkerOccurrences(
+                response, VoiceCommandParser.CreateVoiceCommandUnresolvedMarker(command.Marker));
+            lineBreak += commandLineBreak;
+            applied += commandApplied;
+            unresolved += commandUnresolved;
+            if (commandUnresolved == 0 && commandLineBreak + commandApplied == 1)
+                resolved++;
+        }
+
+        return (resolved, lineBreak, applied, unresolved);
+    }
+
+    private static int CountMarkerOccurrences(string text, string marker)
+    {
+        var count = 0;
+        var offset = 0;
+        while ((offset = text.IndexOf(marker, offset, StringComparison.Ordinal)) >= 0)
+        {
+            count++;
+            offset += marker.Length;
+        }
+        return count;
     }
 
     private async Task SendPastedTextAsync(CancellationToken cancellationToken)
