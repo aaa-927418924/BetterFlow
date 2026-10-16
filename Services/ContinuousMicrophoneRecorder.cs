@@ -26,10 +26,12 @@ internal sealed class ContinuousMicrophoneRecorder : IDisposable
     private SileroVoiceActivityDetector? _vad;
     private MemoryStream? _speechAudio;
     private Channel<float[]>? _utterances;
-    private TaskCompletionSource? _stopped;
+    private TaskCompletionSource? _captureStopped;
     private Task? _stopTask;
     private bool _isSpeaking;
     private bool _acceptUtterances = true;
+    private bool _capturePaused;
+    private bool _captureStopRequested;
     private int _minimumConsecutiveSpeechFrames = MinimumConsecutiveSpeechFrames;
     private int _vadFrameBufferedBytes;
     private int _consecutiveSpeechFrames;
@@ -71,8 +73,10 @@ internal sealed class ContinuousMicrophoneRecorder : IDisposable
             _consecutiveSpeechFrames = 0;
             _lastVoiceTimestamp = 0;
             _recordingError = null;
-            _stopped = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            _captureStopped = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             _stopTask = null;
+            _capturePaused = false;
+            _captureStopRequested = false;
         }
         PublishAudioLevel(0);
 
@@ -99,6 +103,9 @@ internal sealed class ContinuousMicrophoneRecorder : IDisposable
             {
                 _utterances?.Writer.TryComplete();
                 _utterances = null;
+                _captureStopped = null;
+                _capturePaused = false;
+                _captureStopRequested = false;
                 ClearBuffersLocked();
                 _vad?.Dispose();
                 _vad = null;
@@ -131,8 +138,17 @@ internal sealed class ContinuousMicrophoneRecorder : IDisposable
     {
         try
         {
-            recorder.StopRecording();
-            await (_stopped?.Task ?? Task.CompletedTask).WaitAsync(TimeSpan.FromSeconds(5), cancellationToken);
+            Task captureStopped;
+            var stopCapture = false;
+            lock (_sync)
+            {
+                stopCapture = !_captureStopRequested;
+                _captureStopRequested = true;
+                captureStopped = _captureStopped?.Task ?? Task.CompletedTask;
+            }
+            if (stopCapture)
+                recorder.StopRecording();
+            await captureStopped.WaitAsync(TimeSpan.FromSeconds(5), cancellationToken);
         }
         catch
         {
@@ -142,6 +158,9 @@ internal sealed class ContinuousMicrophoneRecorder : IDisposable
             lock (_sync)
             {
                 _waveIn = null;
+                _captureStopped = null;
+                _capturePaused = false;
+                _captureStopRequested = false;
                 ClearQueuedSamplesLocked();
                 _utterances?.Writer.TryComplete();
                 ClearBuffersLocked();
@@ -160,6 +179,9 @@ internal sealed class ContinuousMicrophoneRecorder : IDisposable
         lock (_sync)
         {
             _waveIn = null;
+            _captureStopped = null;
+            _capturePaused = false;
+            _captureStopRequested = false;
             if (_isSpeaking)
                 FinalizeUtteranceLocked();
             _isSpeaking = false;
@@ -179,29 +201,87 @@ internal sealed class ContinuousMicrophoneRecorder : IDisposable
             ClearQueuedSamplesLocked();
     }
 
-    public void SetAcceptingUtterances(bool accept)
+    public async Task PauseCaptureAsync(CancellationToken cancellationToken = default)
+    {
+        WaveInEvent recorder;
+        Task captureStopped;
+        lock (_sync)
+        {
+            if (_waveIn is null || _capturePaused || _stopTask is not null)
+                return;
+
+            _acceptUtterances = false;
+            ClearPendingAudioLocked();
+            recorder = _waveIn;
+            captureStopped = _captureStopped?.Task ?? Task.CompletedTask;
+            if (!_captureStopRequested)
+            {
+                _captureStopRequested = true;
+                try
+                {
+                    recorder.StopRecording();
+                }
+                catch (Exception ex)
+                {
+                    _captureStopRequested = false;
+                    _recordingError = ex;
+                    _utterances?.Writer.TryComplete(ex);
+                    throw;
+                }
+            }
+        }
+
+        PublishAudioLevel(0);
+        await captureStopped.WaitAsync(TimeSpan.FromSeconds(5), cancellationToken);
+
+        lock (_sync)
+        {
+            if (!ReferenceEquals(_waveIn, recorder) || _stopTask is not null)
+                return;
+
+            if (_recordingError is not null)
+                throw new IOException("マイクを一時停止できませんでした。", _recordingError);
+
+            _capturePaused = true;
+            ClearPendingAudioLocked();
+        }
+    }
+
+    public void ResumeCapture()
     {
         lock (_sync)
         {
-            if (_utterances is null || _acceptUtterances == accept)
+            var recorder = _waveIn;
+            if (recorder is null || _stopTask is not null || !_capturePaused)
                 return;
 
-            _acceptUtterances = accept;
-            ClearQueuedSamplesLocked();
-            ClearPreRollLocked();
-            CryptographicOperations.ZeroMemory(_vadFrameBuffer);
-            _vadFrameBufferedBytes = 0;
-            if (_speechAudio is not null)
+            if (_recordingError is not null)
+                throw new IOException("マイク録音を再開できませんでした。", _recordingError);
+
+            ClearPendingAudioLocked();
+            _captureStopped = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            _captureStopRequested = false;
+            _capturePaused = false;
+            _acceptUtterances = true;
+            try
             {
-                if (_speechAudio.TryGetBuffer(out var segment) && segment.Array is not null)
-                    CryptographicOperations.ZeroMemory(segment.Array.AsSpan(segment.Offset, segment.Count));
-                _speechAudio.SetLength(0);
+                // WaveInEvent cannot deliver buffers while stopped. Restarting only
+                // after RecordingStopped also discards any driver-side queued audio.
+                recorder.StartRecording();
             }
-            _isSpeaking = false;
-            _consecutiveSpeechFrames = 0;
-            _lastVoiceTimestamp = 0;
-            _vad?.Reset();
+            catch (Exception ex)
+            {
+                _acceptUtterances = false;
+                _capturePaused = true;
+                _captureStopRequested = true;
+                _recordingError = ex;
+                _utterances?.Writer.TryComplete(ex);
+                _captureStopped.TrySetResult();
+                throw;
+            }
         }
+
+        PublishAudioLevel(0);
     }
 
     public void Dispose()
@@ -221,6 +301,10 @@ internal sealed class ContinuousMicrophoneRecorder : IDisposable
             _utterances?.Writer.TryComplete();
             ClearQueuedSamplesLocked();
             _utterances = null;
+            _captureStopped = null;
+            _capturePaused = false;
+            _captureStopRequested = false;
+            _acceptUtterances = false;
             ClearBuffersLocked();
             _vad?.Dispose();
             _vad = null;
@@ -235,9 +319,16 @@ internal sealed class ContinuousMicrophoneRecorder : IDisposable
             var bytesRecorded = e.BytesRecorded - (e.BytesRecorded % BytesPerSample);
             if (bytesRecorded <= 0) return;
             var chunk = e.Buffer.AsSpan(0, bytesRecorded).ToArray();
+            float? audioLevel;
             lock (_sync)
+            {
+                var accepting = _acceptUtterances;
                 ProcessChunkLocked(chunk);
-            PublishAudioLevel(AudioInputLevel.GetNormalizedLevel(e.Buffer.AsSpan(0, bytesRecorded)));
+                audioLevel = accepting
+                    ? AudioInputLevel.GetNormalizedLevel(e.Buffer.AsSpan(0, bytesRecorded))
+                    : 0;
+            }
+            PublishAudioLevel(audioLevel);
         }
         catch (Exception ex)
         {
@@ -380,6 +471,24 @@ internal sealed class ContinuousMicrophoneRecorder : IDisposable
             Array.Clear(samples);
     }
 
+    private void ClearPendingAudioLocked()
+    {
+        ClearQueuedSamplesLocked();
+        ClearPreRollLocked();
+        CryptographicOperations.ZeroMemory(_vadFrameBuffer);
+        _vadFrameBufferedBytes = 0;
+        if (_speechAudio is not null)
+        {
+            if (_speechAudio.TryGetBuffer(out var segment) && segment.Array is not null)
+                CryptographicOperations.ZeroMemory(segment.Array.AsSpan(segment.Offset, segment.Count));
+            _speechAudio.SetLength(0);
+        }
+        _isSpeaking = false;
+        _consecutiveSpeechFrames = 0;
+        _lastVoiceTimestamp = 0;
+        _vad?.Reset();
+    }
+
     private void ClearBuffersLocked()
     {
         ClearPreRollLocked();
@@ -397,11 +506,13 @@ internal sealed class ContinuousMicrophoneRecorder : IDisposable
 
     private void OnRecordingStopped(object? sender, StoppedEventArgs e)
     {
-        if (e.Exception is not null)
+        TaskCompletionSource? captureStopped;
+        lock (_sync)
         {
-            lock (_sync)
+            if (e.Exception is not null)
                 _recordingError = e.Exception;
+            captureStopped = _captureStopped;
         }
-        _stopped?.TrySetResult();
+        captureStopped?.TrySetResult();
     }
 }

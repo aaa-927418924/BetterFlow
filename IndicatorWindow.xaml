@@ -9,7 +9,8 @@
             CornerRadius="19" Padding="2.5" IsHitTestVisible="False">
         <Grid x:Name="IndicatorContent" SizeChanged="IndicatorContent_SizeChanged">
             <Border x:Name="ProgressFill" Width="0" HorizontalAlignment="Left"
-                    Background="#4DFFFFFF" CornerRadius="16.5" Visibility="Collapsed" />
+                    Background="#4DFFFFFF" CornerRadius="16.5" Visibility="Collapsed"
+                    UseLayoutRounding="False" SnapsToDevicePixels="False" />
             <Grid>
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="34" />

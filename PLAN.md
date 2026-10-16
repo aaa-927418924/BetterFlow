@@ -1050,11 +1050,10 @@
 
 ## 2026-10-16: 滑らかな進捗ゲージと処理中音声の抑止（実装結果）
 
-- 進捗バーを段階ごとの即時ジャンプではなく、DispatcherTimerで現在幅から目標幅へ滑らかに補間するよう変更。OpenCode要求開始・応答活動・累積出力文字数を使い、生成中は上限を設けて完了前に100%へ達しない。置換・貼り付け後にだけ完了段階へ進む。これは経過時間に基づく実測完了率ではない。
+- 進捗バーはWPFの描画フレームごとに現在幅から目標幅へ時間ベースで補間する。固定25msタイマーで更新していたときに残ったカクつきに対し、フレーム間の実経過時間を使う指数イージング（通常0.24秒、完了時0.12秒）へ変更した。OpenCode要求開始・応答活動・累積出力文字数を使い、生成中は上限を設けて完了前に100%へ達しない。これは経過時間に基づく実測完了率ではない。
 - 選択文の質問・編集では、回答または置換が完了して音声待機へ戻る時に通常状態を表示し、白い進捗塗りを0%へリセットして非表示にする。次の認識開始時に新しいゲージを0%から開始する。
-- 連続録音中の質問・編集では、処理開始時に音声受け入れを止め、未処理キュー、VADプリロール、進行中音声バッファを消去する。AI処理・置換が終わって待機へ戻る時だけ受け入れを再開するため、処理中の発話が次回分として蓄積されない。
+- 連続録音中の質問・編集では、処理開始時に音声受け入れを止め、未処理キュー、VADプリロール、進行中音声バッファを消去したうえで、WaveInEventのマイク取得自体を停止する。RecordingStoppedを待ってからAI処理を行い、待機へ戻る時だけ録音を再開する。以前の受け入れフラグだけの方式ではOS側の録音自体が続いていたため、処理中の発話が次回分に紛れ込む余地が残っていた。
 - 通常音声入力では、AI処理中の送信コマンド用マイク監視を停止。録音中に含めた「送信して」指示は従来どおり処理するが、AI処理開始後の発話では送信しない。
-- 実装前チェックポイントは`1c8e07c`（`docs: record smooth processing gauge plan`）。Release単一EXE発行に成功。発行物: `artifacts/publish-smooth-gauge-voice-suppression-20261016/BetterFlow.exe`、82,534,209 bytes、SHA-256 `71F3884085025C99DB9631B51E11A56E490EFC5A572A37FF4642614BA17BA01F`。`git diff --check`は成功。テストスイートと実マイク・画面操作は未実施。
-- `dist/Better Flow.exe`はファイルロックのため置換できず、現状は旧版（82,533,774 bytes、SHA-256 `F5FC8AF0987150F60AA979B27E10BBB4FC2DBEC0471A2EC2894785114737697D`）。置換前バックアップ`artifacts/BetterFlow-before-smooth-progress-20261016-155028.exe`のハッシュは旧版と一致。PowerShellから見えるプロセス一覧に対象プロセスはなく、同じパスのプロセスだけを停止する安全な方法ではロックを解除できなかった。更新EXEの発行は完了したが、配布先の置換は対象ファイルを使っているプロセスが閉じるまで保留。
+- 実装前チェックポイントは`1c8e07c`、前回実装の復元ポイントは`ac0ad32`。今回のRelease単一EXE発行に成功。発行物と`dist/Better Flow.exe`はいずれも82,534,931 bytes、SHA-256 `654020C5408D37305DC8A7A33A72DB1B92BB758499ECD78AE3885ECDFD7AA131`。旧EXEは`artifacts/BetterFlow-before-smooth-gauge-pause-20261016-1620.exe`へ退避し、ハッシュ`F5FC8AF0987150F60AA979B27E10BBB4FC2DBEC0471A2EC2894785114737697D`を確認。正確な実行パスが一致するPID 32780だけを停止して置換した。`git diff --check`成功。テストスイート、実マイク、ゲージの実画面挙動は未確認。NuGet脆弱性データ取得先に接続できずNU1900警告が出た。
 
-分類: 音声UI進捗・VAD連続会話制御。出典: `IndicatorWindow.xaml.cs`、`MainWindow.xaml.cs`、`Services/OpenCodeService.cs`、`Services/ContinuousMicrophoneRecorder.cs`、Release publish、ファイル/ハッシュ確認。確認日: 2026-10-16 Asia/Tokyo。信頼度: ソース・ビルド・発行EXEハッシュは高、実マイク動作は未確認、配布先はロック中のため未更新。
+分類: 音声UI進捗・VAD連続会話制御。出典: `IndicatorWindow.xaml.cs`、`MainWindow.xaml.cs`、`Services/OpenCodeService.cs`、`Services/ContinuousMicrophoneRecorder.cs`、NAudio 2.2.1 `WaveInEvent.cs`、Release publish、ファイル/ハッシュ確認。確認日: 2026-10-16 Asia/Tokyo。信頼度: ソース・ビルド・発行EXEハッシュ・配布先置換は高、実マイク動作と画面上の滑らかさは実機での再確認待ち。

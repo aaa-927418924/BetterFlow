@@ -2600,14 +2600,14 @@ public partial class MainWindow : System.Windows.Window
         {
             await foreach (var samples in _continuousRecorder.ReadUtterancesAsync(cancellationToken))
             {
-                _continuousRecorder.SetAcceptingUtterances(false);
-                _undoWindow.HideUndo(stopTimer: false);
                 _isBusy = true;
+                _undoWindow.HideUndo(stopTimer: false);
                 ActionButton.Content = "選択文を編集しています…";
                 RuntimeStatus.Text = "発話を文字起こししています…";
                 _indicator.ShowProcessingStatus("音声認識中", ProcessingProgressStage.Recognition);
                 try
                 {
+                    await _continuousRecorder.PauseCaptureAsync(cancellationToken);
                     var transcript = await Task.Run(() => _asr!.Transcribe(samples), cancellationToken);
                     cancellationToken.ThrowIfCancellationRequested();
                     transcript = TranscriptFormatter.NormalizeTranscript(transcript);
@@ -2699,7 +2699,7 @@ public partial class MainWindow : System.Windows.Window
                     ActionButton.Content = _selectionEditSessionStopping ? "編集を終了しています…" : "編集セッションを終了";
                     UpdateAiModeDisplay();
                     if (!_closing && !_selectionEditSessionStopping && _continuousRecorder.IsRecording)
-                        _continuousRecorder.SetAcceptingUtterances(true);
+                        _continuousRecorder.ResumeCapture();
                 }
             }
         }
@@ -2871,7 +2871,6 @@ public partial class MainWindow : System.Windows.Window
         {
             await foreach (var samples in _continuousRecorder.ReadUtterancesAsync(cancellationToken))
             {
-                _continuousRecorder.SetAcceptingUtterances(false);
                 _isBusy = true;
                 UpdateAiModeDisplay();
                 ActionButton.Content = "質問に回答しています…";
@@ -2879,6 +2878,7 @@ public partial class MainWindow : System.Windows.Window
                 _indicator.ShowProcessingStatus("質問認識中", ProcessingProgressStage.Recognition);
                 try
                 {
+                    await _continuousRecorder.PauseCaptureAsync(cancellationToken);
                     var question = await Task.Run(() => _asr!.Transcribe(samples), cancellationToken);
                     cancellationToken.ThrowIfCancellationRequested();
                     question = TranscriptFormatter.NormalizeTranscript(question);
@@ -2957,7 +2957,7 @@ public partial class MainWindow : System.Windows.Window
                         : "質問セッションを終了";
                     UpdateAiModeDisplay();
                     if (!_closing && !_selectedTextQuestionSessionStopping && _continuousRecorder.IsRecording)
-                        _continuousRecorder.SetAcceptingUtterances(true);
+                        _continuousRecorder.ResumeCapture();
                 }
             }
         }

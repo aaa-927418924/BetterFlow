@@ -2,6 +2,7 @@ using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Interop;
+using System.Windows.Media;
 using System.Windows.Threading;
 
 namespace BetterFlow;
@@ -28,14 +29,15 @@ public partial class IndicatorWindow : System.Windows.Window
     private const double MaximumProgressBeforeFirstText = 64;
     private const double MaximumProgressDuringGeneration = 95;
     private readonly DispatcherTimer _hideTimer;
-    private readonly DispatcherTimer _progressTimer;
     private double _progressPercent;
     private double _progressTargetPercent;
     private ProcessingProgressStage? _activeProgressStage;
     private DateTime _activeStageStartedAt;
     private DateTime? _aiRequestStartedAt;
+    private DateTime _lastProgressFrameAt;
     private int _streamedTextLength;
     private bool _progressSessionActive;
+    private bool _progressRenderingSubscribed;
     private bool _aiRequestActive;
     private bool _assistantTextSeen;
     private bool _progressComplete;
@@ -43,11 +45,6 @@ public partial class IndicatorWindow : System.Windows.Window
     public IndicatorWindow()
     {
         InitializeComponent();
-        _progressTimer = new DispatcherTimer(DispatcherPriority.Render)
-        {
-            Interval = TimeSpan.FromMilliseconds(25)
-        };
-        _progressTimer.Tick += UpdateAnimatedProgress;
         _hideTimer = new DispatcherTimer(DispatcherPriority.Background)
         {
             Interval = TimeSpan.FromMilliseconds(900)
@@ -55,7 +52,7 @@ public partial class IndicatorWindow : System.Windows.Window
         _hideTimer.Tick += (_, _) =>
         {
             _hideTimer.Stop();
-            _progressTimer.Stop();
+            StopProgressAnimation();
             ProgressFill.Visibility = Visibility.Collapsed;
             Hide();
         };
@@ -64,7 +61,7 @@ public partial class IndicatorWindow : System.Windows.Window
         Closed += (_, _) =>
         {
             _hideTimer.Stop();
-            _progressTimer.Stop();
+            StopProgressAnimation();
         };
     }
 
@@ -93,7 +90,7 @@ public partial class IndicatorWindow : System.Windows.Window
         StatusText.Text = text;
         ProgressFill.Visibility = Visibility.Visible;
         ShowAtBottom();
-        _progressTimer.Start();
+        StartProgressAnimation();
         UpdateProgressFillWidth();
 
         if (autoHide is { } duration)
@@ -143,7 +140,7 @@ public partial class IndicatorWindow : System.Windows.Window
                 break;
         }
 
-        _progressTimer.Start();
+        StartProgressAnimation();
     }
 
     internal void ReportAssistantTextLength(int textLength)
@@ -171,7 +168,7 @@ public partial class IndicatorWindow : System.Windows.Window
         _streamedTextLength = Math.Max(_streamedTextLength, Math.Max(0, textLength));
         var textTarget = 64 + 31 * (1 - Math.Exp(-_streamedTextLength / 450d));
         AdvanceProgressTarget(Math.Min(MaximumProgressDuringGeneration, textTarget));
-        _progressTimer.Start();
+        StartProgressAnimation();
     }
 
     private void SetProgressStage(ProcessingProgressStage stage)
@@ -219,7 +216,6 @@ public partial class IndicatorWindow : System.Windows.Window
 
     private void BeginProgressSession()
     {
-        _progressTimer.Stop();
         _progressSessionActive = true;
         _progressComplete = false;
         _progressPercent = 0;
@@ -242,21 +238,48 @@ public partial class IndicatorWindow : System.Windows.Window
     {
         if (!_progressSessionActive)
         {
-            _progressTimer.Stop();
+            StopProgressAnimation();
             return;
         }
 
-        UpdateEstimatedProgressTarget(DateTime.UtcNow);
+        var now = DateTime.UtcNow;
+        var elapsedSeconds = _lastProgressFrameAt == default
+            ? 1d / 60d
+            : Math.Clamp((now - _lastProgressFrameAt).TotalSeconds, 0, 0.1);
+        _lastProgressFrameAt = now;
+        UpdateEstimatedProgressTarget(now);
 
         var remaining = _progressTargetPercent - _progressPercent;
-        var smoothing = _progressComplete ? 0.20 : 0.075;
+        var smoothingDurationSeconds = _progressComplete ? 0.12 : 0.24;
+        var smoothing = 1 - Math.Exp(-elapsedSeconds / smoothingDurationSeconds);
         _progressPercent += remaining * smoothing;
         if (Math.Abs(_progressTargetPercent - _progressPercent) < 0.06)
             _progressPercent = _progressTargetPercent;
 
         UpdateProgressFillWidth();
         if (_progressComplete && _progressPercent >= 99.94)
-            _progressTimer.Stop();
+            StopProgressAnimation();
+    }
+
+    private void StartProgressAnimation()
+    {
+        if (_progressRenderingSubscribed)
+            return;
+
+        _lastProgressFrameAt = DateTime.UtcNow;
+        CompositionTarget.Rendering += UpdateAnimatedProgress;
+        _progressRenderingSubscribed = true;
+    }
+
+    private void StopProgressAnimation()
+    {
+        if (_progressRenderingSubscribed)
+        {
+            CompositionTarget.Rendering -= UpdateAnimatedProgress;
+            _progressRenderingSubscribed = false;
+        }
+
+        _lastProgressFrameAt = default;
     }
 
     private void UpdateEstimatedProgressTarget(DateTime now)
@@ -285,7 +308,7 @@ public partial class IndicatorWindow : System.Windows.Window
 
     private void ResetProgress()
     {
-        _progressTimer.Stop();
+        StopProgressAnimation();
         _progressSessionActive = false;
         _progressComplete = false;
         _progressPercent = 0;
