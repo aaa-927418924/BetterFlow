@@ -42,7 +42,9 @@ public partial class IndicatorWindow : System.Windows.Window
     private bool _assistantTextSeen;
     private bool _progressComplete;
     private bool _operationHintsEnabled = true;
+    private bool _usesDefaultRecordingHint;
     private string _activationShortcutLabel = "右Alt";
+    private string _currentOperationHint = string.Empty;
 
     public IndicatorWindow()
     {
@@ -56,6 +58,9 @@ public partial class IndicatorWindow : System.Windows.Window
             _hideTimer.Stop();
             StopProgressAnimation();
             ProgressFill.Visibility = Visibility.Collapsed;
+            _currentOperationHint = string.Empty;
+            _usesDefaultRecordingHint = false;
+            UpdateOperationHint();
             Hide();
         };
         Loaded += (_, _) => UpdateProgressFillWidth();
@@ -67,12 +72,15 @@ public partial class IndicatorWindow : System.Windows.Window
         };
     }
 
-    public void ShowStatus(string text, TimeSpan? autoHide = null)
+    public void ShowStatus(string text, TimeSpan? autoHide = null, string? operationHint = null)
     {
         _hideTimer.Stop();
         ResetProgress();
         ProgressFill.Visibility = Visibility.Collapsed;
         StatusText.Text = text;
+        _usesDefaultRecordingHint = operationHint is null && text == "録音中";
+        _currentOperationHint = operationHint ??
+            (text == "録音中" ? $"{_activationShortcutLabel}で確定" : string.Empty);
         UpdateOperationHint();
         ShowAtBottom();
 
@@ -86,11 +94,14 @@ public partial class IndicatorWindow : System.Windows.Window
     internal void ShowProcessingStatus(
         string text,
         ProcessingProgressStage stage,
-        TimeSpan? autoHide = null)
+        TimeSpan? autoHide = null,
+        string? operationHint = null)
     {
         _hideTimer.Stop();
         SetProgressStage(stage);
         StatusText.Text = text;
+        _usesDefaultRecordingHint = false;
+        _currentOperationHint = operationHint ?? string.Empty;
         UpdateOperationHint();
         ProgressFill.Visibility = Visibility.Visible;
         ShowAtBottom();
@@ -116,14 +127,14 @@ public partial class IndicatorWindow : System.Windows.Window
 
         _operationHintsEnabled = enabled;
         _activationShortcutLabel = string.IsNullOrWhiteSpace(shortcutLabel) ? "右Alt" : shortcutLabel;
+        if (_usesDefaultRecordingHint)
+            _currentOperationHint = $"{_activationShortcutLabel}で確定";
         UpdateOperationHint();
     }
 
     private void UpdateOperationHint()
     {
-        var hint = _operationHintsEnabled && StatusText.Text == "録音中"
-            ? $"{_activationShortcutLabel}で確定"
-            : string.Empty;
+        var hint = _operationHintsEnabled ? _currentOperationHint : string.Empty;
         HintText.Text = hint;
         HintText.Visibility = string.IsNullOrEmpty(hint) ? Visibility.Collapsed : Visibility.Visible;
     }
@@ -377,6 +388,9 @@ public partial class IndicatorWindow : System.Windows.Window
         _hideTimer.Stop();
         ResetProgress();
         ProgressFill.Visibility = Visibility.Collapsed;
+        _currentOperationHint = string.Empty;
+        _usesDefaultRecordingHint = false;
+        UpdateOperationHint();
         Hide();
     }
 

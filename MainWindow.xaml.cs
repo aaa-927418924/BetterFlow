@@ -2024,7 +2024,7 @@ public partial class MainWindow : System.Windows.Window
             _activationSoundPlayer.Play();
             ActionButton.Content = "質問セッションを終了";
             RuntimeStatus.Text = "選択した文章について話してください。発話の区切りを検出すると回答します。ショートカットで終了できます。";
-            _indicator.ShowStatus("質問できます");
+            _indicator.ShowStatus("質問できます", operationHint: "話し終えると回答");
             UpdateAiModeDisplay();
             _ = ProcessSelectedTextQuestionSessionAsync(context, cancellation);
         }
@@ -2064,7 +2064,10 @@ public partial class MainWindow : System.Windows.Window
             _activationSoundPlayer.Play();
             _answerWindow.ResetAnswer();
             RuntimeStatus.Text = "GPT Liveの音声会話を準備しています…";
-            _indicator.ShowProcessingStatus("GPT Live接続中", ProcessingProgressStage.Preparing);
+            _indicator.ShowProcessingStatus(
+                "GPT Live接続中",
+                ProcessingProgressStage.Preparing,
+                operationHint: ShortcutOperationHint("会話終了"));
             UpdateAiModeDisplay();
             _ = RunGptLiveSelectedTextQuestionAsync(context, microphoneLabel, session, cancellation);
         }
@@ -2095,13 +2098,24 @@ public partial class MainWindow : System.Windows.Window
                     if (_closing) return;
                     var indicatorText = GetGptLiveIndicatorText(message);
                     if (message.Contains("質問を認識", StringComparison.Ordinal))
-                        _indicator.ShowProcessingStatus(indicatorText, ProcessingProgressStage.Recognition);
+                        _indicator.ShowProcessingStatus(
+                            indicatorText,
+                            ProcessingProgressStage.Recognition,
+                            operationHint: ShortcutOperationHint("会話終了"));
                     else if (message.Contains("回答しています", StringComparison.Ordinal))
-                        _indicator.ShowProcessingStatus(indicatorText, ProcessingProgressStage.GeneratingOrApplying);
+                        _indicator.ShowProcessingStatus(
+                            indicatorText,
+                            ProcessingProgressStage.GeneratingOrApplying,
+                            operationHint: ShortcutOperationHint("会話終了"));
                     else if (indicatorText == "質問できます")
-                        _indicator.ShowStatus(indicatorText);
+                        _indicator.ShowStatus(
+                            indicatorText,
+                            operationHint: ShortcutOperationHint("会話終了"));
                     else
-                        _indicator.ShowProcessingStatus(indicatorText, ProcessingProgressStage.Preparing);
+                        _indicator.ShowProcessingStatus(
+                            indicatorText,
+                            ProcessingProgressStage.Preparing,
+                            operationHint: ShortcutOperationHint("会話終了"));
                     RuntimeStatus.Text = message;
                 }),
                 _ => { },
@@ -2113,7 +2127,10 @@ public partial class MainWindow : System.Windows.Window
                         DispatchQuestionUi(() =>
                         {
                             if (!_closing)
-                                _indicator.ShowProcessingStatus("回答中", ProcessingProgressStage.GeneratingOrApplying);
+                                _indicator.ShowProcessingStatus(
+                                    "回答中",
+                                    ProcessingProgressStage.GeneratingOrApplying,
+                                    operationHint: ShortcutOperationHint("会話終了"));
                         });
                         _answerWindow.SetCurrentAssistantText(answer);
                     }
@@ -2126,7 +2143,10 @@ public partial class MainWindow : System.Windows.Window
                         DispatchQuestionUi(() =>
                         {
                             if (!_closing)
-                                _indicator.ShowProcessingStatus("質問できます", ProcessingProgressStage.Complete);
+                                _indicator.ShowProcessingStatus(
+                                    "質問できます",
+                                    ProcessingProgressStage.Complete,
+                                    operationHint: ShortcutOperationHint("会話終了"));
                         });
                     }
                 },
@@ -2242,7 +2262,9 @@ public partial class MainWindow : System.Windows.Window
         if (string.IsNullOrWhiteSpace(_pendingRawTranscriptFallback))
         {
             RuntimeStatus.Text = "文字起こしが終わるまでお待ちください。";
-            _indicator.ShowStatus("認識中");
+            _indicator.ShowStatus(
+                "認識中",
+                operationHint: ShortcutOperationHint("AI整形をスキップ"));
             return true;
         }
 
@@ -2251,7 +2273,7 @@ public partial class MainWindow : System.Windows.Window
 
         _rawTranscriptFallbackRequested = true;
         RuntimeStatus.Text = "AI整形を止めて、文字起こしを入力欄へ反映しています…";
-        _indicator.ShowStatus("文字起こしを反映");
+        _indicator.ShowStatus("文字起こしを反映", operationHint: "文字起こしのみを入力中");
         cancellation.Cancel();
         return true;
     }
@@ -2321,7 +2343,7 @@ public partial class MainWindow : System.Windows.Window
             _activationSoundPlayer.Play();
             RuntimeStatus.Text = "選択文を編集します。続けて話してください。ショートカットで終了できます。";
             ActionButton.Content = "編集セッションを終了";
-            _indicator.ShowStatus("選択文編集中");
+            ShowSelectionEditReadyIndicator();
             UpdateAiModeDisplay();
             _ = ProcessSelectionEditSessionAsync(context, cancellation.Token);
         }
@@ -2335,6 +2357,9 @@ public partial class MainWindow : System.Windows.Window
             throw;
         }
     }
+
+    private void ShowSelectionEditReadyIndicator() =>
+        _indicator.ShowStatus("選択文編集中", operationHint: "話し終えると置換");
 
     private void StartRecorderWithDiscordMute(Action<int> start, AudioInputDeviceOption? selectedInput)
     {
@@ -2645,7 +2670,10 @@ public partial class MainWindow : System.Windows.Window
                 _undoWindow.HideUndo(stopTimer: false);
                 ActionButton.Content = "選択文を編集しています…";
                 RuntimeStatus.Text = "発話を文字起こししています…";
-                _indicator.ShowProcessingStatus("音声認識中", ProcessingProgressStage.Recognition);
+                _indicator.ShowProcessingStatus(
+                    "音声認識中",
+                    ProcessingProgressStage.Recognition,
+                    operationHint: ShortcutOperationHint("キャンセル"));
                 try
                 {
                     await _continuousRecorder.PauseCaptureAsync(cancellationToken);
@@ -2655,22 +2683,27 @@ public partial class MainWindow : System.Windows.Window
                     if (!TranscriptFormatter.HasMeaningfulText(transcript))
                     {
                         RuntimeStatus.Text = "音声を認識できませんでした。続けて話してください。";
-                        _indicator.ShowStatus("選択文編集中");
+                        ShowSelectionEditReadyIndicator();
                         continue;
                     }
 
                     if (IsUndoSelectionEditCommand(transcript))
                     {
-                        _indicator.ShowStatus("元に戻しています");
+                        _indicator.ShowStatus(
+                            "元に戻しています",
+                            operationHint: ShortcutOperationHint("キャンセル"));
                         var wasUndone = await UndoLastSelectionEditAsync(context, cancellationToken);
                         RuntimeStatus.Text = wasUndone
                             ? "直前のAI編集を元に戻しました。続けて話してください。"
                             : "直前に戻せるAI編集がありません。選択文は変更していません。";
-                        _indicator.ShowStatus("選択文編集中");
+                        ShowSelectionEditReadyIndicator();
                         continue;
                     }
 
-                    _indicator.ShowProcessingStatus("AI編集中", ProcessingProgressStage.Preparing);
+                    _indicator.ShowProcessingStatus(
+                        "AI編集中",
+                        ProcessingProgressStage.Preparing,
+                        operationHint: ShortcutOperationHint("キャンセル"));
                     RuntimeStatus.Text = "選択文へ音声指示を適用しています…";
                     if (!_openCode.IsRunning) await EnsureOpenCodeReadyAsync(cancellationToken);
                     cancellationToken.ThrowIfCancellationRequested();
@@ -2682,7 +2715,10 @@ public partial class MainWindow : System.Windows.Window
                         cancellationToken,
                         onProgress: _indicator.ReportOpenCodeProgress);
 
-                    _indicator.ShowProcessingStatus("選択文を反映中", ProcessingProgressStage.Applying);
+                    _indicator.ShowProcessingStatus(
+                        "選択文を反映中",
+                        ProcessingProgressStage.Applying,
+                        operationHint: ShortcutOperationHint("キャンセル"));
                     var previousText = context.CurrentText;
                     cancellationToken.ThrowIfCancellationRequested();
                     var result = await SelectionEditService.ReplaceCurrentSelectionAsync(
@@ -2700,7 +2736,7 @@ public partial class MainWindow : System.Windows.Window
                         {
                             // The edit is complete and the session is listening again.
                             // Clear the completed bar so the next utterance starts at 0%.
-                            _indicator.ShowStatus("選択文編集中");
+                            ShowSelectionEditReadyIndicator();
                         }
                         else
                         {
@@ -2731,7 +2767,7 @@ public partial class MainWindow : System.Windows.Window
                 {
                     _openCode.Stop();
                     RuntimeStatus.Text = "AI編集に失敗しました。選択文は変更していません。 " + ex.GetBaseException().Message;
-                    _indicator.ShowStatus("AI編集失敗");
+                    _indicator.ShowStatus("AI編集失敗", operationHint: "話し終えると置換");
                 }
                 finally
                 {
@@ -2804,8 +2840,10 @@ public partial class MainWindow : System.Windows.Window
         if (context is null)
         {
             RuntimeStatus.Text = "元に戻せるAI編集がありません。";
-            _indicator.ShowStatus(_selectionEditSessionActive ? "選択文編集中" : "取り消せません",
-                _selectionEditSessionActive ? null : TimeSpan.FromSeconds(1));
+            if (_selectionEditSessionActive)
+                ShowSelectionEditReadyIndicator();
+            else
+                _indicator.ShowStatus("取り消せません", TimeSpan.FromSeconds(1));
             return;
         }
 
@@ -2815,16 +2853,20 @@ public partial class MainWindow : System.Windows.Window
             RuntimeStatus.Text = wasUndone
                 ? "直前のAI編集を元に戻しました。"
                 : "元に戻せませんでした。対象の文章が変更されたか、選択状態を確認できません。";
-            _indicator.ShowStatus(_selectionEditSessionActive ? "選択文編集中" :
-                wasUndone ? "元に戻しました" : "取り消せません",
-                _selectionEditSessionActive ? null : TimeSpan.FromSeconds(1));
+            if (_selectionEditSessionActive)
+                ShowSelectionEditReadyIndicator();
+            else
+                _indicator.ShowStatus(wasUndone ? "元に戻しました" : "取り消せません",
+                    TimeSpan.FromSeconds(1));
         }
         catch (OperationCanceledException) when (_closing) { }
         catch (Exception ex)
         {
             RuntimeStatus.Text = "AI編集を元に戻せませんでした。 " + ex.GetBaseException().Message;
-            _indicator.ShowStatus(_selectionEditSessionActive ? "選択文編集中" : "取り消せません",
-                _selectionEditSessionActive ? null : TimeSpan.FromSeconds(1));
+            if (_selectionEditSessionActive)
+                ShowSelectionEditReadyIndicator();
+            else
+                _indicator.ShowStatus("取り消せません", TimeSpan.FromSeconds(1));
         }
     }
 
@@ -2916,7 +2958,10 @@ public partial class MainWindow : System.Windows.Window
                 UpdateAiModeDisplay();
                 ActionButton.Content = "質問に回答しています…";
                 RuntimeStatus.Text = "発話を文字起こししています…";
-                _indicator.ShowProcessingStatus("質問認識中", ProcessingProgressStage.Recognition);
+                _indicator.ShowProcessingStatus(
+                    "質問認識中",
+                    ProcessingProgressStage.Recognition,
+                    operationHint: ShortcutOperationHint("キャンセル"));
                 try
                 {
                     await _continuousRecorder.PauseCaptureAsync(cancellationToken);
@@ -2926,12 +2971,15 @@ public partial class MainWindow : System.Windows.Window
                     if (!TranscriptFormatter.HasMeaningfulText(question))
                     {
                         RuntimeStatus.Text = "発話を認識できませんでした。続けて話してください。";
-                        _indicator.ShowStatus("質問できます");
+                        _indicator.ShowStatus("質問できます", operationHint: "話し終えると回答");
                         continue;
                     }
 
                     RuntimeStatus.Text = "OpenCodeを準備しています…";
-                    _indicator.ShowProcessingStatus("OpenCode接続中", ProcessingProgressStage.Preparing);
+                    _indicator.ShowProcessingStatus(
+                        "OpenCode接続中",
+                        ProcessingProgressStage.Preparing,
+                        operationHint: ShortcutOperationHint("キャンセル"));
                     if (!_openCode.IsRunning) await EnsureOpenCodeReadyAsync(cancellationToken);
                     cancellationToken.ThrowIfCancellationRequested();
                     var model = GetSelectedOpenCodeModel();
@@ -2941,7 +2989,10 @@ public partial class MainWindow : System.Windows.Window
                         throw new InvalidOperationException("設定からOpenCodeモデルを選択してください。");
 
                     RuntimeStatus.Text = "選択した文章とこれまでの会話を参考に回答しています…";
-                    _indicator.ShowProcessingStatus("回答準備中", ProcessingProgressStage.Preparing);
+                    _indicator.ShowProcessingStatus(
+                        "回答準備中",
+                        ProcessingProgressStage.Preparing,
+                        operationHint: ShortcutOperationHint("キャンセル"));
                     var responseStarted = 0;
                     var answer = await _openCode.AnswerSelectedTextAsync(
                         selectedText.CurrentText,
@@ -2955,7 +3006,10 @@ public partial class MainWindow : System.Windows.Window
                                 Dispatcher.BeginInvoke(new Action(() =>
                                 {
                                     if (!_closing)
-                                        _indicator.ShowProcessingStatus("回答中", ProcessingProgressStage.GeneratingOrApplying);
+                                        _indicator.ShowProcessingStatus(
+                                            "回答中",
+                                            ProcessingProgressStage.GeneratingOrApplying,
+                                            operationHint: ShortcutOperationHint("キャンセル"));
                                 }));
                             }
                             _answerWindow.SetCurrentAssistantText(text);
@@ -2973,7 +3027,7 @@ public partial class MainWindow : System.Windows.Window
                     RuntimeStatus.Text = "回答しました。続けて質問できます。";
                     // Keep the answer dialog available while listening, but reset and
                     // hide the progress fill until the next question starts processing.
-                    _indicator.ShowStatus("質問できます");
+                    _indicator.ShowStatus("質問できます", operationHint: "話し終えると回答");
                 }
                 catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
                 {
@@ -3062,7 +3116,7 @@ public partial class MainWindow : System.Windows.Window
             _recorder.BeginVoiceCommandCapture();
             _voiceCommandModeActive = true;
             RuntimeStatus.Text = "音声コマンド中 · Spaceを離すと通常の音声入力に戻ります。";
-            _indicator.ShowStatus("音声コマンド中");
+            _indicator.ShowStatus("音声コマンド中", operationHint: "Spaceを離すと通常入力");
         }
         catch (Exception ex)
         {
@@ -3333,7 +3387,10 @@ public partial class MainWindow : System.Windows.Window
         ActionButton.IsEnabled = false;
         ActionButton.Content = "音声を文字起こししています…";
         RuntimeStatus.Text = "音声をPC内で文字起こししています…";
-        _indicator.ShowProcessingStatus("認識中", ProcessingProgressStage.Recognition);
+        _indicator.ShowProcessingStatus(
+            "認識中",
+            ProcessingProgressStage.Recognition,
+            operationHint: ShortcutOperationHint("AI整形をスキップ"));
         IReadOnlyList<AudioRecordingSegment>? recordingSegments = null;
         var sendAfterPaste = false;
         var pipelineStage = "recording-stop";
@@ -3390,7 +3447,10 @@ public partial class MainWindow : System.Windows.Window
             else
             {
                 pipelineStage = "ai-processing";
-                _indicator.ShowProcessingStatus("整形中", ProcessingProgressStage.Preparing);
+                _indicator.ShowProcessingStatus(
+                    "整形中",
+                    ProcessingProgressStage.Preparing,
+                    operationHint: ShortcutOperationHint("AI整形をスキップ"));
                 RuntimeStatus.Text = isPromptFormattingRequest
                     ? "音声コマンドに従ってプロンプト風に整えています…"
                     : hasVoiceEditInstructions
@@ -3988,6 +4048,9 @@ public partial class MainWindow : System.Windows.Window
         return binding.IsUsable ? binding : new HotkeyBinding(0, HotkeyBinding.RightAltVirtualKey);
     }
 
+    private string ShortcutOperationHint(string action) =>
+        $"{GlobalHotkey.Format(GetConfiguredHotkey())}で{action}";
+
     private void UpdateShortcutDisplay()
     {
         var shortcut = GlobalHotkey.Format(GetConfiguredHotkey());
@@ -4184,7 +4247,7 @@ public partial class MainWindow : System.Windows.Window
             {
                 _skipAiAfterRecognitionRequested = true;
                 RuntimeStatus.Text = "文字起こしが終わったらAI整形をせず、そのまま入力欄へ反映します。";
-                _indicator.ShowStatus("AI整形をスキップ");
+                _indicator.ShowStatus("AI整形をスキップ", operationHint: "文字起こし後にそのまま反映");
                 return IntPtr.Zero;
             }
             ActionButton_Click(this, new System.Windows.RoutedEventArgs());
