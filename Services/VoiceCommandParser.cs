@@ -105,6 +105,8 @@ internal static partial class VoiceCommandParser
                 VoiceTextCommand.InsertNewLine,
             "プロンプト風の文章に整形して" or "文章をプロンプト風に整形して" or
                 "プロンプト風に整形して" or "プロンプト風にして" or "プロンプト形式に整形して" or
+                "プロンプトに整形して" or "プロンプトとして整形して" or
+                "プロンプトに整形してください" or "プロンプトとして整形してください" or
                 "プロンプト向けに整えて" =>
                 VoiceTextCommand.FormatAsPrompt,
             "そのまま送信して" or "そのまま送って" or "そのまま送信までやって" or "そのまま送信までやってください" or

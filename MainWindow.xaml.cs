@@ -2197,7 +2197,7 @@ public partial class MainWindow : System.Windows.Window
     private async Task RunTranscriptPreviewAsync(long session, CancellationToken cancellationToken)
     {
         var segmentStates = new List<TranscriptPreviewSegmentState>();
-        SileroVoiceActivityDetector? voiceCommandVad = null;
+        SileroVoiceActivityDetector? speechVad = null;
         try
         {
             await Task.Delay(TimeSpan.FromMilliseconds(500), cancellationToken).ConfigureAwait(false);
@@ -2241,15 +2241,13 @@ public partial class MainWindow : System.Windows.Window
                             continue;
                         }
 
-                        if (segment.IsVoiceCommand)
+                        speechVad ??= new SileroVoiceActivityDetector();
+                        if (!speechVad.ContainsSustainedSpeech(segment.Samples))
                         {
-                            voiceCommandVad ??= new SileroVoiceActivityDetector();
-                            if (!voiceCommandVad.ContainsSustainedSpeech(segment.Samples))
-                            {
-                                if (!isActiveSegment)
-                                    state.IsFinalized = true;
-                                continue;
-                            }
+                            state.Text = string.Empty;
+                            if (!isActiveSegment)
+                                state.IsFinalized = true;
+                            continue;
                         }
 
                         var transcript = await Task.Run(() => recognizer.Transcribe(segment.Samples), cancellationToken)
@@ -2311,7 +2309,7 @@ public partial class MainWindow : System.Windows.Window
         }
         finally
         {
-            voiceCommandVad?.Dispose();
+            speechVad?.Dispose();
         }
     }
 
@@ -2808,7 +2806,7 @@ public partial class MainWindow : System.Windows.Window
         var editInstructions = new List<string>();
         var voiceEditCommands = new List<VoiceEditCommandInstruction>();
         var voiceCommandSessionId = Guid.NewGuid().ToString("N");
-        SileroVoiceActivityDetector? voiceCommandVad = null;
+        SileroVoiceActivityDetector? speechVad = null;
         var formatAsPrompt = false;
         var sendAsIs = false;
         var hadUnrecognizedVoiceCommand = false;
@@ -2833,8 +2831,8 @@ public partial class MainWindow : System.Windows.Window
                         continue;
                     }
 
-                    voiceCommandVad ??= new SileroVoiceActivityDetector();
-                    if (!voiceCommandVad.ContainsSustainedSpeech(segment.Samples))
+                    speechVad ??= new SileroVoiceActivityDetector();
+                    if (!speechVad.ContainsSustainedSpeech(segment.Samples))
                     {
                         hadUnrecognizedVoiceCommand = true;
                         AudioInputDiagnosticLog.Write("voice-command-vad", "rejected-no-sustained-speech");
@@ -2875,6 +2873,13 @@ public partial class MainWindow : System.Windows.Window
                 {
                     if (combined.Length >= 1600)
                     {
+                        speechVad ??= new SileroVoiceActivityDetector();
+                        if (!speechVad.ContainsSustainedSpeech(combined))
+                        {
+                            AudioInputDiagnosticLog.Write("dictation-vad", "rejected-no-sustained-speech");
+                            return;
+                        }
+
                         var recognized = await Task.Run(() => _asr!.Transcribe(combined));
                         cancellationToken.ThrowIfCancellationRequested();
                         recognized = TranscriptFormatter.NormalizeTranscript(recognized);
@@ -2954,7 +2959,7 @@ public partial class MainWindow : System.Windows.Window
         }
         finally
         {
-            voiceCommandVad?.Dispose();
+            speechVad?.Dispose();
             foreach (var segment in segments)
                 Array.Clear(segment.Samples);
         }
