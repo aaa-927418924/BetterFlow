@@ -113,6 +113,8 @@ public partial class MainWindow : System.Windows.Window
         _answerWindow = new AnswerWindow();
         _recorder.AudioLevelChanged += _indicator.SetAudioLevel;
         _continuousRecorder.AudioLevelChanged += _indicator.SetAudioLevel;
+        _hotkey.VoiceCommandCaptureStartRequested += _recorder.BeginVoiceCommandCapture;
+        _hotkey.VoiceCommandCaptureStopRequested += _recorder.EndVoiceCommandCapture;
         _undoWindow = new UndoWindow();
         _undoWindow.UndoRequested += UndoWindow_UndoRequested;
         _undoWindow.UndoExpired += UndoWindow_UndoExpired;
@@ -2195,6 +2197,7 @@ public partial class MainWindow : System.Windows.Window
     private async Task RunTranscriptPreviewAsync(long session, CancellationToken cancellationToken)
     {
         var segmentStates = new List<TranscriptPreviewSegmentState>();
+        SileroVoiceActivityDetector? voiceCommandVad = null;
         try
         {
             await Task.Delay(TimeSpan.FromMilliseconds(500), cancellationToken).ConfigureAwait(false);
@@ -2230,12 +2233,23 @@ public partial class MainWindow : System.Windows.Window
                         if (state.IsFinalized)
                             continue;
 
-                        var minimumSamples = segment.IsVoiceCommand ? 4_800 : 16_000;
+                        var minimumSamples = segment.IsVoiceCommand ? 5 * SileroVoiceActivityDetector.WindowSamples : 16_000;
                         if (segment.Samples.Length < minimumSamples)
                         {
                             if (!isActiveSegment)
                                 state.IsFinalized = true;
                             continue;
+                        }
+
+                        if (segment.IsVoiceCommand)
+                        {
+                            voiceCommandVad ??= new SileroVoiceActivityDetector();
+                            if (!voiceCommandVad.ContainsSustainedSpeech(segment.Samples))
+                            {
+                                if (!isActiveSegment)
+                                    state.IsFinalized = true;
+                                continue;
+                            }
                         }
 
                         var transcript = await Task.Run(() => recognizer.Transcribe(segment.Samples), cancellationToken)
@@ -2294,6 +2308,10 @@ public partial class MainWindow : System.Windows.Window
         catch
         {
             // Preview is best-effort. The final full-recording decode remains authoritative.
+        }
+        finally
+        {
+            voiceCommandVad?.Dispose();
         }
     }
 
@@ -2790,6 +2808,7 @@ public partial class MainWindow : System.Windows.Window
         var editInstructions = new List<string>();
         var voiceEditCommands = new List<VoiceEditCommandInstruction>();
         var voiceCommandSessionId = Guid.NewGuid().ToString("N");
+        SileroVoiceActivityDetector? voiceCommandVad = null;
         var formatAsPrompt = false;
         var sendAsIs = false;
         var hadUnrecognizedVoiceCommand = false;
@@ -2808,8 +2827,19 @@ public partial class MainWindow : System.Windows.Window
                 cancellationToken.ThrowIfCancellationRequested();
                 if (segment.IsVoiceCommand)
                 {
-                    if (segment.Samples.Length < 1600)
+                    if (segment.Samples.Length < 5 * SileroVoiceActivityDetector.WindowSamples)
+                    {
+                        hadUnrecognizedVoiceCommand = true;
                         continue;
+                    }
+
+                    voiceCommandVad ??= new SileroVoiceActivityDetector();
+                    if (!voiceCommandVad.ContainsSustainedSpeech(segment.Samples))
+                    {
+                        hadUnrecognizedVoiceCommand = true;
+                        AudioInputDiagnosticLog.Write("voice-command-vad", "rejected-no-sustained-speech");
+                        continue;
+                    }
 
                     var recognized = await Task.Run(() => _asr!.Transcribe(segment.Samples));
                     cancellationToken.ThrowIfCancellationRequested();
@@ -2924,6 +2954,7 @@ public partial class MainWindow : System.Windows.Window
         }
         finally
         {
+            voiceCommandVad?.Dispose();
             foreach (var segment in segments)
                 Array.Clear(segment.Samples);
         }
@@ -3061,6 +3092,10 @@ public partial class MainWindow : System.Windows.Window
                             relevantDictionary, cancellationToken, precedingTextContext, editInstructions,
                             voiceEditCommands);
                     cancellationToken.ThrowIfCancellationRequested();
+                    response = VoiceCommandParser.RemoveEchoedVoiceCommandText(
+                        response, transcript, voiceEditCommands, out var removedCommandEcho);
+                    if (removedCommandEcho)
+                        AudioInputDiagnosticLog.Write("voice-command-output", "removed-echoed-instruction");
                     if (sendCommandListenerTask is not null)
                     {
                         await StopSendCommandMonitorAsync(sendCommandListenerTask);

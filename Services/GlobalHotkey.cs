@@ -125,6 +125,10 @@ internal sealed class GlobalHotkey : IDisposable
 
     public bool IsVoiceCommandStopMessage(int message) => message == VoiceCommandStopMessageId;
 
+    public event Action? VoiceCommandCaptureStartRequested;
+
+    public event Action? VoiceCommandCaptureStopRequested;
+
     public bool SetEscapeMonitoring(bool enabled)
     {
         _escapeMonitoring = enabled;
@@ -212,6 +216,8 @@ internal sealed class GlobalHotkey : IDisposable
                 if (isKeyUp && _spaceVoiceCommandPressed)
                 {
                     _spaceVoiceCommandPressed = false;
+                    try { VoiceCommandCaptureStopRequested?.Invoke(); }
+                    catch { }
                     PostMessage(_handle, VoiceCommandStopMessageId, IntPtr.Zero, IntPtr.Zero);
                     return new IntPtr(1);
                 }
@@ -225,9 +231,13 @@ internal sealed class GlobalHotkey : IDisposable
                 if (isKeyDown && _voiceCommandPushToTalkEnabled)
                 {
                     _spaceVoiceCommandPressed = true;
+                    try { VoiceCommandCaptureStartRequested?.Invoke(); }
+                    catch { }
                     if (!PostMessage(_handle, VoiceCommandStartMessageId, IntPtr.Zero, IntPtr.Zero))
                     {
                         _spaceVoiceCommandPressed = false;
+                        try { VoiceCommandCaptureStopRequested?.Invoke(); }
+                        catch { }
                         return CallNextHookEx(_keyboardHook, code, wParam, lParam);
                     }
                     return new IntPtr(1);

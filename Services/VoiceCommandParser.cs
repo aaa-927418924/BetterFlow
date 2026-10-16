@@ -118,6 +118,44 @@ internal static partial class VoiceCommandParser
         return command != VoiceTextCommand.None;
     }
 
+    public static string RemoveEchoedVoiceCommandText(
+        string response,
+        string originalTranscript,
+        IReadOnlyList<VoiceEditCommandInstruction> commands,
+        out bool removedEcho)
+    {
+        removedEcho = false;
+        var sourceText = RemoveVoiceCommandMarkers(originalTranscript);
+        var normalizedSource = NormalizeVoiceCommand(sourceText);
+        var sanitized = response;
+
+        foreach (var command in commands)
+        {
+            var normalizedCommand = NormalizeVoiceCommand(command.RecognizedText);
+            if (normalizedCommand.Length < 4 || normalizedSource.Contains(normalizedCommand, StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            var echoPattern = string.Join(
+                @"[\s、,，。．.!！?？…]*",
+                normalizedCommand.Select(character => Regex.Escape(character.ToString())));
+            var regex = new Regex(echoPattern, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+            var next = regex.Replace(sanitized, string.Empty);
+            if (!string.Equals(next, sanitized, StringComparison.Ordinal))
+            {
+                removedEcho = true;
+                sanitized = next;
+            }
+        }
+
+        if (!removedEcho)
+            return response;
+
+        sanitized = Regex.Replace(sanitized, @"[ \t]{2,}", " ");
+        sanitized = Regex.Replace(sanitized, @"[ \t]*([、,，。．.!！?？])", "$1");
+        sanitized = Regex.Replace(sanitized, @"([、,，。．.!！?？])(?:[ \t]*[、,，。．.!！?？])+", "$1");
+        return sanitized.Trim(' ', '\t', '\r', '\n');
+    }
+
     public static bool TryRemoveSendDirective(string transcript, out string content)
     {
         var match = SendDirectiveAtEndRegex().Match(transcript);

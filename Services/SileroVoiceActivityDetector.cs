@@ -59,6 +59,55 @@ internal sealed class SileroVoiceActivityDetector : IDisposable
         return _detector.IsSpeechDetected();
     }
 
+    public bool ContainsSustainedSpeech(
+        ReadOnlySpan<float> samples,
+        int minimumSpeechFrames = 5,
+        int minimumConsecutiveFrames = 3)
+    {
+        if (minimumSpeechFrames < 1)
+            throw new ArgumentOutOfRangeException(nameof(minimumSpeechFrames));
+        if (minimumConsecutiveFrames < 1 || minimumConsecutiveFrames > minimumSpeechFrames)
+            throw new ArgumentOutOfRangeException(nameof(minimumConsecutiveFrames));
+
+        Reset();
+        try
+        {
+            Span<byte> frame = stackalloc byte[WindowBytes];
+            var speechFrames = 0;
+            var consecutiveSpeechFrames = 0;
+            var longestSpeechRun = 0;
+
+            for (var offset = 0; offset + WindowSamples <= samples.Length; offset += WindowSamples)
+            {
+                for (var index = 0; index < WindowSamples; index++)
+                {
+                    var sample = Math.Clamp(samples[offset + index], -1f, 1f);
+                    var pcm = (short)MathF.Round(sample * (sample < 0 ? 32768f : 32767f));
+                    BinaryPrimitives.WriteInt16LittleEndian(frame.Slice(index * sizeof(short), sizeof(short)), pcm);
+                }
+
+                if (AcceptPcm16Frame(frame))
+                {
+                    speechFrames++;
+                    consecutiveSpeechFrames++;
+                    longestSpeechRun = Math.Max(longestSpeechRun, consecutiveSpeechFrames);
+                    if (speechFrames >= minimumSpeechFrames && longestSpeechRun >= minimumConsecutiveFrames)
+                        return true;
+                }
+                else
+                {
+                    consecutiveSpeechFrames = 0;
+                }
+            }
+
+            return false;
+        }
+        finally
+        {
+            Reset();
+        }
+    }
+
     public void Reset() => _detector.Reset();
 
     public void Dispose() => _detector.Dispose();
