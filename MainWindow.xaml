@@ -324,6 +324,40 @@
                 </Setter.Value>
             </Setter>
         </Style>
+
+        <Style x:Key="UserSystemPromptInputStyle" TargetType="TextBox">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="Foreground" Value="{StaticResource SettingsControlTextBrush}" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="Padding" Value="16,15,16,10" />
+            <Setter Property="FontFamily" Value="Inter, Yu Gothic UI" />
+            <Setter Property="FontSize" Value="15" />
+            <Setter Property="VerticalContentAlignment" Value="Top" />
+            <Setter Property="SelectionBrush" Value="#9E9E9E" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="TextBox">
+                        <Border x:Name="InputSurface" Background="{TemplateBinding Background}"
+                                BorderBrush="Transparent" BorderThickness="0" CornerRadius="17"
+                                SnapsToDevicePixels="True">
+                            <ScrollViewer x:Name="PART_ContentHost" Margin="{TemplateBinding Padding}"
+                                          VerticalAlignment="Stretch" Background="Transparent"
+                                          Focusable="False" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsKeyboardFocused" Value="True">
+                                <Setter TargetName="InputSurface" Property="BorderBrush" Value="#101010" />
+                                <Setter TargetName="InputSurface" Property="BorderThickness" Value="2" />
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter TargetName="InputSurface" Property="Background" Value="#DADADA" />
+                                <Setter Property="Foreground" Value="#666666" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
     </Window.Resources>
 
     <Grid Background="Transparent">
@@ -415,6 +449,9 @@
                         <ToggleButton x:Name="SettingsDetailsTab" Canvas.Left="0" Canvas.Top="303"
                                       Content="詳細" Style="{StaticResource SettingsNavigationButtonStyle}"
                                       Click="SettingsDetailsTab_Click" AutomationProperties.Name="詳細設定" />
+                        <ToggleButton x:Name="SettingsInstructionsTab" Canvas.Left="0" Canvas.Top="349"
+                                      Content="指示" Style="{StaticResource SettingsNavigationButtonStyle}"
+                                      Click="SettingsInstructionsTab_Click" AutomationProperties.Name="指示プロンプト" />
 
                         <Button Canvas.Left="164" Canvas.Top="50" Style="{StaticResource SettingsCloseButtonStyle}"
                                 Click="CloseButton_Click" ToolTip="閉じる" AutomationProperties.Name="閉じる">
@@ -493,11 +530,11 @@
                                                           ToolTip="{Binding SelectedItem.DisplayName, RelativeSource={RelativeSource Self}}"
                                                           AutomationProperties.Name="OpenCode Desktopのモデル" />
                                                 <Button x:Name="RefreshOpenCodeModelsButton" Grid.Row="2" Grid.Column="2"
-                                                        Content="更新" Width="104" Height="38" Padding="6,0"
+                                                        Content="再取得" Width="104" Height="38" Padding="6,0"
                                                         VerticalAlignment="Center"
                                                         Style="{StaticResource SettingsButtonStyle}"
                                                         Click="RefreshOpenCodeModels_Click"
-                                                        AutomationProperties.Name="OpenCodeモデル一覧を更新" />
+                                                        AutomationProperties.Name="OpenCodeモデル一覧を再取得" />
                                                 <TextBlock x:Name="OpenCodeModelStatus" Grid.Row="4" Grid.ColumnSpan="3"
                                                            MinHeight="27" FontSize="11" LineHeight="14"
                                                            TextWrapping="Wrap" Foreground="{StaticResource SettingsMutedBrush}"
@@ -534,11 +571,11 @@
                                                           ToolTip="{Binding SelectedItem.DisplayName, RelativeSource={RelativeSource Self}}"
                                                           AutomationProperties.Name="音声入力デバイス" />
                                                 <Button x:Name="RefreshMicrophoneDevicesButton" Grid.Row="2" Grid.Column="2"
-                                                        Content="更新" Width="104" Height="38" Padding="6,0"
+                                                        Content="再取得" Width="104" Height="38" Padding="6,0"
                                                         VerticalAlignment="Center"
                                                         Style="{StaticResource SettingsButtonStyle}"
                                                         Click="RefreshMicrophoneDevices_Click"
-                                                        AutomationProperties.Name="音声入力デバイス一覧を更新" />
+                                                        AutomationProperties.Name="音声入力デバイス一覧を再取得" />
                                                 <TextBlock x:Name="MicrophoneDeviceStatus" Grid.Row="4" Grid.ColumnSpan="3"
                                                            MinHeight="27" FontSize="11" LineHeight="14"
                                                            TextWrapping="Wrap" Foreground="{StaticResource SettingsMutedBrush}"
@@ -765,6 +802,56 @@
                                         </DockPanel>
                                     </Canvas>
                                 </Canvas>
+
+                                <Grid x:Name="UserSystemPromptSettingsPage" Width="691" Height="691"
+                                      Background="{StaticResource SettingsSurfaceBrush}"
+                                      Visibility="Collapsed">
+                                    <Grid Margin="35,34,35,30">
+                                        <Grid.RowDefinitions>
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="*" />
+                                        </Grid.RowDefinitions>
+                                        <TextBlock Grid.Row="0" Text="指示プロンプト" FontSize="24"
+                                                   Foreground="{StaticResource SettingsTextBrush}" />
+                                        <TextBlock Grid.Row="1" Margin="0,14,0,18" FontSize="14"
+                                                   LineHeight="18" TextWrapping="Wrap"
+                                                   Foreground="{StaticResource SettingsMutedBrush}"
+                                                   Text="文章のスタイルなどを指定できます。&#10;この指示は毎回のAI処理に読み込まれます。" />
+                                        <Border Grid.Row="2" Background="{StaticResource SettingsControlBrush}"
+                                                CornerRadius="17" ClipToBounds="True">
+                                            <Grid>
+                                                <Grid.RowDefinitions>
+                                                    <RowDefinition Height="*" />
+                                                    <RowDefinition Height="34" />
+                                                </Grid.RowDefinitions>
+                                                <TextBox x:Name="UserSystemPromptTextBox" Grid.Row="0"
+                                                         Style="{StaticResource UserSystemPromptInputStyle}"
+                                                         AcceptsReturn="True" TextWrapping="Wrap"
+                                                         VerticalScrollBarVisibility="Auto"
+                                                         HorizontalScrollBarVisibility="Disabled"
+                                                         TextChanged="UserSystemPromptTextBox_TextChanged"
+                                                         AutomationProperties.Name="システムプロンプト"
+                                                         AutomationProperties.HelpText="AI処理に適用する追加指示を500文字まで入力できます。" />
+                                                <Grid Grid.Row="1" Margin="16,0,18,11">
+                                                    <Grid.ColumnDefinitions>
+                                                        <ColumnDefinition Width="*" />
+                                                        <ColumnDefinition Width="Auto" />
+                                                    </Grid.ColumnDefinitions>
+                                                    <TextBlock x:Name="UserSystemPromptSaveStatus" Grid.Column="0"
+                                                               FontSize="11" VerticalAlignment="Center"
+                                                               Foreground="{StaticResource SettingsMutedBrush}"
+                                                               AutomationProperties.LiveSetting="Polite" />
+                                                    <TextBlock x:Name="UserSystemPromptCharacterCount" Grid.Column="1"
+                                                               Text="残り500文字" FontSize="13"
+                                                               VerticalAlignment="Center"
+                                                               Foreground="{StaticResource SettingsMutedBrush}"
+                                                               AutomationProperties.Name="システムプロンプトの残り文字数" />
+                                                </Grid>
+                                            </Grid>
+                                        </Border>
+                                    </Grid>
+                                </Grid>
 
                                 <Grid x:Name="DiscordMuteTutorialPage" Background="{StaticResource SettingsSurfaceBrush}"
                                       Visibility="Collapsed" Panel.ZIndex="10">

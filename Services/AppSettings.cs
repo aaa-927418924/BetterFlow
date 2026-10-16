@@ -6,6 +6,7 @@ namespace BetterFlow.Services;
 internal sealed class AppSettings
 {
     public bool AiModeEnabled { get; set; } = true;
+    public string UserSystemPrompt { get; set; } = string.Empty;
     public string SelectionEditEngine { get; set; } = "opencode";
     public string SelectedTextAnswerMode { get; set; } = "opencode";
     public string OpenCodeModelProviderId { get; set; } = "opencode";

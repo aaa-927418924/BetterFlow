@@ -58,6 +58,7 @@ public partial class MainWindow : System.Windows.Window
     private bool _isCapturingDiscordMuteShortcut;
     private bool _loadingDiscordMuteSettingsUi;
     private bool _loadingIndicatorHintsUi;
+    private bool _normalizingUserSystemPromptText;
     private bool _isRefreshingOpenCodeModels;
     private bool _loadingOpenCodeModelUi;
     private bool _loadingMicrophoneDeviceUi;
@@ -146,6 +147,7 @@ public partial class MainWindow : System.Windows.Window
             CapacityText.Text = string.Empty;
         }
         NormalizeAiSettings();
+        InitializeUserSystemPromptUi();
         InitializeIndicatorHintsSettingsUi();
         InitializeOpenCodeModelUi();
         RefreshCorrectionDictionaryItems();
@@ -1959,6 +1961,7 @@ public partial class MainWindow : System.Windows.Window
         var isGeneral = string.Equals(page, "general", StringComparison.Ordinal);
         var isDictionary = string.Equals(page, "dictionary", StringComparison.Ordinal);
         var isDetails = string.Equals(page, "details", StringComparison.Ordinal);
+        var isUserSystemPrompt = string.Equals(page, "instructions", StringComparison.Ordinal);
 
         GeneralSettingsPage.Visibility = isGeneral
             ? System.Windows.Visibility.Visible
@@ -1969,11 +1972,78 @@ public partial class MainWindow : System.Windows.Window
         DetailsSettingsPage.Visibility = isDetails
             ? System.Windows.Visibility.Visible
             : System.Windows.Visibility.Collapsed;
+        UserSystemPromptSettingsPage.Visibility = isUserSystemPrompt
+            ? System.Windows.Visibility.Visible
+            : System.Windows.Visibility.Collapsed;
         DiscordMuteTutorialPage.Visibility = System.Windows.Visibility.Collapsed;
 
         SettingsGeneralTab.IsChecked = isGeneral;
         SettingsDictionaryTab.IsChecked = isDictionary;
         SettingsDetailsTab.IsChecked = isDetails;
+        SettingsInstructionsTab.IsChecked = isUserSystemPrompt;
+    }
+
+    private void InitializeUserSystemPromptUi()
+    {
+        var savedPrompt = _settings.UserSystemPrompt ?? string.Empty;
+        var limitedPrompt = UserSystemPromptComposer.LimitCharacters(savedPrompt);
+        _settings.UserSystemPrompt = limitedPrompt;
+        _openCode.ConfiguredSystemPrompt = limitedPrompt;
+
+        _normalizingUserSystemPromptText = true;
+        UserSystemPromptTextBox.Text = limitedPrompt;
+        _normalizingUserSystemPromptText = false;
+        UpdateUserSystemPromptCharacterCount(limitedPrompt);
+
+        if (string.Equals(savedPrompt, limitedPrompt, StringComparison.Ordinal)) return;
+        try
+        {
+            _settingsStore.Save(_settings);
+        }
+        catch
+        {
+            UserSystemPromptSaveStatus.Text = "保存できませんでした";
+        }
+    }
+
+    private void UserSystemPromptTextBox_TextChanged(object sender, System.Windows.Controls.TextChangedEventArgs e)
+    {
+        if (_normalizingUserSystemPromptText || sender is not System.Windows.Controls.TextBox textBox) return;
+
+        var enteredText = textBox.Text ?? string.Empty;
+        var limitedText = UserSystemPromptComposer.LimitCharacters(enteredText);
+        if (!string.Equals(enteredText, limitedText, StringComparison.Ordinal))
+        {
+            var caretIndex = Math.Min(textBox.CaretIndex, limitedText.Length);
+            var selectionStart = Math.Min(textBox.SelectionStart, limitedText.Length);
+            var selectionLength = Math.Min(textBox.SelectionLength, limitedText.Length - selectionStart);
+            _normalizingUserSystemPromptText = true;
+            textBox.Text = limitedText;
+            if (selectionLength > 0)
+                textBox.Select(selectionStart, selectionLength);
+            else
+                textBox.CaretIndex = caretIndex;
+            _normalizingUserSystemPromptText = false;
+        }
+
+        _settings.UserSystemPrompt = limitedText;
+        _openCode.ConfiguredSystemPrompt = limitedText;
+        UpdateUserSystemPromptCharacterCount(limitedText);
+        try
+        {
+            _settingsStore.Save(_settings);
+            UserSystemPromptSaveStatus.Text = string.Empty;
+        }
+        catch
+        {
+            UserSystemPromptSaveStatus.Text = "保存できませんでした";
+        }
+    }
+
+    private void UpdateUserSystemPromptCharacterCount(string value)
+    {
+        var remaining = UserSystemPromptComposer.MaximumCharacters - UserSystemPromptComposer.CountCharacters(value);
+        UserSystemPromptCharacterCount.Text = $"残り{remaining}文字";
     }
 
     private void SettingsGeneralTab_Click(object sender, System.Windows.RoutedEventArgs e) =>
@@ -1984,6 +2054,9 @@ public partial class MainWindow : System.Windows.Window
 
     private void SettingsDetailsTab_Click(object sender, System.Windows.RoutedEventArgs e) =>
         ShowSettingsPage("details");
+
+    private void SettingsInstructionsTab_Click(object sender, System.Windows.RoutedEventArgs e) =>
+        ShowSettingsPage("instructions");
 
     private async Task RecordButton_Click()
     {
@@ -2149,7 +2222,7 @@ public partial class MainWindow : System.Windows.Window
         try
         {
             AcquireDiscordMuteForAudioSession();
-            var session = new GptLiveQuestionSession(_gptLiveAuth);
+            var session = new GptLiveQuestionSession(_gptLiveAuth, _settings.UserSystemPrompt);
             _selectedTextQuestionCancellation = cancellation;
             _gptLiveQuestionSession = session;
             _gptLiveQuestionActive = true;

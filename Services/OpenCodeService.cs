@@ -47,6 +47,7 @@ internal sealed class OpenCodeService : IDisposable
     private string? _workspace;
 
     public bool IsRunning => _process is { HasExited: false } && _baseUri is not null;
+    public string ConfiguredSystemPrompt { get; set; } = string.Empty;
 
     public async Task StartAsync(CancellationToken cancellationToken = default)
     {
@@ -476,7 +477,7 @@ internal sealed class OpenCodeService : IDisposable
             {
                 agent = agentName,
                 model = new { providerID = providerId, modelID = modelId },
-                system = systemMessage,
+                system = UserSystemPromptComposer.Compose(systemMessage, ConfiguredSystemPrompt),
                 parts = new[] { new { type = "text", text = userMessage } }
             };
             try
