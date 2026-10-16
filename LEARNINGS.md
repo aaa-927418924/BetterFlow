@@ -75,3 +75,13 @@
 - OpenCode公式Toolsドキュメントでは`webfetch`はURLページ取得、`websearch`はWeb検索として説明され、両方を個別にallowできる（確認日: 2026-10-16）。
 - 13:00ごろの実行ログ（確認日: 2026-10-16）では質問モデル`opencode/deepseek-v4.1-flash-free`が約1.6秒と0.4秒で`invalid-response`となり、応答本文は0文字だった。質問専用agentで`*` denyがグローバルの安全な`read`/`bash`許可も上書きしていたため、同じ限定許可をagent側にも明示した。セッションエラー本文はログに記録されず、因果の実モデル再確認は未実施。
 - 配布結果: Release build/publish成功、0エラー・NU1900警告1件。最終EXEは82,526,665 bytes、SHA-256 `B4BB107FAEF8F8362897E35C5A3C27A3D43FFB4B2BC063869AF89890E173C4D9`。直前EXEは`artifacts/BetterFlow-before-question-mode-fix-20261016-130445417.exe`へ保存。最初の置換はファイルロックで失敗したが、Restart Managerにロック中プロセスがないことを確認後に再試行し、`dist/Better Flow.exe`を置換、発行物とハッシュ一致を確認。実行中の対象アプリはなく、停止PIDは0件。修正後の実モデル動作とテストスイートは未実施。
+
+## UI Automation入力欄の初回捕捉と処理段階ゲージ（2026-10-16）
+
+- 内容: UIAのFocusedElement親方向だけで入力欄を初期捕捉すると、Chromium/Electronが編集領域をTextPattern-only Document/Customで公開する場合や、フォーカス中要素が実際の編集パターンを持たない場合に見失う。対象HWND内の上限付き候補検索で、実際に貼り付けた文章が見える編集欄へ結び付ける。本文・音声は診断ログに書かず、候補数・検索理由・ControlTypeのみ記録し、曖昧一致では追跡を見送る。
+- 分類: UI Automationのアクセシビリティ追跡・辞書自動学習。
+- 出典: `Services/AutoDictionaryLearningMonitor.cs`、2026-10-16 Release build/publishと`dist\Better Flow.exe`のSHA-256確認。ChatGPT Desktop対象のローカル診断ログには該当失敗記録なし。
+- 確認日: 2026-10-16 Asia/Tokyo。
+- 信頼度: 変更した検索経路・コンパイル・EXE配置一致は高。実際のChatGPT Desktop再テストは未実施で、今回の報告の実行時根本原因が解消したかは未確認。
+- 情報区分: ソース確認・環境ログ未確認・実機再テスト待ち。
+- UI追記（内容: 下部カプセルの既存暗色背景とアイコン/文字の間に半透明の左寄せ塗りを置き、認識25%、OpenCode準備50%、生成/反映75%、完了100%とする共通段階を表示。これは経過時間の実測完了率ではない。分類: デスクトップUI。出典: `IndicatorWindow.xaml(.cs)`、`MainWindow.xaml.cs`、ユーザー添付画像、Release build/publishと配置EXE照合。確認日: 2026-10-16 Asia/Tokyo。信頼度: コンパイル・EXE配置一致は高、実画面の印象は未確認。情報区分: ソース確認・未確認事項）。

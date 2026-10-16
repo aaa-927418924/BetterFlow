@@ -1023,3 +1023,13 @@
 5. 既存の`dist\Better Flow.exe`を一意な名前でバックアップし、同じパスのBetter Flowプロセスだけ停止して置き換え、発行物と配置先のSHA-256を比較する。ライブのマイク/UI動作は、実際に画面で確認できた場合に限り報告する。
 
 分類: 承認済み2項目の実装計画・実装前チェックポイント。出典: `Services/AutoDictionaryLearningMonitor.cs`、`MainWindow.xaml.cs`、`IndicatorWindow.xaml(.cs)`、ユーザー添付画像、既存ローカル診断ログの読み取り確認。確認日: 2026-10-16 Asia/Tokyo。信頼度: コード上の検索制約と各処理経路は高、ChatGPT Desktopで起きた個々の実行時失敗原因は未確定。
+
+## 2026-10-16: 自動学習の入力欄検索と処理進行ゲージ（実装結果）
+
+- `AutoDictionaryLearningMonitor`の初期入力欄検索を補強した。既存のフォーカス中要素検索に加え、貼り付け先HWND内だけを上限付きで列挙し、実際に貼り付けた文章を含む編集可能欄を探す。Chromium/Electronがフォーカス中の編集領域をTextPatternだけのDocument/Customとして公開する場合も、フォーカス経路上かつ対象ウィンドウの75%未満の領域に限り候補にする。候補が一意でない場合は誤学習防止のため結び付けない。追加ログには検索理由・候補数・対象ControlType等だけを記録し、本文を残さない。
+- 下部インジケーターに`#4DFFFFFF`の半透明塗りレイヤーを追加し、既存のアイコンと状態文字より後ろ、カプセル背景より前に表示する。塗りは左から25%（Parakeet認識）、50%（OpenCode準備/要求）、75%（回答生成または出力反映）、100%（完了）へ段階的に進む。通常音声入力、OpenCode質問、GPT Live質問、選択文編集で共通の段階を使い、AIスキップ時は認識後に出力反映へ進む。
+- Release build/publish成功。NU1900警告1件はNuGet脆弱性情報取得先へ接続できないため。単体EXEと`dist\Better Flow.exe`は82,533,774 bytes、SHA-256 `F5FC8AF0987150F60AA979B27E10BBB4FC2DBEC0471A2EC2894785114737697D`で一致。
+- 置換前EXEは`artifacts\BetterFlow-before-monitor-progress-20261016.exe`へ退避し、SHA-256 `9E0C86E14230769DC28E8E824B5C7A1FF8B1E2095DCAE4714BC945D66D924EA8`を確認。配布先と完全一致するPID 6720を停止して更新した。
+- テストスイートは実行していない。実機のChatGPT Desktop/Chromeでの自動学習、実マイクの全処理経路、ゲージの実画面表示は未確認。個別エラーの実行時ログがなかったため、フォーカス限定検索というコード上の弱点は直したが、ユーザー環境での再現解消は確認待ち。
+
+分類: 承認済み2機能の実装・配布。出典: `Services/AutoDictionaryLearningMonitor.cs`、`IndicatorWindow.xaml(.cs)`、`MainWindow.xaml.cs`、Release build/publish、配布EXEとバックアップのハッシュ。確認日: 2026-10-16 Asia/Tokyo。信頼度: コード・コンパイル・発行物と配置EXEの一致は高、実画面・実マイク・ChatGPT Desktopの動作は未確認。

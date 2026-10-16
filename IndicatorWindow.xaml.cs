@@ -6,6 +6,14 @@ using System.Windows.Threading;
 
 namespace BetterFlow;
 
+internal enum ProcessingProgressStage
+{
+    Recognition,
+    Preparing,
+    GeneratingOrApplying,
+    Complete
+}
+
 public partial class IndicatorWindow : System.Windows.Window
 {
     private const int GwlExStyle = -20;
@@ -17,6 +25,7 @@ public partial class IndicatorWindow : System.Windows.Window
     private const double CenterBarIdleHeight = IconCanvasHeight * 46 / 77;
     private const double RightBarIdleHeight = IconCanvasHeight * 29 / 77;
     private readonly DispatcherTimer _hideTimer;
+    private double _progressPercent;
 
     public IndicatorWindow()
     {
@@ -28,8 +37,10 @@ public partial class IndicatorWindow : System.Windows.Window
         _hideTimer.Tick += (_, _) =>
         {
             _hideTimer.Stop();
+            ProgressFill.Visibility = Visibility.Collapsed;
             Hide();
         };
+        Loaded += (_, _) => UpdateProgressFillWidth();
         SourceInitialized += (_, _) => MakeClickThrough();
         Closed += (_, _) => _hideTimer.Stop();
     }
@@ -37,12 +48,10 @@ public partial class IndicatorWindow : System.Windows.Window
     public void ShowStatus(string text, TimeSpan? autoHide = null)
     {
         _hideTimer.Stop();
+        _progressPercent = 0;
+        ProgressFill.Visibility = Visibility.Collapsed;
         StatusText.Text = text;
-        Left = Math.Max(0, (SystemParameters.PrimaryScreenWidth - Width) / 2);
-        Top = Math.Max(0, SystemParameters.PrimaryScreenHeight - Height - 12);
-
-        if (!IsVisible)
-            Show();
+        ShowAtBottom();
 
         if (autoHide is { } duration)
         {
@@ -51,9 +60,61 @@ public partial class IndicatorWindow : System.Windows.Window
         }
     }
 
+    internal void ShowProcessingStatus(
+        string text,
+        ProcessingProgressStage stage,
+        TimeSpan? autoHide = null)
+    {
+        _hideTimer.Stop();
+        _progressPercent = stage switch
+        {
+            ProcessingProgressStage.Recognition => 25,
+            ProcessingProgressStage.Preparing => 50,
+            ProcessingProgressStage.GeneratingOrApplying => 75,
+            ProcessingProgressStage.Complete => 100,
+            _ => 0
+        };
+        StatusText.Text = text;
+        ProgressFill.Visibility = Visibility.Visible;
+        ShowAtBottom();
+        UpdateProgressFillWidth();
+
+        if (autoHide is { } duration)
+        {
+            _hideTimer.Interval = duration;
+            _hideTimer.Start();
+        }
+    }
+
+    private void ShowAtBottom()
+    {
+        Left = Math.Max(0, (SystemParameters.PrimaryScreenWidth - Width) / 2);
+        Top = Math.Max(0, SystemParameters.PrimaryScreenHeight - Height - 12);
+
+        if (!IsVisible)
+            Show();
+    }
+
+    private void IndicatorContent_SizeChanged(object sender, SizeChangedEventArgs e) =>
+        UpdateProgressFillWidth();
+
+    private void UpdateProgressFillWidth()
+    {
+        if (!Dispatcher.CheckAccess())
+        {
+            if (!Dispatcher.HasShutdownStarted && !Dispatcher.HasShutdownFinished)
+                Dispatcher.BeginInvoke(DispatcherPriority.Render, new Action(UpdateProgressFillWidth));
+            return;
+        }
+
+        ProgressFill.Width = Math.Max(0, IndicatorContent.ActualWidth * _progressPercent / 100d);
+    }
+
     public void HideStatus()
     {
         _hideTimer.Stop();
+        _progressPercent = 0;
+        ProgressFill.Visibility = Visibility.Collapsed;
         Hide();
     }
 

@@ -432,6 +432,118 @@ internal sealed class AutoDictionaryLearningMonitor : IDisposable
             return true;
         }
 
+        bool TryBindEditorContainingPastedText(out string matchedText, out string reason)
+        {
+            matchedText = string.Empty;
+            reason = "pasted-text-editor-not-found";
+            AutomationElement? focused;
+            try
+            {
+                focused = AutomationElement.FocusedElement;
+                if (focused is null || !IsWithinWindow(focused, _targetWindow)) focused = null;
+            }
+            catch (Exception ex) when (IsAutomationFailure(ex) || ex is ObjectDisposedException)
+            {
+                focused = null;
+            }
+
+            AutomationElement root;
+            try { root = AutomationElement.FromHandle(_targetWindow); }
+            catch (Exception ex) when (IsAutomationFailure(ex) || ex is ObjectDisposedException)
+            {
+                Log("initial_editor_search", $"reason=target-root-unavailable;error={ex.GetType().Name}");
+                reason = "target-root-unavailable";
+                return false;
+            }
+
+            var matches = new List<(AutomationElement Element, TextPattern? TextPattern,
+                ValuePattern? ValuePattern, string Text, ControlType ControlType, int Score)>();
+            var visitedIds = new HashSet<string>(StringComparer.Ordinal);
+            var visitedNoId = new HashSet<int>();
+            var examined = 0;
+            var unreadable = 0;
+            var targetBounds = Rect.Empty;
+            try { targetBounds = root.Current.BoundingRectangle; }
+            catch (Exception ex) when (IsAutomationFailure(ex) || ex is ObjectDisposedException) { }
+
+            foreach (var element in EnumerateWindowElements(root, MaxAutomationSearchNodes,
+                         MaxAutomationTreeDepth))
+            {
+                examined++;
+                var onFocusedPath = focused is not null && IsWithinElement(focused, element);
+                if (!TryGetInitialEditorTextPatterns(element, onFocusedPath, targetBounds,
+                        out var textPattern, out var valuePattern))
+                    continue;
+
+                if (!TryReadText(element, textPattern, valuePattern, out var text, out _))
+                {
+                    unreadable++;
+                    continue;
+                }
+                text = NormalizeLineEndings(text);
+                if (text.IndexOf(_pastedText, StringComparison.Ordinal) < 0) continue;
+
+                var runtimeId = GetRuntimeId(element);
+                if (runtimeId is not null)
+                {
+                    if (!visitedIds.Add(runtimeId)) continue;
+                }
+                else if (!visitedNoId.Add(element.GetHashCode()))
+                {
+                    continue;
+                }
+
+                AutomationElement.AutomationElementInformation current;
+                try { current = element.Current; }
+                catch (Exception ex) when (IsAutomationFailure(ex) || ex is ObjectDisposedException)
+                {
+                    unreadable++;
+                    continue;
+                }
+                var score = (onFocusedPath ? 1_000 : 0) +
+                            (current.HasKeyboardFocus ? 200 : 0) +
+                            (current.ControlType == ControlType.Edit ? 100 : 0) +
+                            (valuePattern is not null ? 20 : 0);
+                matches.Add((element, textPattern, valuePattern, text, current.ControlType, score));
+            }
+
+            if (matches.Count == 0)
+            {
+                reason = "pasted-text-not-found-in-editable-candidates";
+                LogRebindFailure("initial_editor_search",
+                    $"reason={reason};focused={(focused is null ? "none" : "in-target-window")};examined={examined};unreadable={unreadable}");
+                return false;
+            }
+
+            var ordered = matches.OrderByDescending(match => match.Score).ToArray();
+            if (ordered.Length > 1 && ordered[0].Score - ordered[1].Score < 20)
+            {
+                reason = "pasted-text-match-ambiguous";
+                LogRebindFailure("initial_editor_search",
+                    $"reason={reason};match-count={ordered.Length};score-gap={ordered[0].Score - ordered[1].Score};examined={examined}");
+                return false;
+            }
+
+            var selected = ordered[0];
+            var binding = CreateEditorBinding(selected.Element, selected.TextPattern, selected.ValuePattern,
+                Interlocked.Increment(ref _nextEditorGeneration));
+            if (binding is null)
+            {
+                reason = "pasted-text-editor-fingerprint-unavailable";
+                LogRebindFailure("initial_editor_search", $"reason={reason};examined={examined}");
+                return false;
+            }
+
+            Volatile.Write(ref _editorBinding, binding);
+            _trackedEditorIdentity = binding.Fingerprint;
+            AttachEditorEvents(binding);
+            matchedText = selected.Text;
+            reason = "unique-pasted-text-editor-bound";
+            Log("initial_editor_bound",
+                $"source=target-window-search;match-count={ordered.Length};focused={(selected.Score >= 1_000 ? "yes" : "no")};control={selected.ControlType.ProgrammaticName};examined={examined}");
+            return true;
+        }
+
         bool TryReadCurrentEditor(out string text, out string readState)
         {
             text = string.Empty;
@@ -563,6 +675,8 @@ internal sealed class AutoDictionaryLearningMonitor : IDisposable
                         AttachEditorEvents(binding);
                     }
                 }
+                if (Volatile.Read(ref _editorBinding) is null && (attempt == 0 || attempt % 3 == 2))
+                    TryBindEditorContainingPastedText(out _, out _);
                 if (Volatile.Read(ref _editorBinding) is null)
                     await Task.Delay(TimeSpan.FromMilliseconds(100), monitorToken).ConfigureAwait(false);
             }
@@ -585,6 +699,20 @@ internal sealed class AutoDictionaryLearningMonitor : IDisposable
                 if (TryReadCurrentEditor(out var currentText, out _))
                 {
                     initialText = NormalizeLineEndings(currentText);
+                    if (initialText.Length > MaxDocumentLength)
+                    {
+                        ReportStatus("editor_text_too_long", "入力欄が長いため、自動登録の監視を開始できませんでした。");
+                        return;
+                    }
+
+                    insertedStart = initialText.IndexOf(_pastedText, StringComparison.Ordinal);
+                    if (insertedStart >= 0) break;
+                }
+
+                if (insertedStart < 0 && pasteReadAttempts % 5 == 1 &&
+                    TryBindEditorContainingPastedText(out var matchedText, out _))
+                {
+                    initialText = NormalizeLineEndings(matchedText);
                     if (initialText.Length > MaxDocumentLength)
                     {
                         ReportStatus("editor_text_too_long", "入力欄が長いため、自動登録の監視を開始できませんでした。");
@@ -2055,6 +2183,49 @@ internal sealed class AutoDictionaryLearningMonitor : IDisposable
             if (!hasText || (!hasEditableValue && current.ControlType != ControlType.Edit)) return false;
             textPattern = (TextPattern)textValue!;
             valuePattern = hasEditableValue ? (ValuePattern)value! : null;
+            return true;
+        }
+        catch (Exception ex) when (IsAutomationFailure(ex) || ex is ObjectDisposedException)
+        {
+            return false;
+        }
+    }
+
+    private static bool TryGetInitialEditorTextPatterns(
+        AutomationElement element,
+        bool onFocusedPath,
+        Rect targetBounds,
+        out TextPattern? textPattern,
+        out ValuePattern? valuePattern)
+    {
+        if (TryGetEditableTextPatterns(element, out textPattern, out valuePattern))
+            return true;
+
+        textPattern = null;
+        valuePattern = null;
+        if (!onFocusedPath) return false;
+
+        try
+        {
+            var current = element.Current;
+            if (current.IsPassword || !current.IsEnabled || current.IsOffscreen ||
+                (current.ControlType != ControlType.Document && current.ControlType != ControlType.Custom) ||
+                !element.TryGetCurrentPattern(TextPattern.Pattern, out var textValue) ||
+                textValue is not TextPattern readableText)
+                return false;
+
+            var candidateBounds = current.BoundingRectangle;
+            var targetArea = targetBounds.Width * targetBounds.Height;
+            var candidateArea = candidateBounds.Width * candidateBounds.Height;
+            if (!targetBounds.IsEmpty && !candidateBounds.IsEmpty && targetArea > 0 &&
+                candidateArea >= targetArea * 0.75)
+                return false;
+
+            // Some Chromium/Electron composers expose the focused editable region as a
+            // TextPattern-only Document/Custom element instead of an Edit/ValuePattern.
+            // Accept it only on the active focus chain; the pasted-text check below then
+            // proves that this exact region contains this operation's text.
+            textPattern = readableText;
             return true;
         }
         catch (Exception ex) when (IsAutomationFailure(ex) || ex is ObjectDisposedException)

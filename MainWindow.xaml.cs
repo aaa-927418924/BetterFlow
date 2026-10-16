@@ -2024,7 +2024,7 @@ public partial class MainWindow : System.Windows.Window
             _activationSoundPlayer.Play();
             _answerWindow.ResetAnswer();
             RuntimeStatus.Text = "GPT Liveの音声会話を準備しています…";
-            _indicator.ShowStatus("GPT Live接続中");
+            _indicator.ShowProcessingStatus("GPT Live接続中", ProcessingProgressStage.Preparing);
             UpdateAiModeDisplay();
             _ = RunGptLiveSelectedTextQuestionAsync(context, microphoneLabel, session, cancellation);
         }
@@ -2053,17 +2053,41 @@ public partial class MainWindow : System.Windows.Window
                 message => DispatchQuestionUi(() =>
                 {
                     if (_closing) return;
-                    _indicator.ShowStatus(GetGptLiveIndicatorText(message));
+                    var indicatorText = GetGptLiveIndicatorText(message);
+                    if (message.Contains("質問を認識", StringComparison.Ordinal))
+                        _indicator.ShowProcessingStatus(indicatorText, ProcessingProgressStage.Recognition);
+                    else if (message.Contains("回答しています", StringComparison.Ordinal))
+                        _indicator.ShowProcessingStatus(indicatorText, ProcessingProgressStage.GeneratingOrApplying);
+                    else if (indicatorText == "質問できます")
+                        _indicator.ShowStatus(indicatorText);
+                    else
+                        _indicator.ShowProcessingStatus(indicatorText, ProcessingProgressStage.Preparing);
                     RuntimeStatus.Text = message;
                 }),
                 _ => { },
                 answer =>
                 {
-                    if (!_closing) _answerWindow.SetCurrentAssistantText(answer);
+                    if (!_closing)
+                    {
+                        DispatchQuestionUi(() =>
+                        {
+                            if (!_closing)
+                                _indicator.ShowProcessingStatus("回答中", ProcessingProgressStage.GeneratingOrApplying);
+                        });
+                        _answerWindow.SetCurrentAssistantText(answer);
+                    }
                 },
                 finalAnswer =>
                 {
-                    if (!_closing) _answerWindow.SetFinalAssistantText(finalAnswer);
+                    if (!_closing)
+                    {
+                        _answerWindow.SetFinalAssistantText(finalAnswer);
+                        DispatchQuestionUi(() =>
+                        {
+                            if (!_closing)
+                                _indicator.ShowProcessingStatus("質問できます", ProcessingProgressStage.Complete);
+                        });
+                    }
                 },
                 cancellation.Token);
         }
@@ -2580,7 +2604,7 @@ public partial class MainWindow : System.Windows.Window
                 _isBusy = true;
                 ActionButton.Content = "選択文を編集しています…";
                 RuntimeStatus.Text = "発話を文字起こししています…";
-                _indicator.ShowStatus("音声認識中");
+                _indicator.ShowProcessingStatus("音声認識中", ProcessingProgressStage.Recognition);
                 try
                 {
                     var transcript = await Task.Run(() => _asr!.Transcribe(samples), cancellationToken);
@@ -2604,7 +2628,7 @@ public partial class MainWindow : System.Windows.Window
                         continue;
                     }
 
-                    _indicator.ShowStatus("AI編集中");
+                    _indicator.ShowProcessingStatus("AI編集中", ProcessingProgressStage.Preparing);
                     RuntimeStatus.Text = "選択文へ音声指示を適用しています…";
                     if (!_openCode.IsRunning) await EnsureOpenCodeReadyAsync(cancellationToken);
                     cancellationToken.ThrowIfCancellationRequested();
@@ -2615,6 +2639,7 @@ public partial class MainWindow : System.Windows.Window
                         _settings.OpenCodeModelId,
                         cancellationToken);
 
+                    _indicator.ShowProcessingStatus("選択文を反映中", ProcessingProgressStage.GeneratingOrApplying);
                     var previousText = context.CurrentText;
                     cancellationToken.ThrowIfCancellationRequested();
                     var result = await SelectionEditService.ReplaceCurrentSelectionAsync(
@@ -2626,10 +2651,19 @@ public partial class MainWindow : System.Windows.Window
                         _undoWindow.ShowUndo();
                     }
                     RuntimeStatus.Text = result.Message;
-                    _indicator.ShowStatus(result.Applied
-                            ? result.CanContinue ? "選択文編集中" : "選択維持失敗"
-                            : "置換失敗",
-                        result.CanContinue ? null : TimeSpan.FromSeconds(1));
+                    if (result.Applied)
+                    {
+                        _indicator.ShowProcessingStatus(
+                            result.CanContinue ? "選択文編集中" : "選択維持失敗",
+                            result.CanContinue
+                                ? ProcessingProgressStage.Complete
+                                : ProcessingProgressStage.GeneratingOrApplying,
+                            result.CanContinue ? null : TimeSpan.FromSeconds(1));
+                    }
+                    else
+                    {
+                        _indicator.ShowStatus("置換失敗", TimeSpan.FromSeconds(1));
+                    }
 
                     if (!result.CanContinue)
                     {
@@ -2830,7 +2864,7 @@ public partial class MainWindow : System.Windows.Window
                 UpdateAiModeDisplay();
                 ActionButton.Content = "質問に回答しています…";
                 RuntimeStatus.Text = "発話を文字起こししています…";
-                _indicator.ShowStatus("質問認識中");
+                _indicator.ShowProcessingStatus("質問認識中", ProcessingProgressStage.Recognition);
                 try
                 {
                     var question = await Task.Run(() => _asr!.Transcribe(samples), cancellationToken);
@@ -2844,7 +2878,7 @@ public partial class MainWindow : System.Windows.Window
                     }
 
                     RuntimeStatus.Text = "OpenCodeを準備しています…";
-                    _indicator.ShowStatus("OpenCode接続中");
+                    _indicator.ShowProcessingStatus("OpenCode接続中", ProcessingProgressStage.Preparing);
                     if (!_openCode.IsRunning) await EnsureOpenCodeReadyAsync(cancellationToken);
                     cancellationToken.ThrowIfCancellationRequested();
                     var model = GetSelectedOpenCodeModel();
@@ -2854,13 +2888,25 @@ public partial class MainWindow : System.Windows.Window
                         throw new InvalidOperationException("設定からOpenCodeモデルを選択してください。");
 
                     RuntimeStatus.Text = "選択した文章とこれまでの会話を参考に回答しています…";
-                    _indicator.ShowStatus("回答中");
+                    _indicator.ShowProcessingStatus("回答準備中", ProcessingProgressStage.Preparing);
+                    var responseStarted = 0;
                     var answer = await _openCode.AnswerSelectedTextAsync(
                         selectedText.CurrentText,
                         question,
                         providerId,
                         modelId,
-                        onTextUpdate: _answerWindow.SetCurrentAssistantText,
+                        onTextUpdate: text =>
+                        {
+                            if (Interlocked.Exchange(ref responseStarted, 1) == 0)
+                            {
+                                Dispatcher.BeginInvoke(new Action(() =>
+                                {
+                                    if (!_closing)
+                                        _indicator.ShowProcessingStatus("回答中", ProcessingProgressStage.GeneratingOrApplying);
+                                }));
+                            }
+                            _answerWindow.SetCurrentAssistantText(text);
+                        },
                         cancellationToken: cancellationToken,
                         conversationHistory: _selectedTextQuestionHistory.ToArray());
                     cancellationToken.ThrowIfCancellationRequested();
@@ -2871,7 +2917,7 @@ public partial class MainWindow : System.Windows.Window
                     _answerWindow.SetFinalAssistantText(answer);
                     _selectedTextQuestionHistory.Add((question, answer));
                     RuntimeStatus.Text = "回答しました。続けて質問できます。";
-                    _indicator.ShowStatus("質問できます");
+                    _indicator.ShowProcessingStatus("質問できます", ProcessingProgressStage.Complete);
                 }
                 catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
                 {
@@ -3229,7 +3275,7 @@ public partial class MainWindow : System.Windows.Window
         ActionButton.IsEnabled = false;
         ActionButton.Content = "音声を文字起こししています…";
         RuntimeStatus.Text = "音声をPC内で文字起こししています…";
-        _indicator.ShowStatus("認識中");
+        _indicator.ShowProcessingStatus("認識中", ProcessingProgressStage.Recognition);
         IReadOnlyList<AudioRecordingSegment>? recordingSegments = null;
         Task? sendCommandListenerTask = null;
         var sendCommandDetected = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -3281,7 +3327,6 @@ public partial class MainWindow : System.Windows.Window
 
             string text;
             string resultStatus;
-            _indicator.HideStatus();
             if (sendAsIs)
             {
                 text = transcriptForPaste;
@@ -3290,7 +3335,7 @@ public partial class MainWindow : System.Windows.Window
             else
             {
                 pipelineStage = "ai-processing";
-                _indicator.ShowStatus("整形中");
+                _indicator.ShowProcessingStatus("整形中", ProcessingProgressStage.Preparing);
                 RuntimeStatus.Text = isPromptFormattingRequest
                     ? "音声コマンドに従ってプロンプト風に整えています…"
                     : hasVoiceEditInstructions
@@ -3539,6 +3584,7 @@ public partial class MainWindow : System.Windows.Window
 
             cancellationToken.ThrowIfCancellationRequested();
             pipelineStage = "output";
+            _indicator.ShowProcessingStatus("入力欄へ反映中", ProcessingProgressStage.GeneratingOrApplying);
             outputAttempted = true;
             var outputResult = PasteAndShow(text, resultStatus);
             if (outputResult is null && TranscriptFormatter.HasMeaningfulText(_pendingRawTranscriptFallback))
@@ -3594,6 +3640,7 @@ public partial class MainWindow : System.Windows.Window
                     _indicator.ShowStatus("送信できません", TimeSpan.FromSeconds(1));
                     return;
                 }
+                _indicator.ShowProcessingStatus(completionIndicator, ProcessingProgressStage.Complete);
                 await SendPastedTextAsync(cancellationToken);
                 if (decoded.HadUnrecognizedVoiceCommand)
                     RuntimeStatus.Text += " 一部のSpace音声コマンドを認識できず、文字起こしには含めていません。";
@@ -3602,7 +3649,8 @@ public partial class MainWindow : System.Windows.Window
 
             if (decoded.HadUnrecognizedVoiceCommand)
                 RuntimeStatus.Text += " 一部のSpace音声コマンドを認識できず、文字起こしには含めていません。";
-            _indicator.ShowStatus(completionIndicator, TimeSpan.FromSeconds(1));
+            _indicator.ShowProcessingStatus(
+                completionIndicator, ProcessingProgressStage.Complete, TimeSpan.FromSeconds(1));
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {

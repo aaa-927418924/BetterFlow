@@ -7,27 +7,31 @@
         Focusable="False" UseLayoutRounding="True" SnapsToDevicePixels="True">
     <Border Background="#BF303030" BorderBrush="#BF2B2B2B" BorderThickness="2.5"
             CornerRadius="19" Padding="2.5" IsHitTestVisible="False">
-        <Grid>
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="34" />
-                <ColumnDefinition Width="*" />
-            </Grid.ColumnDefinitions>
-            <Border Grid.Column="0" Width="26" Height="24.4" Background="White" CornerRadius="8.88"
-                    HorizontalAlignment="Center" VerticalAlignment="Center"
-                    AutomationProperties.Name="Better Flow">
-                <Canvas Width="26" Height="24.4">
-                    <Rectangle x:Name="LeftWaveBar" Canvas.Left="5.39" Canvas.Top="5.70"
-                               Width="3.49" Height="13.0" RadiusX="1.75" RadiusY="1.75" Fill="#2B2B2B" />
-                    <Rectangle x:Name="CenterWaveBar" Canvas.Left="11.10" Canvas.Top="4.75"
-                               Width="3.49" Height="14.6" RadiusX="1.75" RadiusY="1.75" Fill="#2B2B2B" />
-                    <Rectangle x:Name="RightWaveBar" Canvas.Left="16.80" Canvas.Top="7.60"
-                               Width="3.49" Height="9.2" RadiusX="1.75" RadiusY="1.75" Fill="#2B2B2B" />
-                </Canvas>
-            </Border>
-            <TextBlock x:Name="StatusText" Grid.Column="1" Text="録音中"
-                       FontFamily="Yu Gothic UI" FontSize="9.5" FontWeight="Medium"
-                       Foreground="#F4F4F4" HorizontalAlignment="Center" VerticalAlignment="Center"
-                       TextAlignment="Center" TextWrapping="NoWrap" />
+        <Grid x:Name="IndicatorContent" SizeChanged="IndicatorContent_SizeChanged">
+            <Border x:Name="ProgressFill" Width="0" HorizontalAlignment="Left"
+                    Background="#4DFFFFFF" CornerRadius="16.5" Visibility="Collapsed" />
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="34" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+                <Border Grid.Column="0" Width="26" Height="24.4" Background="White" CornerRadius="8.88"
+                        HorizontalAlignment="Center" VerticalAlignment="Center"
+                        AutomationProperties.Name="Better Flow">
+                    <Canvas Width="26" Height="24.4">
+                        <Rectangle x:Name="LeftWaveBar" Canvas.Left="5.39" Canvas.Top="5.70"
+                                   Width="3.49" Height="13.0" RadiusX="1.75" RadiusY="1.75" Fill="#2B2B2B" />
+                        <Rectangle x:Name="CenterWaveBar" Canvas.Left="11.10" Canvas.Top="4.75"
+                                   Width="3.49" Height="14.6" RadiusX="1.75" RadiusY="1.75" Fill="#2B2B2B" />
+                        <Rectangle x:Name="RightWaveBar" Canvas.Left="16.80" Canvas.Top="7.60"
+                                   Width="3.49" Height="9.2" RadiusX="1.75" RadiusY="1.75" Fill="#2B2B2B" />
+                    </Canvas>
+                </Border>
+                <TextBlock x:Name="StatusText" Grid.Column="1" Text="録音中"
+                           FontFamily="Yu Gothic UI" FontSize="9.5" FontWeight="Medium"
+                           Foreground="#F4F4F4" HorizontalAlignment="Center" VerticalAlignment="Center"
+                           TextAlignment="Center" TextWrapping="NoWrap" />
+            </Grid>
         </Grid>
     </Border>
 </Window>
