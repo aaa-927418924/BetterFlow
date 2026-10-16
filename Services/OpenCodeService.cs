@@ -1075,6 +1075,17 @@ internal sealed class OpenCodeService : IDisposable
             ["permission"] = new Dictionary<string, object>
             {
                 ["*"] = "deny",
+                ["read"] = new Dictionary<string, string>
+                {
+                    ["*"] = "deny",
+                    [safeContextFile] = "allow",
+                    [safeContextAbsolutePath] = "allow"
+                },
+                ["bash"] = new Dictionary<string, string>
+                {
+                    ["*"] = "deny",
+                    ["echo *"] = "allow"
+                },
                 ["websearch"] = "allow",
                 ["webfetch"] = "allow"
             }
