@@ -1113,3 +1113,13 @@
 - 実装コミットは`6295e27`、実装前チェックポイントは`11ee497`。`git diff --check`成功。テストスイートは実行していない。実画面での見た目、各モードを操作した実機確認は未実施。
 
 分類: モード別インジケーター操作ヒントの実装・配布。出典: `IndicatorWindow.xaml.cs`、`MainWindow.xaml.cs`、Release publish、バックアップ/配布EXEのSHA-256照合。確認日: 2026-10-16 Asia/Tokyo。信頼度: ソース・コンパイル・発行物と配布EXEの一致・置換は高、実画面と音声操作は未確認。
+
+## 2026-10-16: 設定ボタンの文字色とチェックボックスのクリック後フォーカス枠（実装結果）
+
+- `MainWindow.xaml`の設定専用スタイルだけを変更。無効時の「変更」「更新」など薄いボタンでは文字色を`#101010`に固定し、サイドバーの選択中項目にもテンプレート内の文字要素へ同じ色を明示する。Setup用スタイルや640×640のSetup画面は変更していない。
+- チェックボックスの`IsKeyboardFocused`トリガーがマウスクリック後も枠を残すため、常時フォーカス状態に反応する枠を削除し、WPFの`FocusVisualStyle`へ置き換えた。マウスでクリックした後は枠を表示せず、キーボード操作でフォーカスした時の視認できる枠は保つ設計。WPF公式資料ではFocusVisualStyleはキーボード起点のフォーカス時だけ有効とされる。
+- 実装前チェックポイントは`6d5627c`。`git diff --check`成功、Release self-contained win-x64 publish成功。NU1900はNuGet脆弱性情報取得先へ接続できない警告。発行物は82,539,982 bytes、SHA-256 `0A8B402FDE4C70D9B6F955CC9D54DB81815DACB56BB1F018FFF73DBA0692E513`。
+- 置換前EXEは`artifacts/BetterFlow-before-settings-color-focus-20261016.exe`へ退避（82,539,870 bytes、SHA-256 `B72B27D4A12E4FA757EB3ECAA0ED8FA9EB1EF190AFA1A197F544C663965AFDDB`）。フルパスが一致するPID 44260だけを停止して`dist/Better Flow.exe`を置換。発行物と配布先は同じサイズ・SHA-256。
+- 実画面のクリック後表示、Tabキーでのフォーカス表示、Setup画面は未確認。テストスイートは実行していない。
+
+分類: Better Flow設定UIのスタイル修正・配布。出典: ユーザー添付画像と依頼、`MainWindow.xaml`、[WPF FocusVisualStyle公式資料](https://learn.microsoft.com/en-us/dotnet/desktop/wpf/advanced/styling-for-focus-in-controls-and-focusvisualstyle)、Git、Release publish、バックアップと配布EXEのハッシュ照合。確認日: 2026-10-16 Asia/Tokyo。信頼度: XAML差分・ビルド・配布ハッシュは高、実画面上の色とフォーカス挙動は未確認。情報区分: 明示依頼・ローカル確認・未確認事項。
