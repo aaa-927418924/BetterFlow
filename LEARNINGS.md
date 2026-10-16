@@ -162,3 +162,14 @@
 - 確認日: 2026-10-17 Asia/Tokyo。
 - 信頼度: ソース、Release build/publish、配置EXEの一致は高。画面操作、実際の往復エクスポート/インポートは未確認。
 - 情報区分: ユーザー要望・ローカル実装確認・実UI未確認。
+
+## Better Flowの初期セットアップ用データ範囲（2026-10-17）
+
+- 内容: `AppPaths.Root`は通常`%LOCALAPPDATA%\Better Flow`。旧版の`%LOCALAPPDATA%\AutoPrompt`が残る場合は、設定ファイルの有無に基づいてどちらかを選ぶか、旧フォルダーを移行する。実機パスを確認できない場合は両方を一括削除せず、`settings.json`の所在とコードの選択規則で現行rootを特定する。
+- Better Flow管理のOpenCode実行ファイルは`opencode\opencode.exe`、ローカルASRは`models\parakeet-ja-int8\`、展開済みSilero VADは`models\silero-vad\`。OpenCodeモデルはダウンロードして保存せず、選択IDは`settings.json`に入り、OpenCode設定`opencode.json`は一時workspaceを作る`staging\workspace-*`内に置く。通常の停止処理でworkspaceは削除される。
+- OpenCodeコマンドはPATH上の既存コマンドをBetter Flow同梱runtimeより先に探す。またプロバイダー認証/接続はOpenCode Desktopのプロファイルを参照するため、Better Flow専用runtimeや設定の削除ではDesktopの認証・モデル接続は初期化されない。WebView2プロファイル、GPT Live認証、ログ、WebView2インストーラー用downloadsはOpenCode再セットアップには不要なので保持を推奨する。
+- 分類: Windowsアプリデータ配置・OpenCode runtime選択・セットアップ復旧。
+- 出典: `Services/AppPaths.cs`、`Services/OpenCodeService.cs`、`Services/OpenCodeInstaller.cs`、`Services/Bootstrapper.cs`、`Services/SileroVoiceActivityDetector.cs`。
+- 確認日: 2026-10-17 Asia/Tokyo。
+- 信頼度: ソースから確認した配置と選択順は高。実PCのAppData内のファイル存在・使用中rootはサンドボックス制約で未確認。
+- 情報区分: ローカルソース確認・実PCの状態未確認。
