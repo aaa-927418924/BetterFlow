@@ -16,6 +16,7 @@ public partial class MainWindow : System.Windows.Window
 {
     private const double SettingsDesignWidth = 945;
     private const double SettingsDesignHeight = 747;
+    private const double SettingsPreferredScale = 0.75;
     private const int RequiredIndependentDictionaryCorrections = 3;
     private static readonly TimeSpan PendingDictionaryEvidenceLifetime = TimeSpan.FromDays(90);
     private readonly SettingsStore _settingsStore = new();
@@ -1936,7 +1937,7 @@ public partial class MainWindow : System.Windows.Window
         var workArea = System.Windows.SystemParameters.WorkArea;
         var availableWidth = Math.Max(1, workArea.Width - 32);
         var availableHeight = Math.Max(1, workArea.Height - 32);
-        var scale = Math.Min(1, Math.Min(availableWidth / SettingsDesignWidth,
+        var scale = Math.Min(SettingsPreferredScale, Math.Min(availableWidth / SettingsDesignWidth,
             availableHeight / SettingsDesignHeight));
         var windowWidth = SettingsDesignWidth * scale;
         var windowHeight = SettingsDesignHeight * scale;

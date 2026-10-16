@@ -103,3 +103,12 @@
 - 通常音声入力ではAI処理中の専用送信コマンド録音を停止。録音中に認識した送信指示は維持する。
 - ファイル置換で共有違反が起きた場合、プロセスの実行パスを照合できない状態で画像名だけを使って停止しない。バックアップと発行物を検証し、対象プロセスが閉じた後に置換する。
 - 分類: WPF音声進捗・VAD・Windows EXE置換。出典: `IndicatorWindow.xaml.cs`、`Services/ContinuousMicrophoneRecorder.cs`、`MainWindow.xaml.cs`、2026-10-16 Release publishとハッシュ照合。確認日: 2026-10-16 Asia/Tokyo。信頼度: コンパイルとハッシュは高、実マイク挙動は未確認。情報区分: 実装・実機未確認。
+
+## 設定ウィンドウの表示倍率（2026-10-16）
+
+- 内容: 設定画面は945×747のデザイン面を`Viewbox Stretch="Uniform"`で表示する。`ShowSettingsExperience()`でウィンドウ寸法を決める`SettingsPreferredScale`を0.75にすると、内容も縦横比を保って縮小される。作業領域が小さい場合は画面内に収まる倍率をさらに優先でき、設定画面だけに適用すればセットアップ画面には影響しない。
+- 分類: WPF設定画面レイアウト。
+- 出典: `MainWindow.xaml`、`MainWindow.xaml.cs`、2026-10-16 Release publishと`dist/Better Flow.exe`のSHA-256照合。
+- 確認日: 2026-10-16 Asia/Tokyo。
+- 信頼度: ソース、ビルド、配置EXEの一致は高。実画面の見た目は起動して確認していない。
+- 情報区分: ローカルソース確認・実画面未確認。
