@@ -22,7 +22,9 @@ internal static class TranscriptRewritePrompt
         string? precedingContext,
         bool hasVoiceEditInstructions = false,
         bool hasVoiceCommandSegments = false,
-        bool formatAsPrompt = false)
+        bool formatAsPrompt = false,
+        bool bulletListRequired = false,
+        bool strictFormattingRetry = false)
     {
         var message = Clean(precedingContext, MaximumPrecedingContextLength).Length > 0
             ? SystemMessage
@@ -33,7 +35,7 @@ internal static class TranscriptRewritePrompt
 
         message += AsrAccuracyInstruction;
 
-        if (hasVoiceEditInstructions || hasVoiceCommandSegments || formatAsPrompt)
+        if (hasVoiceEditInstructions || hasVoiceCommandSegments || formatAsPrompt || bulletListRequired)
         {
             message = message.Replace(
                 "箇条書きや見出しは使わず、話者が明確に列挙した複数項目を区別する必要がある場合だけ箇条書きを使ってください。",
@@ -46,7 +48,13 @@ internal static class TranscriptRewritePrompt
             message += " voice_edit_instructionsがある場合は、ユーザーが音声で指定した文章編集指示です。指示を記載順にtranscriptだけへ適用し、指示文自体は出力本文に含めないでください。翻訳・要約・箇条書き・文体変更など、明示された編集はその指定に限って実行し、その場合は一般的な文体維持や要約・箇条書き禁止の規則より明示指示を優先してください。指示されていない意味、条件、固有名詞、事実は保ってください。PC操作、アプリ操作、ツール実行や送信は行わず、編集後の本文だけを返してください.";
 
         if (formatAsPrompt)
-            message += "format_as_prompt=trueは、今回の文章をプロンプト向けに整える明示指示です。元の要望・条件を削らず、言い換えは明瞭化に限り、情報を追加しないでください。箇条書きは別途明示された場合だけ使ってください。";
+            message += "format_as_prompt=trueは今回の文章をプロンプト向けに整える明示指示です。元の要望・条件を削らず、別のAIへ渡せる明確な依頼文に実際に整えてください。内容が既に自然でも、同じ本文をそのまま返すのではなく、依頼と条件が明確に伝わるプロンプトとして表現してください。情報は追加せず、箇条書きは別途明示された場合だけ使ってください。";
+
+        if (bulletListRequired)
+            message += "bullet_list_required=trueは必須の出力形式です。内容を項目ごとに分け、各項目を独立した行にし、各行の先頭を必ず「- 」にしてください。箇条書きにできる複数要素がない場合も、本文全体を1項目の箇条書きにしてください。";
+
+        if (strictFormattingRetry)
+            message += "直前の生成結果は明示された書式条件を満たしていませんでした。今回はtranscriptと各指示を再確認し、要求された書式を必ず目で確認できる形で出力してください。";
 
         if (hasVoiceCommandSegments)
         {
@@ -67,7 +75,9 @@ internal static class TranscriptRewritePrompt
         string? precedingContext = null,
         IReadOnlyList<string>? voiceEditInstructions = null,
         IReadOnlyList<VoiceEditCommandInstruction>? voiceEditCommands = null,
-        bool formatAsPrompt = false)
+        bool formatAsPrompt = false,
+        bool bulletListRequired = false,
+        bool strictFormattingRetry = false)
     {
         var cleanedContext = Clean(precedingContext, MaximumPrecedingContextLength);
         var cleanedEditInstructions = voiceEditInstructions?
@@ -104,7 +114,7 @@ internal static class TranscriptRewritePrompt
             .ToArray();
 
         if (cleanedContext.Length == 0 && cleanedEditInstructions.Length == 0 &&
-            cleanedVoiceEditCommands.Length == 0 && !formatAsPrompt)
+            cleanedVoiceEditCommands.Length == 0 && !formatAsPrompt && !bulletListRequired)
         {
             if (registeredTerms.Length == 0)
                 return "次の音声文字起こしを、話者自身の言い方と文体を保って整えてください。\n\n--- 文字起こし ---\n" + transcript;
@@ -124,6 +134,10 @@ internal static class TranscriptRewritePrompt
         };
         if (formatAsPrompt)
             contextualRequest["format_as_prompt"] = true;
+        if (bulletListRequired)
+            contextualRequest["bullet_list_required"] = true;
+        if (strictFormattingRetry)
+            contextualRequest["strict_formatting_retry"] = true;
         if (registeredTerms.Length > 0)
             contextualRequest["registered_vocabulary"] = registeredTerms;
         if (cleanedContext.Length > 0)
@@ -142,6 +156,10 @@ internal static class TranscriptRewritePrompt
             instructions += "voice_edit_instructionsはユーザーが音声で指定した編集指示の配列です。指示の順番でtranscriptだけを編集し、指示文自体は出力に含めないでください。編集指示をPCやアプリの操作として実行しないでください。";
         if (formatAsPrompt)
             instructions += "format_as_prompt=trueの場合、transcriptの要望と条件を保ったままプロンプトとして読みやすく整えてください。依頼への回答や新しい内容を足してはいけません。";
+        if (bulletListRequired)
+            instructions += "bullet_list_required=trueは必須です。内容を箇条書きにし、各項目を独立した行にして、各行を「- 」で始めてください。";
+        if (strictFormattingRetry)
+            instructions += "strict_formatting_retry=trueの場合、直前の生成では指定書式が満たされなかったため、今回は書式条件を確実に満たした本文を返してください。";
         if (cleanedVoiceEditCommands.Length > 0)
         {
             instructions += "各voice_command_segments objectにはline_break_result_marker、applied_result_marker、unresolved_result_markerが含まれます。IDを推測したり再生成したりせず、判断に合うフィールドのmarker値をそのまま一度だけ出力してください。";

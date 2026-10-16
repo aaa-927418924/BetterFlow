@@ -2981,6 +2981,19 @@ public partial class MainWindow : System.Windows.Window
                 if (action.EditInstruction is { } editInstruction)
                 {
                     await FlushDictatedAudioAsync();
+                    var formattingIntent = VoiceCommandParser.AnalyzeFormattingIntent(editInstruction);
+                    if (formattingIntent.PromptFormatting)
+                    {
+                        formatAsPrompt = true;
+                        if (!editInstructions.Contains(VoiceCommandParser.PromptFormatInstruction,
+                                StringComparer.Ordinal))
+                            editInstructions.Add(VoiceCommandParser.PromptFormatInstruction);
+                    }
+                    if (formattingIntent.BulletList &&
+                        !editInstructions.Contains(VoiceCommandParser.BulletListInstruction,
+                            StringComparer.Ordinal))
+                        editInstructions.Add(VoiceCommandParser.BulletListInstruction);
+
                     var marker = VoiceCommandParser.CreateVoiceCommandMarker(
                         voiceCommandSessionId, voiceEditCommands.Count);
                     if (transcript.Length > 0 && !char.IsWhiteSpace(transcript[^1]))
@@ -3168,6 +3181,14 @@ public partial class MainWindow : System.Windows.Window
                     }
                 }
 
+                var bulletListRequired = VoiceCommandParser.RequiresBulletListOutput(
+                    voiceEditCommands, editInstructions);
+                var diagnosticInstructions = string.Join("\n", voiceEditCommands
+                    .Select(command => command.RecognizedText));
+                var rewriteRoute = isPromptFormattingRequest
+                    ? "ai-prompt-format"
+                    : bulletListRequired ? "ai-bullet-format" : "ai-edit";
+
                 try
                 {
                     if (sendCommandListenerTask is null && !sendAfterPaste && !hasVoiceEditInstructions)
@@ -3175,15 +3196,11 @@ public partial class MainWindow : System.Windows.Window
                     if (!_openCode.IsRunning) await EnsureOpenCodeReadyAsync(cancellationToken);
                     var relevantDictionary = DictionaryTermSelector.SelectRelevant(
                         transcriptForPaste, _settings.CorrectionDictionary);
-                    var bulletListRequired = VoiceCommandParser.RequiresBulletListOutput(
-                        voiceEditCommands, editInstructions);
-                    var diagnosticInstructions = string.Join("\n", voiceEditCommands
-                        .Select(command => command.RecognizedText));
                     VoiceCommandDiagnosticLog.Write(
                         operationId,
                         "rewrite-request",
                         "dispatch",
-                        route: isPromptFormattingRequest ? "ai-prompt-format" : "ai-edit",
+                        route: rewriteRoute,
                         recognizedInstruction: diagnosticInstructions,
                         editInstructions: editInstructions,
                         transcript: transcriptForPaste,
@@ -3195,8 +3212,35 @@ public partial class MainWindow : System.Windows.Window
                     var response = await _openCode.RewriteAsync(
                         transcriptForAi, _settings.OpenCodeModelProviderId, _settings.OpenCodeModelId,
                         relevantDictionary, cancellationToken, precedingTextContext, editInstructions,
-                        voiceEditCommands, formatAsPrompt);
+                        voiceEditCommands, formatAsPrompt, bulletListRequired);
                     cancellationToken.ThrowIfCancellationRequested();
+                    var candidateForFormattingCheck = VoiceCommandParser.RestoreExplicitLineBreaks(
+                        VoiceCommandParser.RestoreVoiceCommandOutcomes(response, voiceEditCommands));
+                    var missingBulletFormat = bulletListRequired &&
+                        !VoiceCommandParser.HasBulletListOutput(candidateForFormattingCheck);
+                    if (missingBulletFormat)
+                    {
+                        VoiceCommandDiagnosticLog.Write(
+                            operationId,
+                            "rewrite-retry",
+                            "bullet-format-missing",
+                        route: rewriteRoute,
+                            recognizedInstruction: diagnosticInstructions,
+                            editInstructions: editInstructions,
+                            transcript: transcriptForPaste,
+                            response: candidateForFormattingCheck,
+                            requestHasVoiceCommandSegments: voiceEditCommands.Count > 0,
+                            requestHasEditInstructions: editInstructions.Count > 0,
+                            formatAsPrompt: formatAsPrompt,
+                            bulletListRequired: bulletListRequired,
+                            responseHasBulletList: VoiceCommandParser.HasBulletListOutput(candidateForFormattingCheck),
+                            expectedCommandCount: voiceEditCommands.Count);
+                        response = await _openCode.RewriteAsync(
+                            transcriptForAi, _settings.OpenCodeModelProviderId, _settings.OpenCodeModelId,
+                            relevantDictionary, cancellationToken, precedingTextContext, editInstructions,
+                            voiceEditCommands, formatAsPrompt, bulletListRequired, strictFormattingRetry: true);
+                        cancellationToken.ThrowIfCancellationRequested();
+                    }
                     response = VoiceCommandParser.RemoveEchoedVoiceCommandText(
                         response, transcript, voiceEditCommands, out var removedCommandEcho);
                     if (removedCommandEcho)
@@ -3205,7 +3249,7 @@ public partial class MainWindow : System.Windows.Window
                             operationId,
                             "rewrite-result",
                             "command-echo-detected",
-                            route: isPromptFormattingRequest ? "ai-prompt-format" : "ai-edit",
+                            route: rewriteRoute,
                             recognizedInstruction: diagnosticInstructions,
                             editInstructions: editInstructions,
                             transcript: transcriptForPaste,
@@ -3239,7 +3283,7 @@ public partial class MainWindow : System.Windows.Window
                             operationId,
                             "rewrite-result",
                             "marker-validation-failed",
-                            route: isPromptFormattingRequest ? "ai-prompt-format" : "ai-edit",
+                            route: rewriteRoute,
                             recognizedInstruction: diagnosticInstructions,
                             editInstructions: editInstructions,
                             transcript: transcriptForPaste,
@@ -3264,8 +3308,9 @@ public partial class MainWindow : System.Windows.Window
                     VoiceCommandDiagnosticLog.Write(
                         operationId,
                         "rewrite-result",
-                        bulletListRequired && !responseHasBulletList ? "bullet-format-missing" : "validated",
-                        route: isPromptFormattingRequest ? "ai-prompt-format" : "ai-edit",
+                        bulletListRequired && !responseHasBulletList
+                            ? "bullet-format-missing" : "validated",
+                        route: rewriteRoute,
                         recognizedInstruction: diagnosticInstructions,
                         editInstructions: editInstructions,
                         transcript: transcriptForPaste,
@@ -3301,7 +3346,7 @@ public partial class MainWindow : System.Windows.Window
                         operationId,
                         "rewrite-result",
                         "exception",
-                        route: isPromptFormattingRequest ? "ai-prompt-format" : "ai-edit",
+                        route: rewriteRoute,
                         recognizedInstruction: string.Join("\n", voiceEditCommands
                             .Select(command => command.RecognizedText)),
                         editInstructions: editInstructions,
@@ -3309,8 +3354,7 @@ public partial class MainWindow : System.Windows.Window
                         requestHasVoiceCommandSegments: voiceEditCommands.Count > 0,
                         requestHasEditInstructions: editInstructions.Count > 0,
                         formatAsPrompt: formatAsPrompt,
-                        bulletListRequired: VoiceCommandParser.RequiresBulletListOutput(
-                            voiceEditCommands, editInstructions),
+                        bulletListRequired: bulletListRequired,
                         expectedCommandCount: voiceEditCommands.Count,
                         exception: ex);
                     _openCode.Stop();

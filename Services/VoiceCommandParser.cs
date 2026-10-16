@@ -10,7 +10,8 @@ internal static partial class VoiceCommandParser
     private const string VoiceCommandLineBreakMarkerPrefix = "__BETTERFLOW_VOICE_COMMAND_LINE_BREAK_";
     private const string VoiceCommandAppliedMarkerPrefix = "__BETTERFLOW_VOICE_COMMAND_APPLIED_";
     private const string VoiceCommandUnresolvedMarkerPrefix = "__BETTERFLOW_VOICE_COMMAND_UNRESOLVED_";
-    public const string PromptFormatInstruction = "発話した内容の意味と要望を保ったまま、プロンプトとして使いやすく整えてください。";
+    public const string PromptFormatInstruction = "文字起こし本文の意味・要望・条件を保ち、別のAIへ渡す明確なプロンプトに整えてください。新しい内容は加えず、プロンプトへの回答はしないでください。";
+    public const string BulletListInstruction = "文字起こし本文の意味・要望・条件を保ち、内容を箇条書きに整理してください。各項目を独立した行にし、各行の先頭を「- 」にしてください。";
 
     public static string CreateVoiceCommandMarker(string sessionId, int index) =>
         $"{VoiceCommandMarkerPrefix}{sessionId}_{index:D4}__";
@@ -123,7 +124,16 @@ internal static partial class VoiceCommandParser
     public static string GetVoiceCommandRoute(string recognizedText)
     {
         if (!TryParseVoiceTextCommand(recognizedText, out var command))
+        {
+            var formattingIntent = AnalyzeFormattingIntent(recognizedText);
+            if (formattingIntent.PromptFormatting)
+                return "ai-prompt-format";
+            if (formattingIntent.BulletList)
+                return "ai-bullet-format";
+            if (TranslationRequestRegex().IsMatch(recognizedText))
+                return "ai-translation";
             return "ai-edit";
+        }
 
         return command switch
         {
@@ -132,6 +142,17 @@ internal static partial class VoiceCommandParser
             VoiceTextCommand.SendAsIs => "local-send-as-is",
             _ => "ai-edit"
         };
+    }
+
+    public static (bool PromptFormatting, bool BulletList) AnalyzeFormattingIntent(string recognizedText)
+    {
+        var normalized = NormalizeVoiceCommand(recognizedText).ToLowerInvariant();
+        var hasFormattingAction = FormattingActionRegex().IsMatch(normalized);
+        var promptFormatting = hasFormattingAction &&
+            (normalized.Contains("プロンプト", StringComparison.Ordinal) ||
+             normalized.Contains("prompt", StringComparison.Ordinal));
+        var bulletList = BulletListRequestRegex().IsMatch(recognizedText);
+        return (promptFormatting, bulletList);
     }
 
     public static bool RequiresBulletListOutput(
@@ -244,9 +265,17 @@ internal static partial class VoiceCommandParser
     [GeneratedRegex("__BETTERFLOW_VOICE_COMMAND_(?:LINE_BREAK|APPLIED)_[a-f0-9]{32}_\\d{4,}__", RegexOptions.CultureInvariant)]
     private static partial Regex VoiceCommandOutcomeMarkerRegex();
 
-    [GeneratedRegex("(?:箇条書(?:き|で)?|リスト\\s*(?:形式|で)|bullet(?:ed)?\\s+list)",
+    [GeneratedRegex("(?:箇条書(?:き|で)?|リスト\\s*(?:形式|で|に|として)|bullet(?:ed)?\\s*list)",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
     private static partial Regex BulletListRequestRegex();
+
+    [GeneratedRegex("(?:整形|書き|書いて|書き直|作成|作って|変換|編集|まとめ|して|してください|にして|として|format|rewrite|convert|make)",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    private static partial Regex FormattingActionRegex();
+
+    [GeneratedRegex("(?:翻訳|英訳|英語に|translate|translation)",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    private static partial Regex TranslationRequestRegex();
 
     [GeneratedRegex("^[ \\t]*(?:[-*•・][ \\t]*|[0-9０-９]+[.)．、][ \\t]*)\\S",
         RegexOptions.Multiline | RegexOptions.CultureInvariant)]

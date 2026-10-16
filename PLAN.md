@@ -920,4 +920,13 @@
 - ユーザー報告: 英訳は動作するが、「箇条書きにして」「プロンプトとして整形して」では文章がほぼ変わらない。前の診断では認識本文やモデル返答を保存していなかったため、ASR経路・要求構築・モデル出力・機械検証のどこで失敗しているか確定できない。
 - Services/VoiceCommandDiagnosticLog.csを追加し、%LOCALAPPDATA%\Better Flow\voice-command-diagnostics.jsonlへ処理IDで関連付けた診断メタデータを保存する。PTTプレビュー/最終認識の結果と経路、認識指示の分類・文字数、OpenCode要求に渡す指示数/各フラグ、返答と元文の一致・文字n-gram類似度、箇条書き判定、marker結果数、例外型を記録する。音声、文字起こし本文、指示文、モデル返答、例外メッセージは保存しない。ログは128 KiBで循環する。
 - Releaseビルドは成功（0エラー、NU1900警告1件）。診断版EXEをartifacts/publish-ptt-diagnostics-20261016/BetterFlow.exeへ発行し、dist/Better Flow.exeへ置換した。配布版は82,520,690 bytes、SHA-256 81E749E65D6CFFF33D1792598E191AE2CEEFE0A3E1C0A6793821A2FB7E6A6263。旧EXEはartifacts/BetterFlow-before-ptt-diagnostics-20261016.exeへバックアップ済み。置換前にRestart Managerでロック元が配布先と同一パスのPID 38820と確認し、そのPIDのみ停止した。実マイク/モデルでの再現確認はまだ。
-- 次の段階: 診断版EXEで「箇条書きにして」「プロンプトとして整形して」を各1回再現し、voice-command-diagnostics.jsonlを確認する。その証拠で原因を絞ってから処理を修正する。現時点で根本原因は確定していない。
+- 診断版をユーザーが再テストした後、ローカルの`%LOCALAPPDATA%\Better Flow\voice-command-diagnostics.jsonl`を処理IDで確認した。音声本文・指示文・生成文はログに保存されていない。
+
+### ログで確定した原因と修正
+
+- 11:25 JSTの箇条書き処理（operation ID `aae4b297…`）は、PTT区間が`recognized-generic`になり、指示分類と要求時の`BulletListRequired=true`までは通っていた。モデル応答に箇条書きがなく、結果は`bullet-format-missing`、続いて`InvalidDataException`となり、認識本文へフォールバックしていた。実装では診断側で計算した箇条書き要件をOpenCodeのSystem/User requestへ渡していなかった。
+- 11:26 JSTのプロンプト整形（operation ID `0c206df…`）も`recognized-generic`で、診断上は`PromptFormattingIntent=true`だったが、要求の`FormatAsPrompt=false`、経路`ai-edit`のままモデルへ送られた。出力は元文との類似度0.949で「validated」扱いになっていた。診断用の意図分類と処理用の分類が別々だったため、実際の経路へ反映されていなかった。
+- 英訳処理は要求・結果検証を通過しており、今回の症状はASR本文の取りこぼしやOpenCode接続失敗ではなく、箇条書き/プロンプトの書式意図を生成要求へ渡す経路と検証結果の扱いにあった。
+- 修正では、PTT指示を語句の完全一致だけでなく書式意図として分類する。プロンプト整形は`format_as_prompt=true`と本文保全の明示指示を、箇条書きは`bullet_list_required=true`と各行を`- `で始める明示指示をOpenCode要求へ加える。箇条書きが最初の応答で確認できない場合に限り、強い書式指示で1回だけ再試行し、二度目も失敗したら従来どおり認識本文を保全して自動送信しない。文字列類似度だけでプロンプト整形失敗と判定しない。
+- 実装版をRelease build/publishし、`dist/Better Flow.exe`へ配置した。最終Release buildは0エラー、NU1900警告1件（NuGet脆弱性情報取得先へ接続できない）。最終発行物と配布EXEは82,522,710 bytes、SHA-256 `E9FE8555A5BE640A76CE527846026F465A6736B650ACBF200DDC9CB0399BC5F5`で一致。置換前の診断版EXEは`artifacts/BetterFlow-before-ptt-format-enforcement-20261016.exe`へ同一ハッシュ`81E749E65D6CFFF33D1792598E191AE2CEEFE0A3E1C0A6793821A2FB7E6A6263`でバックアップし、中間版は`artifacts/BetterFlow-before-ptt-format-enforcement-final-20261016.exe`へハッシュ`F60CC45C11480F3A71855F75CB19350E0B4A03DA1487189F806B64AA2F097181`で保存した。
+- 実マイクとOpenCodeモデルでの修正後の確認は未実施。今回確認したのはユーザーが再現した診断版ログ、ソース、Release build/publish、および配置EXEの一致。テストスイートは実行していない。

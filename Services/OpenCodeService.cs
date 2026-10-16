@@ -121,14 +121,19 @@ internal sealed class OpenCodeService : IDisposable
         string? precedingContext = null,
         IReadOnlyList<string>? voiceEditInstructions = null,
         IReadOnlyList<VoiceEditCommandInstruction>? voiceEditCommands = null,
-        bool formatAsPrompt = false) =>
+        bool formatAsPrompt = false,
+        bool bulletListRequired = false,
+        bool strictFormattingRetry = false) =>
         GenerateTextAsync(providerId, modelId,
             TranscriptRewritePrompt.CreateSystemMessage(precedingContext,
                 voiceEditInstructions?.Count > 0,
                 voiceEditCommands?.Count > 0,
-                formatAsPrompt),
+                formatAsPrompt,
+                bulletListRequired,
+                strictFormattingRetry),
             TranscriptRewritePrompt.CreateUserMessage(
-                transcript, dictionary, precedingContext, voiceEditInstructions, voiceEditCommands, formatAsPrompt),
+                transcript, dictionary, precedingContext, voiceEditInstructions, voiceEditCommands, formatAsPrompt,
+                bulletListRequired, strictFormattingRetry),
             cancellationToken);
 
     public async Task<DictionaryCorrectionReviewResult> ReviewDictionaryCorrectionsAsync(
