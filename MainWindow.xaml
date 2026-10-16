@@ -396,10 +396,10 @@
                         <ToggleButton x:Name="SettingsGeneralTab" Canvas.Left="51" Canvas.Top="211"
                                       Content="一般" Style="{StaticResource SettingsNavigationButtonStyle}"
                                       Click="SettingsGeneralTab_Click" AutomationProperties.Name="一般設定" />
-                        <ToggleButton x:Name="SettingsDictionaryTab" Canvas.Left="51" Canvas.Top="260"
+                        <ToggleButton x:Name="SettingsDictionaryTab" Canvas.Left="51" Canvas.Top="257"
                                       Content="辞書" Style="{StaticResource SettingsNavigationButtonStyle}"
                                       Click="SettingsDictionaryTab_Click" AutomationProperties.Name="用語辞書" />
-                        <ToggleButton x:Name="SettingsDetailsTab" Canvas.Left="51" Canvas.Top="302"
+                        <ToggleButton x:Name="SettingsDetailsTab" Canvas.Left="51" Canvas.Top="303"
                                       Content="詳細" Style="{StaticResource SettingsNavigationButtonStyle}"
                                       Click="SettingsDetailsTab_Click" AutomationProperties.Name="詳細設定" />
 
