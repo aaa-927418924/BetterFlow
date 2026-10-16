@@ -99,7 +99,8 @@
                 <Setter.Value>
                     <ControlTemplate TargetType="ToggleButton">
                         <Border Background="Transparent">
-                            <Border x:Name="TabSurface" Width="104" Background="{TemplateBinding Background}"
+                            <Border x:Name="TabSurface" Width="104" Height="38"
+                                    Background="{TemplateBinding Background}"
                                     BorderBrush="Transparent" BorderThickness="0" CornerRadius="19"
                                     HorizontalAlignment="Center" VerticalAlignment="Center">
                                 <TextBlock x:Name="TabLabel" Text="{TemplateBinding Content}"
