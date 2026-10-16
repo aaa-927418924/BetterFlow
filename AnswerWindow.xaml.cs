@@ -10,7 +10,6 @@ public partial class AnswerWindow : System.Windows.Window
 {
     private const int GwlExStyle = -20;
     private const long WsExToolWindow = 0x00000080L;
-    private bool _followOutput = true;
     private string _currentAssistantText = string.Empty;
 
     public AnswerWindow()
@@ -23,7 +22,6 @@ public partial class AnswerWindow : System.Windows.Window
     {
         RunOnUi(() =>
         {
-            _followOutput = true;
             _currentAssistantText = string.Empty;
             AnswerContent.Text = string.Empty;
             Hide();
@@ -73,12 +71,14 @@ public partial class AnswerWindow : System.Windows.Window
                     AnswerContent.CaretIndex = nextText.Length;
             }
 
-            if (_followOutput) AnswerScrollViewer.ScrollToEnd();
-
             if (string.IsNullOrWhiteSpace(_currentAssistantText))
                 Hide();
             else
+            {
                 ShowAboveIndicator();
+                AnswerScrollViewer.UpdateLayout();
+                AnswerScrollViewer.ScrollToEnd();
+            }
         });
     }
 
@@ -93,12 +93,6 @@ public partial class AnswerWindow : System.Windows.Window
         Left = Math.Max(0, (screenWidth - Width) / 2);
         Top = Math.Max(8, screenHeight - indicatorHeight - bottomGap - Height - 12);
         if (!IsVisible) Show();
-    }
-
-    private void AnswerScrollViewer_ScrollChanged(object sender, ScrollChangedEventArgs e)
-    {
-        _followOutput = AnswerScrollViewer.VerticalOffset + AnswerScrollViewer.ViewportHeight >=
-                        AnswerScrollViewer.ExtentHeight - 24;
     }
 
     private void RunOnUi(Action action)

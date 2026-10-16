@@ -948,3 +948,12 @@
 - テストスイートは実行していない。修正版EXEを使った実マイクとOpenCodeモデルの再テストもまだのため、確認できた範囲はコード、ビルド、配置一致まで。
 
 分類: 複合PTT音声コマンドの要求・再試行修正。出典: voice-command-diagnostics.jsonl（本文非保存の分類・marker・類似度メタデータ）、MainWindow.xaml.cs、Services/VoiceCommandParser.cs、Services/TranscriptRewritePrompt.cs、Services/OpenCodeService.cs、Release build/publish、配布EXE照合。確認日: 2026-10-16 Asia/Tokyo。信頼度: ログの分岐・ソース・コンパイル・ハッシュ一致は高、実モデルが両操作を正しく反映するかは未確認。情報区分: ユーザー報告・ローカル確認・未確認事項。
+## 2026-10-16: 長文ストリーミング表示の末尾追従
+
+- 原因: TranscriptPreviewWindowのScrollViewerは更新時に末尾へ移動していなかった。AnswerWindowはScrollChangedで追従状態を推定していたが、文章がviewportを超えてExtentHeightが伸びるタイミングに先頭位置を「ユーザーがスクロールした」と誤認し、その後の追従を止める可能性があった。
+- 修正: TranscriptPreviewWindowとAnswerWindowの両方で本文更新後にレイアウトを更新してScrollToEndを実行する。回答側の追従フラグとScrollChanged判定を外し、ストリーミング中は常に最新の末尾を表示する。
+- Release build/publish成功（0エラー、NU1900警告1件: NuGet脆弱性情報取得先へ接続できず）。発行物とdist/Better Flow.exeは82,526,207 bytes、SHA-256 9078FE8963B6ECB3A8B798AA3DE9FDE3879C4959C158E4D9482E80DEF628E37Aで一致。
+- 置換前EXEはartifacts/BetterFlow-before-streaming-auto-follow-20261016.exeにバックアップ（82,526,372 bytes、SHA-256 8ACABAF685D1871A69D41E99366A42AA7E050CE6D853225CA763A73F4B5545BD）。対象パスと一致するBetter Flow PID 14520だけを終了して置換した。
+- テストスイートは未実行。長文を実際にストリーミングしての画面確認も未実施。
+
+分類: ストリーミングプレビューのスクロール追従。出典: TranscriptPreviewWindow.xaml(.cs)、AnswerWindow.xaml(.cs)、Release build/publish、配布EXE SHA-256照合。確認日: 2026-10-16 Asia/Tokyo。信頼度: ソース・コンパイル・配置一致は高、実行時の画面挙動は未確認。情報区分: ソース確認・未確認事項。

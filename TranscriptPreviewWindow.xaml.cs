@@ -76,6 +76,8 @@ public partial class TranscriptPreviewWindow : Window
 
         if (!IsVisible) Show();
         UpdateLayout();
+        PreviewScrollViewer.UpdateLayout();
+        PreviewScrollViewer.ScrollToEnd();
         Left = Math.Max(0, (SystemParameters.PrimaryScreenWidth - Width) / 2);
         Top = Math.Max(0, SystemParameters.PrimaryScreenHeight - IndicatorBottomGap -
             IndicatorHeight - GapAboveIndicator - ActualHeight);
