@@ -919,5 +919,5 @@
 
 - ユーザー報告: 英訳は動作するが、「箇条書きにして」「プロンプトとして整形して」では文章がほぼ変わらない。前の診断では認識本文やモデル返答を保存していなかったため、ASR経路・要求構築・モデル出力・機械検証のどこで失敗しているか確定できない。
 - Services/VoiceCommandDiagnosticLog.csを追加し、%LOCALAPPDATA%\Better Flow\voice-command-diagnostics.jsonlへ処理IDで関連付けた診断メタデータを保存する。PTTプレビュー/最終認識の結果と経路、認識指示の分類・文字数、OpenCode要求に渡す指示数/各フラグ、返答と元文の一致・文字n-gram類似度、箇条書き判定、marker結果数、例外型を記録する。音声、文字起こし本文、指示文、モデル返答、例外メッセージは保存しない。ログは128 KiBで循環する。
-- Releaseビルドは成功（0エラー、NU1900警告1件）。まだ新EXEの発行・置換および実マイク/モデルでの再現確認はしていない。
+- Releaseビルドは成功（0エラー、NU1900警告1件）。診断版EXEをartifacts/publish-ptt-diagnostics-20261016/BetterFlow.exeへ発行し、dist/Better Flow.exeへ置換した。配布版は82,520,690 bytes、SHA-256 81E749E65D6CFFF33D1792598E191AE2CEEFE0A3E1C0A6793821A2FB7E6A6263。旧EXEはartifacts/BetterFlow-before-ptt-diagnostics-20261016.exeへバックアップ済み。置換前にRestart Managerでロック元が配布先と同一パスのPID 38820と確認し、そのPIDのみ停止した。実マイク/モデルでの再現確認はまだ。
 - 次の段階: 診断版EXEで「箇条書きにして」「プロンプトとして整形して」を各1回再現し、voice-command-diagnostics.jsonlを確認する。その証拠で原因を絞ってから処理を修正する。現時点で根本原因は確定していない。
