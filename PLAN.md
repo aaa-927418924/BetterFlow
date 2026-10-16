@@ -1118,7 +1118,7 @@
 
 - `MainWindow.xaml`の設定専用スタイルだけを変更。無効時の「変更」「更新」など薄いボタンでは文字色を`#101010`に固定し、サイドバーの選択中項目にもテンプレート内の文字要素へ同じ色を明示する。Setup用スタイルや640×640のSetup画面は変更していない。
 - チェックボックスの`IsKeyboardFocused`トリガーがマウスクリック後も枠を残すため、常時フォーカス状態に反応する枠を削除し、WPFの`FocusVisualStyle`へ置き換えた。マウスでクリックした後は枠を表示せず、キーボード操作でフォーカスした時の視認できる枠は保つ設計。WPF公式資料ではFocusVisualStyleはキーボード起点のフォーカス時だけ有効とされる。
-- 実装前チェックポイントは`6d5627c`。`git diff --check`成功、Release self-contained win-x64 publish成功。NU1900はNuGet脆弱性情報取得先へ接続できない警告。発行物は82,539,982 bytes、SHA-256 `0A8B402FDE4C70D9B6F955CC9D54DB81815DACB56BB1F018FFF73DBA0692E513`。
+- 実装前チェックポイントは`6d5627c`、実装コミットは`b33e9e7`。`git diff --check`成功、Release self-contained win-x64 publish成功。NU1900はNuGet脆弱性情報取得先へ接続できない警告。発行物は82,539,982 bytes、SHA-256 `0A8B402FDE4C70D9B6F955CC9D54DB81815DACB56BB1F018FFF73DBA0692E513`。
 - 置換前EXEは`artifacts/BetterFlow-before-settings-color-focus-20261016.exe`へ退避（82,539,870 bytes、SHA-256 `B72B27D4A12E4FA757EB3ECAA0ED8FA9EB1EF190AFA1A197F544C663965AFDDB`）。フルパスが一致するPID 44260だけを停止して`dist/Better Flow.exe`を置換。発行物と配布先は同じサイズ・SHA-256。
 - 実画面のクリック後表示、Tabキーでのフォーカス表示、Setup画面は未確認。テストスイートは実行していない。
 
