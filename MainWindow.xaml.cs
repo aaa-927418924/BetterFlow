@@ -14,6 +14,8 @@ namespace BetterFlow;
 
 public partial class MainWindow : System.Windows.Window
 {
+    private const double SettingsDesignWidth = 945;
+    private const double SettingsDesignHeight = 747;
     private const int RequiredIndependentDictionaryCorrections = 3;
     private static readonly TimeSpan PendingDictionaryEvidenceLifetime = TimeSpan.FromDays(90);
     private readonly SettingsStore _settingsStore = new();
@@ -40,6 +42,7 @@ public partial class MainWindow : System.Windows.Window
     private HwndSource? _source;
     private IntPtr _pasteTarget;
     private bool _isBusy;
+    private bool _setupPersistencePending;
     private bool _normalAudioInputActive;
     private bool _normalAudioRecognitionInProgress;
     private bool _skipAiAfterRecognitionRequested;
@@ -194,6 +197,7 @@ public partial class MainWindow : System.Windows.Window
             CapacityText.Text = string.Empty;
             SetupStatus.Text = "Setupを押して再試行してください。";
             RuntimeStatus.Text = $"失敗した工程: {currentStage}\n{DescribeSetupError(ex)}";
+            RuntimeStatus.Visibility = System.Windows.Visibility.Visible;
         }
         finally
         {
@@ -224,7 +228,7 @@ public partial class MainWindow : System.Windows.Window
             await CancelAudioProcessingAsync();
             return;
         }
-        if (_asr is null)
+        if (_asr is null || _setupPersistencePending)
         {
             await SetupAsync();
             return;
@@ -243,6 +247,7 @@ public partial class MainWindow : System.Windows.Window
         SetupProgress.Value = 0;
         SetupStatus.Text = "音声モデルを準備しています…";
         RuntimeStatus.Text = string.Empty;
+        RuntimeStatus.Visibility = System.Windows.Visibility.Collapsed;
         var currentStage = "音声モデルの取得";
         string? openCodeSetupIssue = null;
         try
@@ -266,8 +271,11 @@ public partial class MainWindow : System.Windows.Window
             }
             currentStage = "音声モデルの起動";
             SetupStatus.Text = "音声モデルを起動しています…";
-            await LoadRecognizerAsync(_lifetime.Token);
+            await LoadRecognizerAsync(_lifetime.Token, showSettings: false);
+            _setupPersistencePending = true;
             _settingsStore.Save(_settings);
+            _setupPersistencePending = false;
+            ShowSettingsExperience();
             SetupProgress.Value = 100;
             SetupStatus.Text = string.Empty;
             RuntimeStatus.Text = openCodeSetupIssue is null
@@ -279,6 +287,7 @@ public partial class MainWindow : System.Windows.Window
         {
             SetupStatus.Text = "セットアップできませんでした。内容を確認して、もう一度お試しください。";
             RuntimeStatus.Text = $"失敗した工程: {currentStage}\n{DescribeSetupError(ex)}";
+            RuntimeStatus.Visibility = System.Windows.Visibility.Visible;
         }
         finally
         {
@@ -286,7 +295,7 @@ public partial class MainWindow : System.Windows.Window
             SetupProgress.Visibility = System.Windows.Visibility.Collapsed;
             _isBusy = false;
             ActionButton.IsEnabled = true;
-            if (_asr is null) ActionButton.Content = "Setup";
+            if (_asr is null || _setupPersistencePending) ActionButton.Content = "Setup";
             UpdateAiModeDisplay();
         }
 
@@ -930,6 +939,43 @@ public partial class MainWindow : System.Windows.Window
         popupBorder.Width = Math.Min(desiredWidth, screenLimit);
     }
 
+    private void OpenCodeModelCombo_DropDownOpened(object sender, EventArgs e)
+    {
+        if (OpenCodeModelCombo.Template.FindName("PopupBorder", OpenCodeModelCombo) is not
+            System.Windows.Controls.Border popupBorder)
+            return;
+
+        var pixelsPerDip = VisualTreeHelper.GetDpi(OpenCodeModelCombo).PixelsPerDip;
+        var typeface = new Typeface(OpenCodeModelCombo.FontFamily, System.Windows.FontStyles.Normal,
+            OpenCodeModelCombo.FontWeight, OpenCodeModelCombo.FontStretch);
+        var widestName = _openCodeModels
+            .Select(option => new FormattedText(option.DisplayName, CultureInfo.CurrentUICulture,
+                System.Windows.FlowDirection.LeftToRight, typeface, OpenCodeModelCombo.FontSize,
+                System.Windows.Media.Brushes.Black, pixelsPerDip).WidthIncludingTrailingWhitespace)
+            .DefaultIfEmpty(0)
+            .Max();
+        var desiredWidth = Math.Max(OpenCodeModelCombo.ActualWidth, widestName + 56);
+        var screenLimit = Math.Max(OpenCodeModelCombo.ActualWidth,
+            System.Windows.SystemParameters.WorkArea.Width - 32);
+        popupBorder.Width = Math.Min(desiredWidth, screenLimit);
+    }
+
+    private void DictionaryPreferredSpellingBox_TextChanged(object sender, System.Windows.Controls.TextChangedEventArgs e)
+    {
+        if (DictionaryPreferredPlaceholder is not null)
+            DictionaryPreferredPlaceholder.Visibility = string.IsNullOrEmpty(DictionaryPreferredSpellingBox.Text)
+                ? System.Windows.Visibility.Visible
+                : System.Windows.Visibility.Collapsed;
+    }
+
+    private void DictionaryAlternativesBox_TextChanged(object sender, System.Windows.Controls.TextChangedEventArgs e)
+    {
+        if (DictionaryAlternativesPlaceholder is not null)
+            DictionaryAlternativesPlaceholder.Visibility = string.IsNullOrEmpty(DictionaryAlternativesBox.Text)
+                ? System.Windows.Visibility.Visible
+                : System.Windows.Visibility.Collapsed;
+    }
+
     private void RefreshCorrectionDictionaryItems()
     {
         CorrectionDictionaryItems.ItemsSource = null;
@@ -974,12 +1020,6 @@ public partial class MainWindow : System.Windows.Window
             DictionaryListStatus.Text = "再学習の設定を保存できませんでした。 " + ex.Message;
         }
     }
-
-    private void OpenDictionaryList_Click(object sender, System.Windows.RoutedEventArgs e) =>
-        DictionaryListPage.Visibility = System.Windows.Visibility.Visible;
-
-    private void BackFromDictionaryList_Click(object sender, System.Windows.RoutedEventArgs e) =>
-        DictionaryListPage.Visibility = System.Windows.Visibility.Collapsed;
 
     private void StartAutoDictionaryLearningMonitor(string pastedText)
     {
@@ -1868,30 +1908,81 @@ public partial class MainWindow : System.Windows.Window
         _loadingOpenCodeModelUi = false;
     }
 
-    private async Task LoadRecognizerAsync(CancellationToken cancellationToken)
+    private async Task LoadRecognizerAsync(CancellationToken cancellationToken, bool showSettings = true)
     {
         var recognizer = await Task.Run(() => AsrService.Load(AppPaths.ModelFile, AppPaths.TokensFile), cancellationToken);
         cancellationToken.ThrowIfCancellationRequested();
         _asr?.Dispose();
         _asr = recognizer;
         RegisterConfiguredHotkey();
-        TitleText.Visibility = System.Windows.Visibility.Collapsed;
-        BodyText.Text = "入力欄で押すと音声入力を始めます。録音中にSpaceを長押しすると、改行・プロンプト整形・そのまま送信の音声コマンドを使えます。編集できる文章を選択中なら音声で編集し、通常の文章を選択中ならその文章について質問できます。";
-        CapacityText.Visibility = System.Windows.Visibility.Collapsed;
-        ShortcutSettingsPanel.Visibility = System.Windows.Visibility.Visible;
-        MicrophoneSettingsPanel.Visibility = System.Windows.Visibility.Visible;
-        DiscordMuteSettingsPanel.Visibility = System.Windows.Visibility.Visible;
-        OpenCodeModelSettingsPanel.Visibility = System.Windows.Visibility.Visible;
-        CorrectionDictionarySettingsPanel.Visibility = System.Windows.Visibility.Visible;
-        SelectedTextAnswerSettingsPanel.Visibility = System.Windows.Visibility.Visible;
         ShortcutCaptureStatus.Text = string.Empty;
         UpdateDiscordMuteShortcutDisplay();
         UpdateDiscordMuteControlsEnabled();
         UpdateShortcutDisplay();
         UpdateAiModeDisplay();
-        ActionButton.Visibility = System.Windows.Visibility.Collapsed;
         RuntimeStatus.Text = _hotkeyRegistered ? string.Empty : "ショートカットが登録されていません。別のキーを設定してください。";
+        if (showSettings)
+            ShowSettingsExperience();
     }
+
+    private void ShowSettingsExperience()
+    {
+        TitleText.Visibility = System.Windows.Visibility.Collapsed;
+        CapacityText.Visibility = System.Windows.Visibility.Collapsed;
+        ActionButton.Visibility = System.Windows.Visibility.Collapsed;
+        SetupExperience.Visibility = System.Windows.Visibility.Collapsed;
+        SettingsViewbox.Visibility = System.Windows.Visibility.Visible;
+
+        var workArea = System.Windows.SystemParameters.WorkArea;
+        var availableWidth = Math.Max(1, workArea.Width - 32);
+        var availableHeight = Math.Max(1, workArea.Height - 32);
+        var scale = Math.Min(1, Math.Min(availableWidth / SettingsDesignWidth,
+            availableHeight / SettingsDesignHeight));
+        var windowWidth = SettingsDesignWidth * scale;
+        var windowHeight = SettingsDesignHeight * scale;
+
+        MinWidth = 0;
+        MinHeight = 0;
+        MaxWidth = double.PositiveInfinity;
+        MaxHeight = double.PositiveInfinity;
+        Width = windowWidth;
+        Height = windowHeight;
+        Left = workArea.Left + ((workArea.Width - windowWidth) / 2);
+        Top = workArea.Top + ((workArea.Height - windowHeight) / 2);
+
+        ShowSettingsPage("general");
+    }
+
+    private void ShowSettingsPage(string page)
+    {
+        var isGeneral = string.Equals(page, "general", StringComparison.Ordinal);
+        var isDictionary = string.Equals(page, "dictionary", StringComparison.Ordinal);
+        var isDetails = string.Equals(page, "details", StringComparison.Ordinal);
+
+        GeneralSettingsPage.Visibility = isGeneral
+            ? System.Windows.Visibility.Visible
+            : System.Windows.Visibility.Collapsed;
+        DictionarySettingsPage.Visibility = isDictionary
+            ? System.Windows.Visibility.Visible
+            : System.Windows.Visibility.Collapsed;
+        DetailsSettingsPage.Visibility = isDetails
+            ? System.Windows.Visibility.Visible
+            : System.Windows.Visibility.Collapsed;
+        DiscordMuteTutorialPage.Visibility = System.Windows.Visibility.Collapsed;
+
+        SettingsGeneralTab.IsChecked = isGeneral;
+        SettingsDictionaryTab.IsChecked = isDictionary;
+        SettingsDetailsTab.IsChecked = isDetails;
+    }
+
+    private void SettingsGeneralTab_Click(object sender, System.Windows.RoutedEventArgs e) =>
+        ShowSettingsPage("general");
+
+    private void SettingsDictionaryTab_Click(object sender, System.Windows.RoutedEventArgs e) =>
+        ShowSettingsPage("dictionary");
+
+    private void SettingsDetailsTab_Click(object sender, System.Windows.RoutedEventArgs e) =>
+        ShowSettingsPage("details");
 
     private async Task RecordButton_Click()
     {

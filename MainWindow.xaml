@@ -7,8 +7,307 @@
         WindowStartupLocation="CenterScreen" WindowStyle="None" AllowsTransparency="True"
         Background="Transparent" ResizeMode="NoResize" UseLayoutRounding="True" SnapsToDevicePixels="True"
         PreviewKeyDown="MainWindow_PreviewKeyDown">
+    <Window.Resources>
+        <SolidColorBrush x:Key="SettingsOuterBrush" Color="#2A2A2A" />
+        <SolidColorBrush x:Key="SettingsSurfaceBrush" Color="#222222" />
+        <SolidColorBrush x:Key="SettingsTextBrush" Color="#FFFFFF" />
+        <SolidColorBrush x:Key="SettingsMutedBrush" Color="#9B9B9B" />
+        <SolidColorBrush x:Key="SettingsControlBrush" Color="#E9E9E9" />
+        <SolidColorBrush x:Key="SettingsControlTextBrush" Color="#101010" />
+
+        <DataTemplate x:Key="DropdownDisplayNameTemplate">
+            <TextBlock Text="{Binding DisplayName}"
+                       Foreground="{Binding Foreground, RelativeSource={RelativeSource AncestorType={x:Type ComboBoxItem}}, FallbackValue={StaticResource SettingsControlTextBrush}}"
+                       TextWrapping="Wrap" TextTrimming="None" />
+        </DataTemplate>
+
+        <DataTemplate x:Key="AudioInputDisplayNameTemplate">
+            <TextBlock Text="{Binding DisplayName}"
+                       Foreground="{Binding Foreground, RelativeSource={RelativeSource AncestorType={x:Type ComboBoxItem}}, FallbackValue={StaticResource SettingsControlTextBrush}}"
+                       TextWrapping="Wrap" TextTrimming="None" />
+        </DataTemplate>
+
+        <DataTemplate x:Key="SettingsDropdownItemContentTemplate">
+            <TextBlock Text="{Binding}"
+                       Foreground="{Binding Foreground, RelativeSource={RelativeSource AncestorType={x:Type ComboBoxItem}}, FallbackValue={StaticResource SettingsControlTextBrush}}"
+                       TextWrapping="Wrap" TextTrimming="None" />
+        </DataTemplate>
+
+        <Style x:Key="SettingsButtonStyle" TargetType="Button">
+            <Setter Property="Background" Value="{StaticResource SettingsControlBrush}" />
+            <Setter Property="Foreground" Value="{StaticResource SettingsControlTextBrush}" />
+            <Setter Property="BorderBrush" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="FontFamily" Value="Inter, Yu Gothic UI" />
+            <Setter Property="FontSize" Value="20" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="ButtonSurface" Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="19">
+                            <ContentPresenter Margin="{TemplateBinding Padding}"
+                                              HorizontalAlignment="Center" VerticalAlignment="Center"
+                                              RecognizesAccessKey="True"
+                                              TextElement.Foreground="{TemplateBinding Foreground}" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="ButtonSurface" Property="Background" Value="#FFFFFF" />
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="ButtonSurface" Property="Background" Value="#D7D7D7" />
+                            </Trigger>
+                            <Trigger Property="IsKeyboardFocused" Value="True">
+                                <Setter TargetName="ButtonSurface" Property="BorderBrush" Value="#101010" />
+                                <Setter TargetName="ButtonSurface" Property="BorderThickness" Value="2" />
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter TargetName="ButtonSurface" Property="Background" Value="#D8D8D8" />
+                                <Setter Property="Foreground" Value="#666666" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="SettingsNavigationButtonStyle" TargetType="ToggleButton">
+            <Setter Property="Width" Value="104" />
+            <Setter Property="Height" Value="38" />
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="Foreground" Value="#FFFFFF" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="FontFamily" Value="Inter, Yu Gothic UI" />
+            <Setter Property="FontSize" Value="20" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ToggleButton">
+                        <Border x:Name="TabSurface" Background="{TemplateBinding Background}"
+                                BorderBrush="Transparent" BorderThickness="0" CornerRadius="19">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"
+                                              RecognizesAccessKey="True"
+                                              TextElement.Foreground="{TemplateBinding Foreground}" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsChecked" Value="True">
+                                <Setter TargetName="TabSurface" Property="Background" Value="#F5F5F5" />
+                                <Setter Property="Foreground" Value="#101010" />
+                            </Trigger>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="TabSurface" Property="Opacity" Value="0.88" />
+                            </Trigger>
+                            <Trigger Property="IsKeyboardFocused" Value="True">
+                                <Setter TargetName="TabSurface" Property="BorderBrush" Value="#FFFFFF" />
+                                <Setter TargetName="TabSurface" Property="BorderThickness" Value="2" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="SettingsCloseButtonStyle" TargetType="Button">
+            <Setter Property="Width" Value="32" />
+            <Setter Property="Height" Value="32" />
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderBrush" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="CloseSurface" Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="16">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="CloseSurface" Property="Background" Value="#3A3A3A" />
+                            </Trigger>
+                            <Trigger Property="IsKeyboardFocused" Value="True">
+                                <Setter TargetName="CloseSurface" Property="BorderBrush" Value="#FFFFFF" />
+                                <Setter TargetName="CloseSurface" Property="BorderThickness" Value="2" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="SettingsCheckBoxStyle" TargetType="CheckBox">
+            <Setter Property="Foreground" Value="{StaticResource SettingsTextBrush}" />
+            <Setter Property="FontFamily" Value="Inter, Yu Gothic UI" />
+            <Setter Property="FontSize" Value="16" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="CheckBox">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="38" />
+                            </Grid.ColumnDefinitions>
+                            <ContentPresenter Grid.Column="0" VerticalAlignment="Center"
+                                              RecognizesAccessKey="True"
+                                              TextElement.Foreground="{TemplateBinding Foreground}" />
+                            <Ellipse x:Name="CheckCircle" Grid.Column="1" Fill="#E9E9E9" />
+                            <Path x:Name="CheckMark" Grid.Column="1" Data="M 9 19 L 16 26 L 29 11"
+                                  Width="22" Height="22" Stretch="Fill" Stroke="#101010"
+                                  StrokeThickness="2.4" StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                                  StrokeLineJoin="Round" Visibility="Collapsed" HorizontalAlignment="Center"
+                                  VerticalAlignment="Center" />
+                            <Border x:Name="FocusRing" Grid.ColumnSpan="2" BorderBrush="Transparent"
+                                    BorderThickness="0" CornerRadius="19" IsHitTestVisible="False" />
+                        </Grid>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsChecked" Value="True">
+                                <Setter TargetName="CheckMark" Property="Visibility" Value="Visible" />
+                            </Trigger>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="CheckCircle" Property="Fill" Value="#FFFFFF" />
+                            </Trigger>
+                            <Trigger Property="IsKeyboardFocused" Value="True">
+                                <Setter TargetName="FocusRing" Property="BorderBrush" Value="#FFFFFF" />
+                                <Setter TargetName="FocusRing" Property="BorderThickness" Value="2" />
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter TargetName="CheckCircle" Property="Fill" Value="#D4D4D4" />
+                                <Setter TargetName="CheckMark" Property="Stroke" Value="#555555" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="SettingsComboBoxStyle" TargetType="ComboBox">
+            <Setter Property="Background" Value="{StaticResource SettingsControlBrush}" />
+            <Setter Property="Foreground" Value="{StaticResource SettingsControlTextBrush}" />
+            <Setter Property="BorderBrush" Value="{StaticResource SettingsControlBrush}" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="Padding" Value="12,4" />
+            <Setter Property="FontFamily" Value="Inter, Yu Gothic UI" />
+            <Setter Property="FontSize" Value="15" />
+            <Setter Property="ItemContainerStyle" Value="{StaticResource DarkDropdownItemStyle}" />
+            <Setter Property="SnapsToDevicePixels" Value="True" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ComboBox">
+                        <Grid x:Name="Root" SnapsToDevicePixels="True">
+                            <Border x:Name="ComboBorder" Background="{TemplateBinding Background}"
+                                    BorderBrush="{TemplateBinding BorderBrush}"
+                                    BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="19" />
+                            <Grid Margin="{TemplateBinding Padding}">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="24" />
+                                </Grid.ColumnDefinitions>
+                                <ContentPresenter x:Name="ContentSite" Grid.Column="0" IsHitTestVisible="False"
+                                                  Content="{TemplateBinding SelectionBoxItem}"
+                                                  ContentTemplate="{TemplateBinding SelectionBoxItemTemplate}"
+                                                  ContentTemplateSelector="{TemplateBinding ItemTemplateSelector}"
+                                                  ContentStringFormat="{TemplateBinding SelectionBoxItemStringFormat}"
+                                                  VerticalAlignment="Center"
+                                                  TextElement.Foreground="{TemplateBinding Foreground}" />
+                                <Path x:Name="DropDownArrow" Grid.Column="1" Width="8" Height="5"
+                                      HorizontalAlignment="Center" VerticalAlignment="Center"
+                                      RenderTransformOrigin="0.5,0.5" Data="M 0 0 L 4 4 L 8 0"
+                                      Stroke="{TemplateBinding Foreground}" StrokeThickness="1.5"
+                                      StrokeStartLineCap="Round" StrokeEndLineCap="Round" />
+                            </Grid>
+                            <ToggleButton x:Name="DropDownToggle"
+                                          IsChecked="{Binding IsDropDownOpen, Mode=TwoWay, RelativeSource={RelativeSource TemplatedParent}}"
+                                          ClickMode="Press" Focusable="False" IsTabStop="False"
+                                          Background="Transparent" BorderThickness="0" Cursor="Hand">
+                                <ToggleButton.Template>
+                                    <ControlTemplate TargetType="ToggleButton">
+                                        <Border Background="{TemplateBinding Background}" />
+                                    </ControlTemplate>
+                                </ToggleButton.Template>
+                            </ToggleButton>
+                            <Popup x:Name="PART_Popup" Placement="Bottom"
+                                   PlacementTarget="{Binding RelativeSource={RelativeSource TemplatedParent}}"
+                                   IsOpen="{TemplateBinding IsDropDownOpen}" AllowsTransparency="True"
+                                   Focusable="False" PopupAnimation="Fade" StaysOpen="False">
+                                <Border x:Name="PopupBorder"
+                                        MinWidth="{Binding ActualWidth, RelativeSource={RelativeSource TemplatedParent}}"
+                                        MaxHeight="{TemplateBinding MaxDropDownHeight}" Margin="0,4,0,0"
+                                        Background="#292929" BorderBrush="#686868" BorderThickness="1">
+                                    <ScrollViewer x:Name="DropDownScrollViewer" CanContentScroll="True"
+                                                  HorizontalScrollBarVisibility="Disabled"
+                                                  VerticalScrollBarVisibility="Auto" SnapsToDevicePixels="True">
+                                        <ItemsPresenter KeyboardNavigation.DirectionalNavigation="Contained"
+                                                        SnapsToDevicePixels="{TemplateBinding SnapsToDevicePixels}" />
+                                    </ScrollViewer>
+                                </Border>
+                            </Popup>
+                        </Grid>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="ComboBorder" Property="BorderBrush" Value="#B7B7B7" />
+                            </Trigger>
+                            <Trigger Property="IsKeyboardFocusWithin" Value="True">
+                                <Setter TargetName="ComboBorder" Property="BorderBrush" Value="#101010" />
+                                <Setter TargetName="ComboBorder" Property="BorderThickness" Value="2" />
+                            </Trigger>
+                            <Trigger Property="IsDropDownOpen" Value="True">
+                                <Setter TargetName="ComboBorder" Property="BorderBrush" Value="#101010" />
+                                <Setter TargetName="DropDownArrow" Property="RenderTransform">
+                                    <Setter.Value><RotateTransform Angle="180" /></Setter.Value>
+                                </Setter>
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter TargetName="ComboBorder" Property="Background" Value="#E9E9E9" />
+                                <Setter TargetName="ComboBorder" Property="BorderBrush" Value="#D0D0D0" />
+                                <Setter Property="Foreground" Value="#5C5C5C" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="DictionaryInputStyle" TargetType="TextBox">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="Foreground" Value="{StaticResource SettingsControlTextBrush}" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="Padding" Value="12,4" />
+            <Setter Property="FontFamily" Value="Inter, Yu Gothic UI" />
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="VerticalContentAlignment" Value="Center" />
+            <Setter Property="SelectionBrush" Value="#9E9E9E" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="TextBox">
+                        <Border x:Name="InputSurface" Background="{TemplateBinding Background}"
+                                BorderBrush="Transparent" BorderThickness="0" CornerRadius="19"
+                                SnapsToDevicePixels="True">
+                            <ScrollViewer x:Name="PART_ContentHost" Margin="{TemplateBinding Padding}"
+                                          VerticalAlignment="Center" Background="Transparent"
+                                          Focusable="False" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsKeyboardFocused" Value="True">
+                                <Setter TargetName="InputSurface" Property="BorderBrush" Value="#101010" />
+                                <Setter TargetName="InputSurface" Property="BorderThickness" Value="2" />
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter TargetName="InputSurface" Property="Background" Value="#DADADA" />
+                                <Setter Property="Foreground" Value="#666666" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </Window.Resources>
+
     <Grid Background="Transparent">
-        <Border Background="{StaticResource OuterPanelBrush}"
+        <Border x:Name="SetupExperience" Background="{StaticResource OuterPanelBrush}"
                 CornerRadius="34" Padding="20" HorizontalAlignment="Stretch" VerticalAlignment="Stretch">
             <Border Background="{StaticResource PanelBrush}" CornerRadius="30" Padding="22">
                 <Grid>
@@ -30,306 +329,469 @@
 
                     <ScrollViewer Grid.Row="1" Margin="0,16,-6,14" VerticalScrollBarVisibility="Auto"
                                   HorizontalScrollBarVisibility="Disabled" Focusable="False">
-                    <StackPanel Margin="0,0,6,0">
-                        <TextBlock x:Name="TitleText" Text="起動には初回セットアップが必要です。"
-                                   FontSize="23" FontWeight="Normal" LineHeight="34" />
-                        <TextBlock x:Name="BodyText" Text="Parakeet日本語音声モデルとOpenCodeを自動で準備します。&#10;OpenCode Zenの利用には別途サインインが必要です。"
-                                   FontSize="16" LineHeight="22" Margin="0,20,0,0" />
-                        <TextBlock x:Name="CapacityText" Text="必要な空き容量: 約1.2 GB"
-                                   FontSize="15" Margin="0,18,0,0" />
-                        <StackPanel x:Name="ShortcutSettingsPanel" Margin="0,18,0,0" Visibility="Collapsed">
-                            <TextBlock Text="ショートカットキー" FontSize="13" Foreground="{StaticResource MutedBrush}" />
-                            <DockPanel Margin="0,4,0,0" LastChildFill="True">
-                                <Button x:Name="ShortcutChangeButton" DockPanel.Dock="Right" Content="変更"
-                                        MinWidth="88" Height="40" Padding="14,0" Margin="12,0,0,0"
-                                        Style="{StaticResource SecondaryButtonStyle}" FontSize="14"
-                                        Cursor="Hand" Click="ShortcutChangeButton_Click"
-                                        AutomationProperties.Name="ショートカットキーを変更" />
-                                <TextBlock x:Name="ShortcutCurrentText" FontSize="17" VerticalAlignment="Center" />
-                            </DockPanel>
-                            <TextBlock x:Name="ShortcutCaptureStatus" Text="" FontSize="12"
-                                       Foreground="{StaticResource MutedBrush}" LineHeight="18"
-                                       Margin="0,5,0,0" AutomationProperties.LiveSetting="Polite" />
-                            <CheckBox x:Name="IndicatorHintsCheckBox"
-                                      Content="インジケーターに操作ヒントを表示"
-                                      Foreground="{StaticResource TextBrush}" FontSize="13"
-                                      Margin="0,8,0,0" IsThreeState="False"
-                                      Checked="IndicatorHintsCheckBox_Changed"
-                                      Unchecked="IndicatorHintsCheckBox_Changed"
-                                      AutomationProperties.Name="インジケーターに操作ヒントを表示" />
+                        <StackPanel Margin="0,0,6,0">
+                            <TextBlock x:Name="TitleText" Text="起動には初回セットアップが必要です。"
+                                       FontSize="23" FontWeight="Normal" LineHeight="34" />
+                            <TextBlock x:Name="BodyText" Text="Parakeet日本語音声モデルとOpenCodeを自動で準備します。&#10;OpenCode Zenの利用には別途サインインが必要です。"
+                                       FontSize="16" LineHeight="22" Margin="0,20,0,0" />
+                            <TextBlock x:Name="CapacityText" Text="必要な空き容量: 約1.2 GB"
+                                       FontSize="15" Margin="0,18,0,0" />
+                            <ProgressBar x:Name="SetupProgress" Height="5" Minimum="0" Maximum="100" Value="0"
+                                         Visibility="Collapsed" Foreground="#EAEAEA" Background="#555555"
+                                         BorderThickness="0" Margin="0,20,0,0" />
+                            <TextBlock x:Name="SetupStatus" Text="" FontSize="12" Foreground="{StaticResource MutedBrush}"
+                                       LineHeight="18" Margin="0,10,0,0" AutomationProperties.LiveSetting="Polite" />
+                            <TextBlock x:Name="RuntimeStatus" Text="" FontSize="12" Foreground="{StaticResource MutedBrush}"
+                                       LineHeight="18" TextWrapping="Wrap" Margin="0,10,0,0"
+                                       Visibility="Collapsed" AutomationProperties.LiveSetting="Polite" />
                         </StackPanel>
-                        <StackPanel x:Name="MicrophoneSettingsPanel" Margin="0,16,0,0" Visibility="Collapsed">
-                            <TextBlock Text="音声入力デバイス" FontSize="14" FontWeight="SemiBold" />
-                            <DockPanel Margin="0,8,0,0" LastChildFill="True">
-                                <Button x:Name="RefreshMicrophoneDevicesButton" DockPanel.Dock="Right" Content="再読み込み"
-                                        MinWidth="92" Height="40" Padding="8,0" Margin="8,0,0,0"
-                                        Style="{StaticResource SecondaryButtonStyle}"
-                                        Click="RefreshMicrophoneDevices_Click" AutomationProperties.Name="音声入力デバイス一覧を再読み込み" />
-                                <ComboBox x:Name="MicrophoneDeviceCombo" IsEditable="False" MinHeight="40"
-                                          Background="#333333" Foreground="#F4F4F4" BorderBrush="#686868"
-                                          FontFamily="Yu Gothic UI" FontSize="13"
-                                          ItemTemplate="{StaticResource AudioInputDisplayNameTemplate}"
-                                          Style="{StaticResource DarkComboBoxStyle}"
-                                          PreviewMouseWheel="SettingsComboBox_PreviewMouseWheel"
-                                          DropDownOpened="MicrophoneDeviceCombo_DropDownOpened"
-                                          SelectionChanged="MicrophoneDeviceCombo_SelectionChanged"
-                                          ToolTip="{Binding SelectedItem.DisplayName, RelativeSource={RelativeSource Self}}"
-                                          AutomationProperties.Name="音声入力デバイス" />
-                            </DockPanel>
-                            <TextBlock x:Name="MicrophoneDeviceStatus" FontSize="11" Foreground="{StaticResource MutedBrush}"
-                                       Margin="0,5,0,0" AutomationProperties.LiveSetting="Polite" />
-                        </StackPanel>
-                        <StackPanel x:Name="DiscordMuteSettingsPanel" Margin="0,16,0,0" Visibility="Collapsed">
-                            <TextBlock Text="Discordの自動ミュート" FontSize="14" FontWeight="SemiBold" />
-                            <DockPanel Margin="0,6,0,0" LastChildFill="True">
-                                <Button x:Name="DiscordMuteTutorialButton" DockPanel.Dock="Right" Content="設定方法"
-                                        MinWidth="92" Height="38" Padding="12,0" Margin="10,0,0,0"
-                                        Style="{StaticResource SecondaryButtonStyle}"
-                                        Click="DiscordMuteTutorialButton_Click"
-                                        AutomationProperties.Name="Discordミュートの設定方法を表示" />
-                                <CheckBox x:Name="DiscordMuteEnabledCheckBox"
-                                          Content="音声入力中はDiscordをミュートする"
-                                          Foreground="{StaticResource TextBrush}" FontSize="13"
-                                          VerticalAlignment="Center" IsThreeState="False"
-                                          Checked="DiscordMuteEnabledCheckBox_Changed"
-                                          Unchecked="DiscordMuteEnabledCheckBox_Changed"
-                                          AutomationProperties.Name="音声入力中にDiscordを自動ミュート" />
-                            </DockPanel>
-                            <DockPanel Margin="0,8,0,0" LastChildFill="True">
-                                <Button x:Name="DiscordMuteShortcutChangeButton" DockPanel.Dock="Right" Content="変更"
-                                        MinWidth="88" Height="38" Padding="14,0" Margin="12,0,0,0"
-                                        Style="{StaticResource SecondaryButtonStyle}"
-                                        Click="DiscordMuteShortcutChangeButton_Click"
-                                        AutomationProperties.Name="Discordミュート用ショートカットを変更" />
-                                <TextBlock x:Name="DiscordMuteShortcutCurrentText" FontSize="15"
-                                           VerticalAlignment="Center" Text="未設定" />
-                            </DockPanel>
-                            <TextBlock x:Name="DiscordMuteShortcutCaptureStatus" Text="" FontSize="11"
-                                       Foreground="{StaticResource MutedBrush}" LineHeight="17"
-                                       Margin="0,4,0,0" AutomationProperties.LiveSetting="Polite" />
-                            <TextBlock x:Name="DiscordMuteStatus" FontSize="11"
-                                       Foreground="{StaticResource MutedBrush}" Margin="0,4,0,0"
-                                       AutomationProperties.LiveSetting="Polite" />
-                        </StackPanel>
-                        <StackPanel x:Name="OpenCodeModelSettingsPanel" Margin="0,16,0,0" Visibility="Collapsed">
-                            <TextBlock Text="OpenCodeモデル" FontSize="14" FontWeight="SemiBold" />
-                            <TextBlock Text="モデル" FontSize="12" Foreground="{StaticResource MutedBrush}" Margin="0,12,0,4" />
-                            <DockPanel LastChildFill="True">
-                                <Button x:Name="RefreshOpenCodeModelsButton" DockPanel.Dock="Right" Content="一覧を更新"
-                                        MinWidth="92" Height="40" Padding="8,0" Margin="8,0,0,0"
-                                        Style="{StaticResource SecondaryButtonStyle}"
-                                        Click="RefreshOpenCodeModels_Click" AutomationProperties.Name="OpenCodeモデル一覧を更新" />
-                                <ComboBox x:Name="OpenCodeModelCombo" IsEditable="False" MinHeight="40"
-                                          Background="#333333" Foreground="#F4F4F4" BorderBrush="#686868"
-                                          FontFamily="Yu Gothic UI" FontSize="13"
-                                          ItemTemplate="{StaticResource DropdownDisplayNameTemplate}"
-                                          Style="{StaticResource DarkComboBoxStyle}"
-                                          PreviewMouseWheel="SettingsComboBox_PreviewMouseWheel"
-                                          SelectionChanged="OpenCodeModelCombo_SelectionChanged"
-                                          AutomationProperties.Name="OpenCode Desktopのモデル" />
-                            </DockPanel>
-                            <TextBlock x:Name="OpenCodeModelStatus" FontSize="11" Foreground="{StaticResource MutedBrush}"
-                                       Margin="0,5,0,0" AutomationProperties.LiveSetting="Polite" />
-                        </StackPanel>
-                        <StackPanel x:Name="CorrectionDictionarySettingsPanel" Margin="0,16,0,0" Visibility="Collapsed">
-                            <TextBlock Text="用語辞書" FontSize="14" FontWeight="SemiBold" />
-                            <TextBlock Text="正しい表記" FontSize="12" Foreground="{StaticResource MutedBrush}" Margin="0,0,0,4" />
-                            <Border Background="#333333" BorderBrush="#686868" BorderThickness="1"
-                                    CornerRadius="10" Height="42" Padding="10,4">
-                                <TextBox x:Name="DictionaryPreferredSpellingBox" BorderThickness="0"
-                                         Background="Transparent" Foreground="#F4F4F4"
-                                         FontFamily="Yu Gothic UI" FontSize="13" MaxLength="100"
-                                         VerticalContentAlignment="Center"
-                                         AutomationProperties.Name="辞書に登録する正しい表記" />
-                            </Border>
-                            <TextBlock Text="誤認識・別表記（任意。複数は「、」区切り）"
-                                       FontSize="12" Foreground="{StaticResource MutedBrush}" Margin="0,8,0,4" />
-                            <Border Background="#333333" BorderBrush="#686868" BorderThickness="1"
-                                    CornerRadius="10" Height="42" Padding="10,4">
-                                <TextBox x:Name="DictionaryAlternativesBox" BorderThickness="0"
-                                         Background="Transparent" Foreground="#F4F4F4"
-                                         FontFamily="Yu Gothic UI" FontSize="13" MaxLength="400"
-                                         VerticalContentAlignment="Center"
-                                         AutomationProperties.Name="辞書に登録する誤認識・別表記" />
-                            </Border>
-                            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,8,0,0">
-                                <Button Content="辞書リスト" Height="38" MinWidth="112" Padding="12,0"
-                                        Margin="0,0,8,0" Style="{StaticResource SecondaryButtonStyle}"
-                                        Click="OpenDictionaryList_Click"
-                                        AutomationProperties.Name="辞書リストを表示" />
-                                <Button Content="単語を登録" Height="38" MinWidth="112" Padding="12,0"
-                                        Style="{StaticResource SecondaryButtonStyle}"
-                                        Click="AddCorrectionDictionaryEntry_Click"
-                                        AutomationProperties.Name="用語辞書に単語を登録" />
-                            </StackPanel>
-                            <TextBlock x:Name="CorrectionDictionaryStatus" FontSize="11"
-                                       Foreground="{StaticResource MutedBrush}" Margin="0,5,0,0"
-                                       AutomationProperties.LiveSetting="Polite" />
-                        </StackPanel>
-                        <StackPanel x:Name="SelectedTextAnswerSettingsPanel" Margin="0,16,0,0" Visibility="Collapsed">
-                            <TextBlock Text="選択した文章への回答方法" FontSize="14" FontWeight="SemiBold" />
-                            <ComboBox x:Name="SelectedTextAnswerModeCombo" IsEditable="False" MinHeight="40"
-                                      Background="#333333" Foreground="#F4F4F4" BorderBrush="#686868"
-                                      FontFamily="Yu Gothic UI" FontSize="13" Margin="0,8,0,0"
-                                      Style="{StaticResource DarkComboBoxStyle}"
-                                      PreviewMouseWheel="SettingsComboBox_PreviewMouseWheel"
-                                      SelectionChanged="SelectedTextAnswerModeCombo_SelectionChanged"
-                                      AutomationProperties.Name="選択文章への回答方法">
-                                <ComboBoxItem Content="OpenCodeのテキスト回答" Tag="opencode"
-                                              ContentTemplate="{StaticResource DarkDropdownItemContentTemplate}"
-                                              Style="{StaticResource DarkDropdownItemStyle}"
-                                              AutomationProperties.Name="OpenCodeのテキスト回答" />
-                                <ComboBoxItem Content="GPT Liveの音声会話" Tag="gpt-live"
-                                              ContentTemplate="{StaticResource DarkDropdownItemContentTemplate}"
-                                              Style="{StaticResource DarkDropdownItemStyle}"
-                                              AutomationProperties.Name="GPT Liveの音声会話" />
-                            </ComboBox>
-                            <TextBlock Text="GPT LiveにはChatGPTサブスクリプションが必要です。"
-                                       FontSize="11" Foreground="{StaticResource MutedBrush}"
-                                       TextWrapping="Wrap" Margin="0,5,0,0" />
-                            <DockPanel x:Name="GptLiveSignInPanel" Margin="0,8,0,0" LastChildFill="True"
-                                       Visibility="Collapsed">
-                                <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
-                                    <Button x:Name="GptLiveSignInButton" Content="サインイン" MinWidth="96" Height="38"
-                                            Padding="12,0" Margin="6,0,0,0" Style="{StaticResource SecondaryButtonStyle}"
-                                            Click="GptLiveSignInButton_Click" AutomationProperties.Name="ChatGPTにサインイン" />
-                                    <Button x:Name="GptLiveSignOutButton" Content="サインアウト" MinWidth="96" Height="38"
-                                            Padding="12,0" Margin="6,0,0,0" Style="{StaticResource SecondaryButtonStyle}"
-                                            Click="GptLiveSignOutButton_Click" AutomationProperties.Name="ChatGPTからサインアウト" />
-                                </StackPanel>
-                                <TextBlock x:Name="GptLiveSignInStatus" FontSize="11" Foreground="{StaticResource MutedBrush}"
-                                           VerticalAlignment="Center" AutomationProperties.LiveSetting="Polite" />
-                            </DockPanel>
-                        </StackPanel>
-                        <ProgressBar x:Name="SetupProgress" Height="5" Minimum="0" Maximum="100" Value="0"
-                                     Visibility="Collapsed" Foreground="#EAEAEA" Background="#555555"
-                                     BorderThickness="0" Margin="0,20,0,0" />
-                        <TextBlock x:Name="SetupStatus" Text="" FontSize="12" Foreground="{StaticResource MutedBrush}"
-                                   LineHeight="18" Margin="0,10,0,0" AutomationProperties.LiveSetting="Polite" />
-                        <TextBlock x:Name="RuntimeStatus" Text="" FontSize="12" Foreground="{StaticResource MutedBrush}"
-                                   LineHeight="18" TextWrapping="Wrap" Margin="0,10,0,0"
-                                   Visibility="Collapsed" AutomationProperties.LiveSetting="Polite" />
-
-                    </StackPanel>
                     </ScrollViewer>
 
                     <Button x:Name="ActionButton" Grid.Row="2" Content="Setup" Width="210" Height="56"
                             HorizontalAlignment="Right" VerticalAlignment="Bottom" Style="{StaticResource PrimaryButtonStyle}"
                             Click="ActionButton_Click" />
-
-                    <Grid x:Name="DictionaryListPage" Grid.Row="1" Grid.RowSpan="2"
-                          Background="{StaticResource PanelBrush}" Visibility="Collapsed" Panel.ZIndex="10">
-                        <Grid.RowDefinitions>
-                            <RowDefinition Height="66" />
-                            <RowDefinition Height="*" />
-                        </Grid.RowDefinitions>
-                        <StackPanel Grid.Row="0" Orientation="Horizontal" VerticalAlignment="Top" Margin="0,8,0,0">
-                            <Button Content="← 戻る" Height="38" MinWidth="88" Padding="12,0"
-                                    Style="{StaticResource SecondaryButtonStyle}"
-                                    Click="BackFromDictionaryList_Click"
-                                    AutomationProperties.Name="設定に戻る" />
-                            <TextBlock Text="辞書リスト" FontSize="17" FontWeight="SemiBold"
-                                       VerticalAlignment="Center" Margin="14,0,0,0" />
-                        </StackPanel>
-                        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto"
-                                      HorizontalScrollBarVisibility="Disabled" Focusable="False">
-                            <StackPanel>
-                                <TextBlock x:Name="DictionaryListEmptyText" Text="辞書に登録された単語はありません。"
-                                           FontSize="12" Foreground="{StaticResource MutedBrush}"
-                                           Margin="0,4,0,0" Visibility="Collapsed" />
-                                <ItemsControl x:Name="CorrectionDictionaryItems" Margin="0,4,0,0">
-                                    <ItemsControl.ItemTemplate>
-                                        <DataTemplate>
-                                            <Border Background="#2B2B2B" CornerRadius="10" Padding="8" Margin="0,0,0,6">
-                                                <DockPanel LastChildFill="True">
-                                                    <Button DockPanel.Dock="Right" Content="削除" Tag="{Binding}"
-                                                            Height="32" MinWidth="60" Padding="8,0" Margin="8,0,0,0"
-                                                            Style="{StaticResource SecondaryButtonStyle}"
-                                                            Click="RemoveCorrectionDictionaryEntry_Click"
-                                                            AutomationProperties.Name="この辞書項目を削除" />
-                                                    <TextBlock Text="{Binding Summary}" VerticalAlignment="Center"
-                                                               FontSize="12" TextWrapping="Wrap" />
-                                                </DockPanel>
-                                            </Border>
-                                        </DataTemplate>
-                                    </ItemsControl.ItemTemplate>
-                                </ItemsControl>
-                                <StackPanel x:Name="SuppressedDictionarySection" Margin="0,12,0,0"
-                                            Visibility="Collapsed">
-                                    <TextBlock Text="削除済み用語" FontSize="13" FontWeight="SemiBold" />
-                                    <TextBlock Text="再学習を許可すると、次に手修正した文章を送信したときから候補を判定します。"
-                                               FontSize="11" Foreground="{StaticResource MutedBrush}"
-                                               TextWrapping="Wrap" Margin="0,3,0,6" />
-                                    <ItemsControl x:Name="SuppressedDictionaryItems">
-                                        <ItemsControl.ItemTemplate>
-                                            <DataTemplate>
-                                                <Border Background="#2B2B2B" CornerRadius="10" Padding="8" Margin="0,0,0,6">
-                                                    <DockPanel LastChildFill="True">
-                                                        <Button DockPanel.Dock="Right" Content="再学習を許可"
-                                                                Tag="{Binding Term}" Height="32" MinWidth="104"
-                                                                Padding="8,0" Margin="8,0,0,0"
-                                                                Style="{StaticResource SecondaryButtonStyle}"
-                                                                Click="AllowSuppressedDictionaryTerm_Click"
-                                                                AutomationProperties.Name="{Binding AllowActionName}" />
-                                                        <TextBlock Text="{Binding Term}" VerticalAlignment="Center"
-                                                                   FontSize="12" TextWrapping="Wrap" />
-                                                    </DockPanel>
-                                                </Border>
-                                            </DataTemplate>
-                                        </ItemsControl.ItemTemplate>
-                                    </ItemsControl>
-                                </StackPanel>
-                                <TextBlock x:Name="DictionaryListStatus" FontSize="11"
-                                           Foreground="{StaticResource MutedBrush}" Margin="0,6,0,0"
-                                           AutomationProperties.LiveSetting="Polite" />
-                            </StackPanel>
-                        </ScrollViewer>
-                    </Grid>
-
-                    <Grid x:Name="DiscordMuteTutorialPage" Grid.Row="1" Grid.RowSpan="2"
-                          Background="{StaticResource PanelBrush}" Visibility="Collapsed" Panel.ZIndex="11">
-                        <Grid.RowDefinitions>
-                            <RowDefinition Height="66" />
-                            <RowDefinition Height="*" />
-                        </Grid.RowDefinitions>
-                        <StackPanel Grid.Row="0" Orientation="Horizontal" VerticalAlignment="Top" Margin="0,8,0,0">
-                            <Button Content="← 戻る" Height="38" MinWidth="88" Padding="12,0"
-                                    Style="{StaticResource SecondaryButtonStyle}"
-                                    Click="BackFromDiscordMuteTutorial_Click"
-                                    AutomationProperties.Name="Discordミュート設定に戻る" />
-                            <TextBlock Text="Discordの設定方法" FontSize="17" FontWeight="SemiBold"
-                                       VerticalAlignment="Center" Margin="14,0,0,0" />
-                        </StackPanel>
-                        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto"
-                                      HorizontalScrollBarVisibility="Disabled" Focusable="False">
-                            <StackPanel Margin="0,2,0,0">
-                                <TextBlock Text="Discordの入力モードを「音声検出」にしてから設定してください。「プッシュしてミュート」は、登録したキーを押している間だけマイク送信を止めます。"
-                                           FontSize="12" Foreground="{StaticResource MutedBrush}"
-                                           TextWrapping="Wrap" Margin="0,0,0,12" />
-                                <TextBlock Text="1. Discordの左下にある歯車から「ユーザー設定」を開きます。"
-                                           FontSize="13" Margin="0,0,0,10" />
-                                <TextBlock Text="2. 左側の「システム設定」を開きます。"
-                                           FontSize="13" Margin="0,0,0,10" />
-                                <TextBlock Text="3. 「カスタムキーバインド」を選びます。"
-                                           FontSize="13" Margin="0,0,0,10" />
-                                <TextBlock Text="4. 「キーバインドを追加」を押します。"
-                                           FontSize="13" Margin="0,0,0,10" />
-                                <TextBlock Text="5. アクションに「プッシュしてミュート」を選びます。"
-                                           FontSize="13" Margin="0,0,0,10" />
-                                <TextBlock Text="6. Discordで使うキーの組み合わせを押して登録します。ほかのアプリで使っていない組み合わせがおすすめです。"
-                                           FontSize="13" Margin="0,0,0,10" />
-                                <TextBlock Text="7. Better Flowの設定に戻り、「変更」を押して同じキーの組み合わせを登録します。"
-                                           FontSize="13" Margin="0,0,0,10" />
-                                <Border Background="#2B2B2B" CornerRadius="10" Padding="10" Margin="0,4,0,0">
-                                    <TextBlock Text="Better Flowがマイクを使っている間だけキーを押し続け、音声入力が終わるとキーを離します。録音できないときは、Discord側とBetter Flow側のキーが同じか確認してください。"
-                                               FontSize="11" Foreground="{StaticResource MutedBrush}"
-                                               TextWrapping="Wrap" />
-                                </Border>
-                            </StackPanel>
-                        </ScrollViewer>
-                    </Grid>
                 </Grid>
             </Border>
         </Border>
+
+        <Viewbox x:Name="SettingsViewbox" Stretch="Uniform" StretchDirection="DownOnly"
+                 HorizontalAlignment="Stretch" VerticalAlignment="Stretch" Visibility="Collapsed">
+            <Grid x:Name="SettingsShell" Width="945" Height="747" Background="Transparent">
+                <Grid.Resources>
+                    <Style TargetType="{x:Type TextBlock}">
+                        <Setter Property="FontFamily" Value="Inter, Yu Gothic UI" />
+                        <Setter Property="Foreground" Value="{StaticResource SettingsTextBrush}" />
+                        <Setter Property="TextWrapping" Value="Wrap" />
+                    </Style>
+                </Grid.Resources>
+                <Border Background="{StaticResource SettingsOuterBrush}" CornerRadius="43" ClipToBounds="True">
+                    <Canvas Width="945" Height="747" ClipToBounds="True">
+                        <Border Canvas.Left="226" Canvas.Top="28" Width="691" Height="691"
+                                Background="{StaticResource SettingsSurfaceBrush}" CornerRadius="43" />
+
+                        <Border Canvas.Left="27" Canvas.Top="28" Width="82" Height="77"
+                                Background="#FFFFFF" CornerRadius="28"
+                                MouseLeftButtonDown="DragRegion_MouseLeftButtonDown"
+                                AutomationProperties.Name="Better Flow ロゴ">
+                            <Canvas Width="82" Height="77">
+                                <Border Canvas.Left="17" Canvas.Top="18" Width="11" Height="41"
+                                        Background="#2B2B2B" CornerRadius="6" />
+                                <Border Canvas.Left="35" Canvas.Top="15" Width="11" Height="46"
+                                        Background="#2B2B2B" CornerRadius="6" />
+                                <Border Canvas.Left="53" Canvas.Top="24" Width="11" Height="29"
+                                        Background="#2B2B2B" CornerRadius="6" />
+                            </Canvas>
+                        </Border>
+
+                        <ToggleButton x:Name="SettingsGeneralTab" Canvas.Left="51" Canvas.Top="211"
+                                      Content="一般" Style="{StaticResource SettingsNavigationButtonStyle}"
+                                      Click="SettingsGeneralTab_Click" AutomationProperties.Name="一般設定" />
+                        <ToggleButton x:Name="SettingsDictionaryTab" Canvas.Left="51" Canvas.Top="260"
+                                      Content="辞書" Style="{StaticResource SettingsNavigationButtonStyle}"
+                                      Click="SettingsDictionaryTab_Click" AutomationProperties.Name="用語辞書" />
+                        <ToggleButton x:Name="SettingsDetailsTab" Canvas.Left="51" Canvas.Top="302"
+                                      Content="詳細" Style="{StaticResource SettingsNavigationButtonStyle}"
+                                      Click="SettingsDetailsTab_Click" AutomationProperties.Name="詳細設定" />
+
+                        <Button Canvas.Left="164" Canvas.Top="50" Style="{StaticResource SettingsCloseButtonStyle}"
+                                Click="CloseButton_Click" ToolTip="閉じる" AutomationProperties.Name="閉じる">
+                            <Path Width="23" Height="23" Data="M 1 1 L 22 22 M 22 1 L 1 22" Stroke="#AEAEAE"
+                                  StrokeThickness="1.8" StrokeStartLineCap="Round" StrokeEndLineCap="Round" />
+                        </Button>
+
+                        <Border x:Name="SettingsContentPanel" Canvas.Left="226" Canvas.Top="28"
+                                Width="691" Height="691" Background="Transparent" CornerRadius="43"
+                                ClipToBounds="True">
+                            <Grid>
+                                <Grid x:Name="GeneralSettingsPage" Width="691" Height="691">
+                                    <ScrollViewer VerticalScrollBarVisibility="Auto"
+                                                  HorizontalScrollBarVisibility="Disabled" Focusable="False">
+                                        <StackPanel MinHeight="691">
+                                             <TextBlock x:Name="SettingsIntroText" Margin="35,34,0,0"
+                                                        Width="509" MinHeight="76" FontSize="16" LineHeight="19"
+                                                       Text="入力欄で押すと音声入力を始めます。録音中にSpaceを長押しすると、&#10;改行·プロンプト整形·そのまま送信の音声コマンドを使えます。&#10;編集できる文章を選択中なら音声で編集し、&#10;通常の文章を選択中ならその文章について質問できます。" />
+
+                                            <Grid x:Name="ShortcutSettingsPanel" Margin="35,47,0,0"
+                                                  Width="639" MinHeight="94">
+                                                <Grid.RowDefinitions>
+                                                    <RowDefinition Height="19" />
+                                                    <RowDefinition Height="7" />
+                                                    <RowDefinition Height="38" />
+                                                    <RowDefinition Height="3" />
+                                                    <RowDefinition Height="Auto" />
+                                                </Grid.RowDefinitions>
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="535" />
+                                                    <ColumnDefinition Width="104" />
+                                                </Grid.ColumnDefinitions>
+                                                <TextBlock Grid.Row="0" Grid.ColumnSpan="2" Text="ショートカットキー"
+                                                           FontSize="16" Foreground="{StaticResource SettingsMutedBrush}" />
+                                                <TextBlock x:Name="ShortcutCurrentText" Grid.Row="2" Grid.Column="0"
+                                                           FontSize="25" Height="32" VerticalAlignment="Center"
+                                                           Foreground="{StaticResource SettingsTextBrush}"
+                                                           AutomationProperties.Name="現在のショートカットキー" />
+                                                <Button x:Name="ShortcutChangeButton" Grid.Row="2" Grid.Column="1"
+                                                        Content="変更" Width="104" Height="38" Padding="6,0"
+                                                        Style="{StaticResource SettingsButtonStyle}" Click="ShortcutChangeButton_Click"
+                                                        AutomationProperties.Name="ショートカットキーを変更" />
+                                                <TextBlock x:Name="ShortcutCaptureStatus" Grid.Row="4" Grid.ColumnSpan="2"
+                                                           MinHeight="27" Text="" FontSize="11" LineHeight="15"
+                                                           TextWrapping="Wrap" Foreground="{StaticResource SettingsMutedBrush}"
+                                                           AutomationProperties.LiveSetting="Polite" />
+                                            </Grid>
+
+                                            <Border Margin="36,0,16,0" Height="1" Background="#FFFFFF" />
+
+                                            <Grid x:Name="OpenCodeModelSettingsPanel" Margin="35,29,0,0"
+                                                  Width="639" MinHeight="100">
+                                                <Grid.RowDefinitions>
+                                                    <RowDefinition Height="19" />
+                                                    <RowDefinition Height="13" />
+                                                    <RowDefinition Height="Auto" />
+                                                    <RowDefinition Height="3" />
+                                                    <RowDefinition Height="Auto" />
+                                                </Grid.RowDefinitions>
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="509" />
+                                                    <ColumnDefinition Width="26" />
+                                                    <ColumnDefinition Width="104" />
+                                                </Grid.ColumnDefinitions>
+                                                <TextBlock Grid.Row="0" Grid.ColumnSpan="3" Text="OpenCodeモデル"
+                                                           FontSize="16" Foreground="{StaticResource SettingsMutedBrush}" />
+                                                <ComboBox x:Name="OpenCodeModelCombo" Grid.Row="2" Grid.Column="0"
+                                                          Width="509" MinHeight="38" IsEditable="False"
+                                                          Background="{StaticResource SettingsControlBrush}"
+                                                          Foreground="{StaticResource SettingsControlTextBrush}"
+                                                          FontSize="15" ItemTemplate="{StaticResource DropdownDisplayNameTemplate}"
+                                                          Style="{StaticResource SettingsComboBoxStyle}"
+                                                          PreviewMouseWheel="SettingsComboBox_PreviewMouseWheel"
+                                                          DropDownOpened="OpenCodeModelCombo_DropDownOpened"
+                                                          SelectionChanged="OpenCodeModelCombo_SelectionChanged"
+                                                          ToolTip="{Binding SelectedItem.DisplayName, RelativeSource={RelativeSource Self}}"
+                                                          AutomationProperties.Name="OpenCode Desktopのモデル" />
+                                                <Button x:Name="RefreshOpenCodeModelsButton" Grid.Row="2" Grid.Column="2"
+                                                        Content="更新" Width="104" Height="38" Padding="6,0"
+                                                        VerticalAlignment="Center"
+                                                        Style="{StaticResource SettingsButtonStyle}"
+                                                        Click="RefreshOpenCodeModels_Click"
+                                                        AutomationProperties.Name="OpenCodeモデル一覧を更新" />
+                                                <TextBlock x:Name="OpenCodeModelStatus" Grid.Row="4" Grid.ColumnSpan="3"
+                                                           MinHeight="27" FontSize="11" LineHeight="14"
+                                                           TextWrapping="Wrap" Foreground="{StaticResource SettingsMutedBrush}"
+                                                           AutomationProperties.LiveSetting="Polite" />
+                                            </Grid>
+
+                                            <Border Margin="36,0,16,0" Height="1" Background="#FFFFFF" />
+
+                                            <Grid x:Name="MicrophoneSettingsPanel" Margin="35,33,0,0"
+                                                  Width="639" MinHeight="112">
+                                                <Grid.RowDefinitions>
+                                                    <RowDefinition Height="19" />
+                                                    <RowDefinition Height="23" />
+                                                    <RowDefinition Height="Auto" />
+                                                    <RowDefinition Height="3" />
+                                                    <RowDefinition Height="Auto" />
+                                                </Grid.RowDefinitions>
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="509" />
+                                                    <ColumnDefinition Width="26" />
+                                                    <ColumnDefinition Width="104" />
+                                                </Grid.ColumnDefinitions>
+                                                <TextBlock Grid.Row="0" Grid.ColumnSpan="3" Text="音声入力デバイス"
+                                                           FontSize="16" Foreground="{StaticResource SettingsMutedBrush}" />
+                                                <ComboBox x:Name="MicrophoneDeviceCombo" Grid.Row="2" Grid.Column="0"
+                                                          Width="509" MinHeight="38" IsEditable="False"
+                                                          Background="{StaticResource SettingsControlBrush}"
+                                                          Foreground="{StaticResource SettingsControlTextBrush}"
+                                                          FontSize="15" ItemTemplate="{StaticResource AudioInputDisplayNameTemplate}"
+                                                          Style="{StaticResource SettingsComboBoxStyle}"
+                                                          PreviewMouseWheel="SettingsComboBox_PreviewMouseWheel"
+                                                          DropDownOpened="MicrophoneDeviceCombo_DropDownOpened"
+                                                          SelectionChanged="MicrophoneDeviceCombo_SelectionChanged"
+                                                          ToolTip="{Binding SelectedItem.DisplayName, RelativeSource={RelativeSource Self}}"
+                                                          AutomationProperties.Name="音声入力デバイス" />
+                                                <Button x:Name="RefreshMicrophoneDevicesButton" Grid.Row="2" Grid.Column="2"
+                                                        Content="更新" Width="104" Height="38" Padding="6,0"
+                                                        VerticalAlignment="Center"
+                                                        Style="{StaticResource SettingsButtonStyle}"
+                                                        Click="RefreshMicrophoneDevices_Click"
+                                                        AutomationProperties.Name="音声入力デバイス一覧を更新" />
+                                                <TextBlock x:Name="MicrophoneDeviceStatus" Grid.Row="4" Grid.ColumnSpan="3"
+                                                           MinHeight="27" FontSize="11" LineHeight="14"
+                                                           TextWrapping="Wrap" Foreground="{StaticResource SettingsMutedBrush}"
+                                                           AutomationProperties.LiveSetting="Polite" />
+                                            </Grid>
+
+                                            <Border Margin="36,0,16,0" Height="1" Background="#FFFFFF" />
+
+                                            <CheckBox x:Name="IndicatorHintsCheckBox" Margin="39,22,0,0"
+                                                      Width="604" Height="38" Content="インジケーターに操作ヒントを表示"
+                                                      IsThreeState="False" Style="{StaticResource SettingsCheckBoxStyle}"
+                                                      Checked="IndicatorHintsCheckBox_Changed"
+                                                      Unchecked="IndicatorHintsCheckBox_Changed"
+                                                      AutomationProperties.Name="インジケーターに操作ヒントを表示"
+                                                      ToolTip="録音やAI処理の操作方法を画面に表示します。" />
+                                        </StackPanel>
+                                    </ScrollViewer>
+                                </Grid>
+
+                                <Canvas x:Name="DictionarySettingsPage" Width="691" Height="691"
+                                        Visibility="Collapsed">
+                                    <Canvas x:Name="CorrectionDictionarySettingsPanel" Width="691" Height="691">
+                                        <Grid Canvas.Left="39" Canvas.Top="20" Width="230" Height="38">
+                                            <Border Background="{StaticResource SettingsControlBrush}" CornerRadius="19" />
+                                            <TextBox x:Name="DictionaryPreferredSpellingBox" Style="{StaticResource DictionaryInputStyle}"
+                                                     MaxLength="100" TextChanged="DictionaryPreferredSpellingBox_TextChanged"
+                                                     AutomationProperties.Name="辞書に登録する正しい表記"
+                                                     ToolTip="ここに正しい表記を入力" />
+                                            <TextBlock x:Name="DictionaryPreferredPlaceholder" Text="ここに正しい表記を入力"
+                                                       Margin="12,0" VerticalAlignment="Center" FontSize="12"
+                                                       Foreground="#686868" IsHitTestVisible="False" />
+                                        </Grid>
+                                        <Grid Canvas.Left="283" Canvas.Top="20" Width="230" Height="38">
+                                            <Border Background="{StaticResource SettingsControlBrush}" CornerRadius="19" />
+                                            <TextBox x:Name="DictionaryAlternativesBox" Style="{StaticResource DictionaryInputStyle}"
+                                                     MaxLength="400" TextChanged="DictionaryAlternativesBox_TextChanged"
+                                                     AutomationProperties.Name="辞書に登録する誤認識・別表記"
+                                                     ToolTip="ここに間違った表記を入力" />
+                                            <TextBlock x:Name="DictionaryAlternativesPlaceholder" Text="ここに間違った表記を入力"
+                                                       Margin="12,0" VerticalAlignment="Center" FontSize="12"
+                                                       Foreground="#686868" IsHitTestVisible="False" />
+                                        </Grid>
+                                        <Button Canvas.Left="526" Canvas.Top="20" Content="追加" Width="104" Height="38"
+                                                Padding="6,0" Style="{StaticResource SettingsButtonStyle}"
+                                                Click="AddCorrectionDictionaryEntry_Click"
+                                                AutomationProperties.Name="用語辞書に追加" />
+                                        <TextBlock x:Name="CorrectionDictionaryStatus" Canvas.Left="35" Canvas.Top="62"
+                                                   Width="639" Height="17" FontSize="11"
+                                                   Foreground="{StaticResource SettingsMutedBrush}"
+                                                   TextWrapping="NoWrap" TextTrimming="CharacterEllipsis"
+                                                   ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}"
+                                                   AutomationProperties.LiveSetting="Polite" />
+
+                                        <ScrollViewer Canvas.Left="26" Canvas.Top="80" Width="640" Height="584"
+                                                      VerticalScrollBarVisibility="Auto"
+                                                      HorizontalScrollBarVisibility="Disabled" Focusable="False">
+                                            <StackPanel>
+                                                <TextBlock x:Name="DictionaryListEmptyText"
+                                                           Text="辞書に登録された単語はありません。"
+                                                           FontSize="13" Foreground="{StaticResource SettingsMutedBrush}"
+                                                           Margin="14,16,14,0" Visibility="Collapsed" />
+                                                <ItemsControl x:Name="CorrectionDictionaryItems" Margin="0,0,0,0">
+                                                    <ItemsControl.ItemTemplate>
+                                                        <DataTemplate>
+                                                            <Border Background="#302F2F" CornerRadius="43"
+                                                                    MinHeight="87" Padding="25,14,36,14"
+                                                                    Margin="0,0,0,16">
+                                                                <Grid MinHeight="57">
+                                                                    <Grid.ColumnDefinitions>
+                                                                        <ColumnDefinition Width="*" />
+                                                                        <ColumnDefinition Width="104" />
+                                                                    </Grid.ColumnDefinitions>
+                                                                    <TextBlock Grid.Column="0" Text="{Binding Summary}"
+                                                                               FontSize="20" LineHeight="26.63"
+                                                                               VerticalAlignment="Center"
+                                                                               TextWrapping="Wrap" TextTrimming="None"
+                                                                               Foreground="{StaticResource SettingsTextBrush}"
+                                                                               Margin="0,0,12,0" />
+                                                                    <Button Grid.Column="1" Content="削除" Tag="{Binding}"
+                                                                            Width="104" Height="38" Padding="6,0"
+                                                                            VerticalAlignment="Center"
+                                                                            Style="{StaticResource SettingsButtonStyle}"
+                                                                            Click="RemoveCorrectionDictionaryEntry_Click"
+                                                                            AutomationProperties.Name="この辞書項目を削除" />
+                                                                </Grid>
+                                                            </Border>
+                                                        </DataTemplate>
+                                                    </ItemsControl.ItemTemplate>
+                                                </ItemsControl>
+                                                <Expander x:Name="SuppressedDictionarySection" Margin="0,0,0,8"
+                                                          Visibility="Collapsed" IsExpanded="False"
+                                                          Foreground="{StaticResource SettingsTextBrush}"
+                                                          Background="#302F2F">
+                                                    <Expander.Header>
+                                                        <TextBlock Text="削除済み用語の再学習設定" FontSize="13"
+                                                                   Foreground="{StaticResource SettingsMutedBrush}" />
+                                                    </Expander.Header>
+                                                    <StackPanel Margin="14,6,14,12">
+                                                        <TextBlock Text="再学習を許可すると、次に手修正した文章を送信したときから候補を判定します。"
+                                                                   FontSize="11" Foreground="{StaticResource SettingsMutedBrush}"
+                                                                   TextWrapping="Wrap" Margin="0,0,0,8" />
+                                                        <ItemsControl x:Name="SuppressedDictionaryItems">
+                                                            <ItemsControl.ItemTemplate>
+                                                                <DataTemplate>
+                                                                    <Border Background="#242424" CornerRadius="14"
+                                                                            Padding="12,8" Margin="0,0,0,6">
+                                                                        <DockPanel LastChildFill="True">
+                                                                            <Button DockPanel.Dock="Right" Content="再学習を許可"
+                                                                                    Tag="{Binding Term}" Height="32" MinWidth="104"
+                                                                                    Padding="8,0" Margin="8,0,0,0"
+                                                                                    Style="{StaticResource SettingsButtonStyle}"
+                                                                                    FontSize="13"
+                                                                                    Click="AllowSuppressedDictionaryTerm_Click"
+                                                                                    AutomationProperties.Name="{Binding AllowActionName}" />
+                                                                            <TextBlock Text="{Binding Term}" VerticalAlignment="Center"
+                                                                                       FontSize="13" TextWrapping="Wrap"
+                                                                                       Foreground="{StaticResource SettingsTextBrush}" />
+                                                                        </DockPanel>
+                                                                    </Border>
+                                                                </DataTemplate>
+                                                            </ItemsControl.ItemTemplate>
+                                                        </ItemsControl>
+                                                    </StackPanel>
+                                                </Expander>
+                                                <TextBlock x:Name="DictionaryListStatus" FontSize="11"
+                                                           Foreground="{StaticResource SettingsMutedBrush}"
+                                                           Margin="0,6,0,0" TextWrapping="Wrap"
+                                                           AutomationProperties.LiveSetting="Polite" />
+                                            </StackPanel>
+                                        </ScrollViewer>
+                                    </Canvas>
+                                </Canvas>
+
+                                <Canvas x:Name="DetailsSettingsPage" Width="691" Height="691"
+                                        Visibility="Collapsed">
+                                    <Canvas x:Name="DiscordMuteSettingsPanel" Canvas.Left="35" Canvas.Top="85"
+                                            Width="639" Height="72">
+                                        <TextBlock Canvas.Left="4" Canvas.Top="9" Width="440" Height="25"
+                                                   Text="音声入力中はDiscordをミュートする" FontSize="16"
+                                                   Foreground="{StaticResource SettingsTextBrush}" />
+                                        <CheckBox x:Name="DiscordMuteEnabledCheckBox" Canvas.Left="464" Canvas.Top="0"
+                                                  Width="38" Height="38" IsThreeState="False"
+                                                  Style="{StaticResource SettingsCheckBoxStyle}"
+                                                  Checked="DiscordMuteEnabledCheckBox_Changed"
+                                                  Unchecked="DiscordMuteEnabledCheckBox_Changed"
+                                                  AutomationProperties.Name="音声入力中にDiscordを自動ミュート" />
+                                        <Button x:Name="DiscordMuteTutorialButton" Canvas.Left="535" Canvas.Top="0"
+                                                Content="設定方法" Width="104" Height="38" Padding="4,0"
+                                                Style="{StaticResource SettingsButtonStyle}"
+                                                Click="DiscordMuteTutorialButton_Click"
+                                                AutomationProperties.Name="Discordミュートの設定方法を表示" />
+                                        <TextBlock x:Name="DiscordMuteStatus" Canvas.Left="0" Canvas.Top="43"
+                                                   Width="639" Height="20" FontSize="11"
+                                                   Foreground="{StaticResource SettingsMutedBrush}"
+                                                   AutomationProperties.LiveSetting="Polite" />
+                                    </Canvas>
+
+                                    <Canvas x:Name="DiscordMuteShortcutPanel" Canvas.Left="35" Canvas.Top="157"
+                                            Width="639" Height="94">
+                                        <TextBlock Canvas.Left="0" Canvas.Top="0" Text="ショートカットキー"
+                                                   FontSize="16" Foreground="{StaticResource SettingsMutedBrush}" />
+                                        <TextBlock x:Name="DiscordMuteShortcutCurrentText" Canvas.Left="0" Canvas.Top="30"
+                                                   FontSize="25" Height="32" Text="未設定"
+                                                   Foreground="{StaticResource SettingsTextBrush}"
+                                                   AutomationProperties.Name="Discordミュート用ショートカット" />
+                                        <Button x:Name="DiscordMuteShortcutChangeButton" Canvas.Left="535" Canvas.Top="26"
+                                                Content="変更" Width="104" Height="38" Padding="6,0"
+                                                Style="{StaticResource SettingsButtonStyle}"
+                                                Click="DiscordMuteShortcutChangeButton_Click"
+                                                AutomationProperties.Name="Discordミュート用ショートカットを変更" />
+                                        <TextBlock x:Name="DiscordMuteShortcutCaptureStatus" Canvas.Left="0" Canvas.Top="67"
+                                                   Width="639" Height="27" FontSize="11" LineHeight="14"
+                                                   Foreground="{StaticResource SettingsMutedBrush}"
+                                                   AutomationProperties.LiveSetting="Polite" />
+                                    </Canvas>
+
+                                    <Border Canvas.Left="36" Canvas.Top="251" Width="639" Height="0.5"
+                                            Background="#FFFFFF" />
+
+                                    <Canvas x:Name="SelectedTextAnswerSettingsPanel" Canvas.Left="35" Canvas.Top="281"
+                                            Width="639" Height="205">
+                                        <TextBlock Canvas.Left="0" Canvas.Top="0" Text="回答方法"
+                                                   FontSize="16" Foreground="{StaticResource SettingsMutedBrush}" />
+                                        <ComboBox x:Name="SelectedTextAnswerModeCombo" Canvas.Left="0" Canvas.Top="32"
+                                                  Width="639" Height="38" MinHeight="38" IsEditable="False"
+                                                  Background="{StaticResource SettingsControlBrush}"
+                                                  Foreground="{StaticResource SettingsControlTextBrush}"
+                                                  FontSize="15" Style="{StaticResource SettingsComboBoxStyle}"
+                                                  PreviewMouseWheel="SettingsComboBox_PreviewMouseWheel"
+                                                  SelectionChanged="SelectedTextAnswerModeCombo_SelectionChanged"
+                                                  AutomationProperties.Name="選択文章への回答方法">
+                                            <ComboBoxItem Content="OpenCodeのテキスト回答" Tag="opencode"
+                                                          ContentTemplate="{StaticResource SettingsDropdownItemContentTemplate}"
+                                                          Style="{StaticResource DarkDropdownItemStyle}"
+                                                          AutomationProperties.Name="OpenCodeのテキスト回答" />
+                                            <ComboBoxItem Content="GPT Liveの音声会話" Tag="gpt-live"
+                                                          ContentTemplate="{StaticResource SettingsDropdownItemContentTemplate}"
+                                                          Style="{StaticResource DarkDropdownItemStyle}"
+                                                          AutomationProperties.Name="GPT Liveの音声会話" />
+                                        </ComboBox>
+                                        <TextBlock Canvas.Left="0" Canvas.Top="86" Width="400" Height="18"
+                                                   Text="GPT LiveにはChatGPTサブスクリプションが必要です。"
+                                                   FontSize="10" Foreground="{StaticResource SettingsMutedBrush}"
+                                                   TextWrapping="Wrap" />
+                                        <DockPanel x:Name="GptLiveSignInPanel" Canvas.Left="0" Canvas.Top="115"
+                                                   Width="639" Height="43" LastChildFill="True"
+                                                   Visibility="Collapsed">
+                                            <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+                                                <Button x:Name="GptLiveSignInButton" Content="サインイン"
+                                                        MinWidth="104" Height="38" Padding="8,0" Margin="6,0,0,0"
+                                                        Style="{StaticResource SettingsButtonStyle}" FontSize="15"
+                                                        Click="GptLiveSignInButton_Click"
+                                                        AutomationProperties.Name="ChatGPTにサインイン" />
+                                                <Button x:Name="GptLiveSignOutButton" Content="サインアウト"
+                                                        MinWidth="104" Height="38" Padding="8,0" Margin="6,0,0,0"
+                                                        Style="{StaticResource SettingsButtonStyle}" FontSize="15"
+                                                        Click="GptLiveSignOutButton_Click"
+                                                        AutomationProperties.Name="ChatGPTからサインアウト" />
+                                            </StackPanel>
+                                            <TextBlock x:Name="GptLiveSignInStatus" FontSize="11"
+                                                       Foreground="{StaticResource SettingsMutedBrush}"
+                                                       VerticalAlignment="Center"
+                                                       AutomationProperties.LiveSetting="Polite" />
+                                        </DockPanel>
+                                    </Canvas>
+                                </Canvas>
+
+                                <Grid x:Name="DiscordMuteTutorialPage" Background="{StaticResource SettingsSurfaceBrush}"
+                                      Visibility="Collapsed" Panel.ZIndex="10">
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="66" />
+                                        <RowDefinition Height="*" />
+                                    </Grid.RowDefinitions>
+                                    <StackPanel Grid.Row="0" Orientation="Horizontal" VerticalAlignment="Top"
+                                                Margin="35,20,0,0">
+                                        <Button Content="← 戻る" Height="38" MinWidth="104" Padding="12,0"
+                                                Style="{StaticResource SettingsButtonStyle}"
+                                                Click="BackFromDiscordMuteTutorial_Click"
+                                                AutomationProperties.Name="詳細設定に戻る" />
+                                        <TextBlock Text="Discordの設定方法" FontSize="17" FontWeight="SemiBold"
+                                                   VerticalAlignment="Center" Margin="14,0,0,0" />
+                                    </StackPanel>
+                                    <ScrollViewer Grid.Row="1" Margin="35,4,35,24"
+                                                  VerticalScrollBarVisibility="Auto"
+                                                  HorizontalScrollBarVisibility="Disabled" Focusable="False">
+                                        <StackPanel>
+                                            <TextBlock Text="Discordの入力モードを「音声検出」にしてから設定してください。「プッシュしてミュート」は、登録したキーを押している間だけマイク送信を止めます。"
+                                                       FontSize="12" Foreground="{StaticResource SettingsMutedBrush}"
+                                                       TextWrapping="Wrap" Margin="0,0,0,12" />
+                                            <TextBlock Text="1. Discordの左下にある歯車から「ユーザー設定」を開きます。"
+                                                       FontSize="13" Margin="0,0,0,10" />
+                                            <TextBlock Text="2. 左側の「システム設定」を開きます。"
+                                                       FontSize="13" Margin="0,0,0,10" />
+                                            <TextBlock Text="3. 「カスタムキーバインド」を選びます。"
+                                                       FontSize="13" Margin="0,0,0,10" />
+                                            <TextBlock Text="4. 「キーバインドを追加」を押します。"
+                                                       FontSize="13" Margin="0,0,0,10" />
+                                            <TextBlock Text="5. アクションに「プッシュしてミュート」を選びます。"
+                                                       FontSize="13" Margin="0,0,0,10" />
+                                            <TextBlock Text="6. Discordで使うキーの組み合わせを押して登録します。ほかのアプリで使っていない組み合わせがおすすめです。"
+                                                       FontSize="13" Margin="0,0,0,10" />
+                                            <TextBlock Text="7. Better Flowの設定に戻り、「変更」を押して同じキーの組み合わせを登録します。"
+                                                       FontSize="13" Margin="0,0,0,10" />
+                                            <Border Background="#302F2F" CornerRadius="18" Padding="16" Margin="0,4,0,0">
+                                                <TextBlock Text="Better Flowがマイクを使っている間だけキーを押し続け、音声入力が終わるとキーを離します。録音できないときは、Discord側とBetter Flow側のキーが同じか確認してください。"
+                                                           FontSize="11" Foreground="{StaticResource SettingsMutedBrush}"
+                                                           TextWrapping="Wrap" />
+                                            </Border>
+                                        </StackPanel>
+                                    </ScrollViewer>
+                                </Grid>
+                            </Grid>
+                        </Border>
+                    </Canvas>
+                </Border>
+            </Grid>
+        </Viewbox>
     </Grid>
 </Window>

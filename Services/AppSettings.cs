@@ -54,7 +54,7 @@ internal sealed class CorrectionDictionaryEntry
     [JsonIgnore]
     public string Summary => AlternativeSpellings.Count == 0
         ? PreferredSpelling
-        : $"{PreferredSpelling}\n誤認識・別表記: {string.Join("、", AlternativeSpellings)}";
+        : $"{PreferredSpelling}\n誤認識: {string.Join("、", AlternativeSpellings)}";
 }
 
 internal sealed class DictionaryLearningEvidence
