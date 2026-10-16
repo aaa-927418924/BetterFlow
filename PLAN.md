@@ -782,7 +782,7 @@
 - 更新前EXEを`artifacts/BetterFlow-before-voice-command-homophone-20261016.exe`へバックアップ。旧EXEとバックアップのSHA-256は`BC0CFDC6B7CE285BCB0EF9CB5FE3DD4C293A0A3ACB15B27F07DA1F4F7A642027`で一致。配布EXEと完全一致するプロセス（PID 36772）を停止して置換した。
 - 実マイクでの発話、利用者が選んだOpenCodeモデルの推論・改行実行は未確認。テストスイートは実行していないため、実機での認識成功を確認済みとは扱わない。
 
-### 追加修正計画（2026-10-16、実装前）
+### 追加修正計画と実装（2026-10-16）
 
 前回版でも誤漢字のPTTコマンドが処理されない事例が残った。コードを再確認すると、完全一致しないコマンドは既存AI要求に渡っていたが、応答検証は未解決の入力markerを検出するだけだった。モデルがmarkerを単に削除し、コマンド操作自体を適用しなかった応答を成功として通せる。
 
@@ -792,4 +792,12 @@
 4. アプリ側で全コマンドIDが一度ずつ解決済みであることを検証し、未解決・欠落・重複があれば貼り付けず、失敗を明示する。検証後は内部markerを取り除き、line-break markerだけを改行へ変換する。
 5. 追加のAI要求、用語辞書への登録、通常音声入力、ASRモデルは増やさない。Releaseビルド、単体EXEの発行・旧版バックアップ・置換を行い、実マイク動作は未検証として区別する。
 
-実装前チェックポイントを作成してから着手する。
+実装前チェックポイント: `952fe44`。
+
+#### 実装結果
+
+- `Services/TranscriptRewritePrompt.cs`に「開業」「開場」などを漢字の意味どおり処理せず、読み・発音とPTT文脈から判断する例を追加した。これは例示であり、例語だけを置き換える規則にはしていない。各voice-command JSON objectに、そのコマンドID専用の「改行適用」「編集適用」「未解決」markerも追加した。
+- `Services/VoiceCommandParser.cs`と`MainWindow.xaml.cs`で、AI応答内に各コマンドの結果markerがちょうど1つあり、全コマンドが解決済みであることを検証するよう変更。marker欠落・未解決・重複時は貼り付けず、音声指示の再試行を案内する。改行は対応するコマンド位置で実際の改行に復元する。追加モデル要求や辞書学習は使わない。
+- `dotnet build AutoPrompt.csproj -c Release --no-restore`と単体EXEの`dotnet publish`が成功（0エラー、NuGet脆弱性フィード取得のNU1900警告1件）。発行元と`dist/Better Flow.exe`は82,509,762 bytes、SHA-256 `A112B5AFEDC0429C72AF9E270D6EEFD518E79BE65340770B2C38C9F25349088F`で一致。
+- 更新前EXEは`artifacts/BetterFlow-before-voice-command-marker-validation-20261016.exe`へ保存。旧版とバックアップのSHA-256は`91FAD689AC88189DA4C644CCEF8429A08BF687582BBB25B9268B5DC6D14D363C`で一致。配布EXEと完全一致するプロセス（PID 38492）を停止して置換した。
+- 実マイクで「開業」「開場」が改行として解釈されるか、利用中のOpenCodeモデルでの動作はまだ未確認。コード検証とビルドのみで実機の認識成功とは扱わない。

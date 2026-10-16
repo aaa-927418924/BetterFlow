@@ -7,12 +7,47 @@ internal static partial class VoiceCommandParser
     private static readonly char[] CommandSeparators = [' ', '\t', '\u3000', '、', ',', '，', '.', '．'];
     private const string ExplicitLineBreakMarker = "__BETTERFLOW_EXPLICIT_LINE_BREAK__";
     private const string VoiceCommandMarkerPrefix = "__BETTERFLOW_VOICE_COMMAND_";
+    private const string VoiceCommandLineBreakMarkerPrefix = "__BETTERFLOW_VOICE_COMMAND_LINE_BREAK_";
+    private const string VoiceCommandAppliedMarkerPrefix = "__BETTERFLOW_VOICE_COMMAND_APPLIED_";
+    private const string VoiceCommandUnresolvedMarkerPrefix = "__BETTERFLOW_VOICE_COMMAND_UNRESOLVED_";
     public const string PromptFormatInstruction = "発話した内容の意味と要望を保ったまま、プロンプトとして使いやすく整えてください。";
 
     public static string CreateVoiceCommandMarker(string sessionId, int index) =>
         $"{VoiceCommandMarkerPrefix}{sessionId}_{index:D4}__";
 
-    public static bool HasUnresolvedVoiceCommandMarker(string text) => VoiceCommandMarkerRegex().IsMatch(text);
+    public static string CreateVoiceCommandLineBreakMarker(string marker) =>
+        CreateVoiceCommandOutcomeMarker(marker, VoiceCommandLineBreakMarkerPrefix);
+
+    public static string CreateVoiceCommandAppliedMarker(string marker) =>
+        CreateVoiceCommandOutcomeMarker(marker, VoiceCommandAppliedMarkerPrefix);
+
+    public static string CreateVoiceCommandUnresolvedMarker(string marker) =>
+        CreateVoiceCommandOutcomeMarker(marker, VoiceCommandUnresolvedMarkerPrefix);
+
+    public static bool HasUnresolvedVoiceCommandMarker(string text) =>
+        VoiceCommandMarkerRegex().IsMatch(text) || VoiceCommandUnresolvedMarkerRegex().IsMatch(text);
+
+    public static bool HasExactlyOneResolvedMarkerPerCommand(
+        string text,
+        IReadOnlyList<VoiceEditCommandInstruction> commands)
+    {
+        if (HasUnresolvedVoiceCommandMarker(text))
+            return false;
+
+        var outcomeMarkers = VoiceCommandOutcomeMarkerRegex().Matches(text);
+        if (outcomeMarkers.Count != commands.Count)
+            return false;
+
+        foreach (var command in commands)
+        {
+            var lineBreakCount = CountOccurrences(text, CreateVoiceCommandLineBreakMarker(command.Marker));
+            var appliedCount = CountOccurrences(text, CreateVoiceCommandAppliedMarker(command.Marker));
+            if (lineBreakCount + appliedCount != 1)
+                return false;
+        }
+
+        return true;
+    }
 
     public static string RemoveVoiceCommandMarkers(string text)
     {
@@ -21,6 +56,20 @@ internal static partial class VoiceCommandParser
 
         var withoutMarkers = VoiceCommandMarkerRegex().Replace(text, string.Empty);
         return Regex.Replace(withoutMarkers, "[ \\t]{2,}", " ").Trim(' ', '\t', '\r');
+    }
+
+    public static string RestoreVoiceCommandOutcomes(
+        string text,
+        IReadOnlyList<VoiceEditCommandInstruction> commands)
+    {
+        foreach (var command in commands)
+        {
+            var lineBreakMarker = Regex.Escape(CreateVoiceCommandLineBreakMarker(command.Marker));
+            text = Regex.Replace(text, $"[ \\t]*{lineBreakMarker}[ \\t]*", "\n", RegexOptions.CultureInvariant);
+            text = text.Replace(CreateVoiceCommandAppliedMarker(command.Marker), string.Empty, StringComparison.Ordinal);
+        }
+
+        return Regex.Replace(text, "[ \\t]{2,}", " ").Trim(' ', '\t', '\r');
     }
 
     public static string MarkExplicitLineBreaks(string transcript) =>
@@ -84,6 +133,27 @@ internal static partial class VoiceCommandParser
         return normalized.Replace("下さい", "ください", StringComparison.Ordinal);
     }
 
+    private static string CreateVoiceCommandOutcomeMarker(string marker, string outcomePrefix)
+    {
+        if (!marker.StartsWith(VoiceCommandMarkerPrefix, StringComparison.Ordinal) ||
+            !VoiceCommandMarkerRegex().IsMatch(marker))
+            throw new ArgumentException("音声コマンドmarkerの形式が正しくありません。", nameof(marker));
+
+        return outcomePrefix + marker[VoiceCommandMarkerPrefix.Length..];
+    }
+
+    private static int CountOccurrences(string text, string value)
+    {
+        var count = 0;
+        var index = 0;
+        while ((index = text.IndexOf(value, index, StringComparison.Ordinal)) >= 0)
+        {
+            count++;
+            index += value.Length;
+        }
+        return count;
+    }
+
     [GeneratedRegex("(?:送信\\s*して|送っ\\s*て)(?:\\s*(?:ください|下さい))?[。！？!?…．.」』）)]*\\s*$", RegexOptions.CultureInvariant)]
     private static partial Regex SendDirectiveAtEndRegex();
 
@@ -92,6 +162,12 @@ internal static partial class VoiceCommandParser
 
     [GeneratedRegex("__BETTERFLOW_VOICE_COMMAND_[a-f0-9]{32}_\\d{4,}__", RegexOptions.CultureInvariant)]
     private static partial Regex VoiceCommandMarkerRegex();
+
+    [GeneratedRegex("__BETTERFLOW_VOICE_COMMAND_UNRESOLVED_[a-f0-9]{32}_\\d{4,}__", RegexOptions.CultureInvariant)]
+    private static partial Regex VoiceCommandUnresolvedMarkerRegex();
+
+    [GeneratedRegex("__BETTERFLOW_VOICE_COMMAND_(?:LINE_BREAK|APPLIED)_[a-f0-9]{32}_\\d{4,}__", RegexOptions.CultureInvariant)]
+    private static partial Regex VoiceCommandOutcomeMarkerRegex();
 }
 
 internal enum VoiceTextCommand

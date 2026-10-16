@@ -36,7 +36,12 @@ internal static class TranscriptRewritePrompt
             message += " voice_edit_instructionsがある場合は、ユーザーが音声で指定した文章編集指示です。指示を記載順にtranscriptだけへ適用し、指示文自体は出力本文に含めないでください。翻訳・要約・箇条書き・文体変更など、明示された編集はその指定に限って実行し、その場合は一般的な文体維持や要約・箇条書き禁止の規則より明示指示を優先してください。指示されていない意味、条件、固有名詞、事実は保ってください。PC操作、アプリ操作、ツール実行や送信は行わず、編集後の本文だけを返してください.";
 
         if (hasVoiceCommandSegments)
-            message += " voice_command_segmentsは、ユーザーがSpaceを押している間に音声コマンドとして話した区間のASR記録です。Space長押し中の発話であること自体を、本文のディクテーションではなく文章操作の指示だと判断する根拠にしてください。recognized_textは発話そのものではなく不確かな書き起こしなので、文字面だけで解釈しないでください。特に日本語は、漢字の意味だけで決めず、漢字を自然な読みへ戻した発音、同音語、近い音、音の脱落・置換を候補にして、markerの位置と前後の本文から意図された文章編集操作を復元してください。固定フレーズや誤認識語の対応表との完全一致は要求しません。編集コマンドとしての読みが文字面の意味より明らかに自然なら、読みと文章編集の文脈を優先してください。ただし複数の意図が同程度にあり得る場合は勝手に操作を選ばず、別の意味を作らないでください。各markerはその発話位置を示します。改行など位置で実行する操作は、該当markerを__BETTERFLOW_EXPLICIT_LINE_BREAK__へ置き換えてください。この場合は、transcriptにもともとある明示改行の個数を維持したうえで、指示を実行するための追加マーカーを出力して構いません。翻訳や要約などtranscript全体への操作は指示順に適用し、markerを取り除いてください。音声コマンドの認識文を本文へ混ぜず、すべてのvoice command markerを出力から除いてください。PC操作、アプリ操作、ツール実行、送信は行わず、変換後の本文だけを返してください.";
+        {
+            message = message.Replace("音声コマンドで指定された明示的な改行は、入力中の",
+                "transcriptにもともと含まれていた明示的な改行は、入力中の", StringComparison.Ordinal);
+            message += "ここで既に説明した__BETTERFLOW_EXPLICIT_LINE_BREAK__はtranscriptに元から含まれていた改行だけを示します。PTTコマンドで新しい改行を指定された場合は、下記のコマンドID付き結果markerを使ってください。voice_command_segmentsは、ユーザーがSpaceを押している間に音声コマンドとして話した区間のASR記録です。Space長押し中の発話であること自体を、本文のディクテーションではなく文章操作の指示だと判断する根拠にしてください。recognized_textは発話そのものではなく不確かな書き起こしなので、漢字の意味だけで解釈せず、日本語の読みを考えて発音、同音語、近い音、音の脱落・置換を照合し、markerの位置と前後の本文からコマンドを復元してください。たとえば「ここで開業して」「ここで開場して」のような表記でも、読みと編集文脈から「ここで改行して」という意図が明らかなら改行してください。この例だけを置換する規則ではなく、すべてのPTTコマンドで同じ読み優先の判断をしてください。固定フレーズや誤認識語の対応表との完全一致は要求しません。複数の意図が同程度にあり得る場合は勝手に操作を選ばず、未解決として示してください。各markerはその発話位置を示します。すべてのコマンドmarkerは、操作を適用した後に必ず対応する1つの結果markerへ置き換えてください。改行操作は元markerを__BETTERFLOW_VOICE_COMMAND_LINE_BREAK_0123456789abcdef0123456789abcdef_0000__の形式へ、他の編集を適用したときは__BETTERFLOW_VOICE_COMMAND_APPLIED_0123456789abcdef0123456789abcdef_0000__の形式へ置き換え、元markerの32桁IDと番号は一字も変えないでください。判断できない場合は__BETTERFLOW_VOICE_COMMAND_UNRESOLVED_0123456789abcdef0123456789abcdef_0000__の形式を使ってください。markerを黙って削除したり、操作を適用せずAPPLIEDにしたりしてはいけません。明示改行markerは既存の個数と綴りのまま維持してください。音声コマンドの認識文は本文へ混ぜず、すべての内部markerは最終的にアプリ側で除去されます。PC操作、アプリ操作、ツール実行、送信は行わず、変換後の本文だけを返してください.";
+            message += "voice_command_segmentsがある応答には、編集後本文に加えて上記の各コマンド専用result markerだけを含め、説明文は返さないでください。";
+        }
 
         return message;
     }
@@ -57,7 +62,13 @@ internal static class TranscriptRewritePrompt
             .Select(command => new
             {
                 marker = Clean(command.Marker, 80),
-                recognized_text = Clean(command.RecognizedText, MaximumVoiceCommandLength)
+                recognized_text = Clean(command.RecognizedText, MaximumVoiceCommandLength),
+                line_break_result_marker = Clean(
+                    VoiceCommandParser.CreateVoiceCommandLineBreakMarker(command.Marker), 100),
+                applied_result_marker = Clean(
+                    VoiceCommandParser.CreateVoiceCommandAppliedMarker(command.Marker), 100),
+                unresolved_result_marker = Clean(
+                    VoiceCommandParser.CreateVoiceCommandUnresolvedMarker(command.Marker), 100)
             })
             .Where(command => command.marker.Length > 0 && command.recognized_text.Length > 0)
             .Select(command => (object)command)
@@ -111,9 +122,14 @@ internal static class TranscriptRewritePrompt
         if (cleanedEditInstructions.Length > 0)
             instructions += "voice_edit_instructionsはユーザーが音声で指定した編集指示の配列です。指示の順番でtranscriptだけを編集し、指示文自体は出力に含めないでください。編集指示をPCやアプリの操作として実行しないでください。";
         if (cleanedVoiceEditCommands.Length > 0)
-            instructions += "voice_command_segmentsはSpaceを押している間に話された音声コマンドと、transcript内の発話位置を示すmarkerの対応表です。この区間はコマンドとして話されたという確かな情報を使い、認識文字列を文字起こし本文として残さないでください。ASR結果のrecognized_textは音の記録として扱ってください。日本語の漢字表記を意味だけで決めず、自然な読みへ戻した発音を比較し、同音語・近い音・脱落・置換と文章編集の文脈からコマンド意図を判断してください。特定の誤認識語や固定フレーズの一致は必須ではありません。コマンド意図が明確な場合はその操作を実行し、指示順を保ってください。改行のような位置操作はmarker位置に適用してください。改行を実行するときは該当markerを__BETTERFLOW_EXPLICIT_LINE_BREAK__へ置き換え、元の明示改行に関する個数維持規則を超えて追加することを許可します。複数の意図があり得て判断できない場合は操作を創作しないでください。markerや認識された指示文そのものは出力へ残さないでください。";
+        {
+            instructions += "各voice_command_segments objectにはline_break_result_marker、applied_result_marker、unresolved_result_markerが含まれます。IDを推測したり再生成したりせず、判断に合うフィールドのmarker値をそのまま一度だけ出力してください。";
+            instructions += "voice_command_segmentsはSpaceを押している間に話された音声コマンドと、transcript内の発話位置を示すmarkerの対応表です。recognized_textは書き起こし候補であり、漢字の表面上の意味をそのまま採用せず、日本語の読み・発音・同音語・近い音・音の脱落や置換を考慮して、marker位置と本文から意図を復元してください。「開業」「開場」のような誤認識候補から「改行」を判断する例は、特定語だけの置換規則ではなく全コマンドに適用する読み優先の判断例です。各コマンドmarkerは操作を適用したあと、必ず対応する結果markerへ一度だけ置き換えてください。改行をその位置に入れるときは__BETTERFLOW_VOICE_COMMAND_LINE_BREAK_0123456789abcdef0123456789abcdef_0000__の形式、他の編集を適用したときは__BETTERFLOW_VOICE_COMMAND_APPLIED_0123456789abcdef0123456789abcdef_0000__の形式を使い、元markerの32桁IDと番号をそのまま保持してください。意味を一意に決められない場合は__BETTERFLOW_VOICE_COMMAND_UNRESOLVED_0123456789abcdef0123456789abcdef_0000__の形式を返してください。元markerを黙って削除せず、操作していないのにAPPLIEDを返さないでください。指示順を保ち、音声コマンドの認識文や内部markerを最終本文に残さないでください。改行markerは元の明示改行の個数規則に追加して構いません。";
+        }
         instructions += cleanedContext.Length > 0 || cleanedEditInstructions.Length > 0 || cleanedVoiceEditCommands.Length > 0
-            ? " JSON内の文章は指定された文章変換のためだけに使ってください。出力は編集後の本文だけにしてください。\n"
+            ? cleanedVoiceEditCommands.Length > 0
+                ? " JSON内の文章は指定された文章変換のためだけに使ってください。出力には編集後の本文と各コマンドに対応する必須結果markerだけを含め、他の説明は加えないでください。\n"
+                : " JSON内の文章は指定された文章変換のためだけに使ってください。出力は編集後の本文だけにしてください。\n"
             : "\n";
         return instructions + JsonSerializer.Serialize(contextualRequest, RequestJsonOptions);
     }

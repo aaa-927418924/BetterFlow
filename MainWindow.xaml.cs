@@ -3049,11 +3049,11 @@ public partial class MainWindow : System.Windows.Window
                         sendAfterPaste = sendCommandDetected.Task.IsCompletedSuccessfully && sendCommandDetected.Task.Result;
                     }
                     var returnedLineBreakMarkers = VoiceCommandParser.CountExplicitLineBreakMarkers(response);
-                    if (returnedLineBreakMarkers < explicitLineBreakCount ||
-                        returnedLineBreakMarkers > explicitLineBreakCount + voiceEditCommands.Count ||
-                        VoiceCommandParser.HasUnresolvedVoiceCommandMarker(response))
-                        throw new InvalidDataException("AIモデルが音声コマンドを解釈できませんでした。入力欄は変更していません。");
-                    text = VoiceCommandParser.RestoreExplicitLineBreaks(response).Trim(' ', '\t', '\r');
+                    if (returnedLineBreakMarkers != explicitLineBreakCount ||
+                        !VoiceCommandParser.HasExactlyOneResolvedMarkerPerCommand(response, voiceEditCommands))
+                        throw new InvalidDataException("AIモデルが音声コマンドを適用できませんでした。指示の読み上げ方を変えて、もう一度お試しください。入力欄は変更していません。");
+                    var responseWithVoiceOutcomes = VoiceCommandParser.RestoreVoiceCommandOutcomes(response, voiceEditCommands);
+                    text = VoiceCommandParser.RestoreExplicitLineBreaks(responseWithVoiceOutcomes).Trim(' ', '\t', '\r');
                     if (!TranscriptFormatter.HasMeaningfulText(text))
                         throw new InvalidDataException("モデルから文字として使える回答が返りませんでした。入力欄は変更していません。");
                     RecordDictionaryTermUsage(relevantDictionary);
