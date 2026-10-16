@@ -11,7 +11,10 @@ internal sealed record AudioInputDiagnosticEntry(
     string? ExceptionType,
     int? HResult,
     bool HasRecognizedText,
-    int RecognizedTextLength);
+    int RecognizedTextLength,
+    string? OperationId,
+    int? SegmentIndex,
+    string? Route);
 
 internal static class AudioInputDiagnosticLog
 {
@@ -19,7 +22,14 @@ internal static class AudioInputDiagnosticLog
     private static readonly object Sync = new();
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = false };
 
-    public static void Write(string stage, string outcome, Exception? exception = null, string? recognizedText = null)
+    public static void Write(
+        string stage,
+        string outcome,
+        Exception? exception = null,
+        string? recognizedText = null,
+        string? operationId = null,
+        int? segmentIndex = null,
+        string? route = null)
     {
         try
         {
@@ -38,7 +48,10 @@ internal static class AudioInputDiagnosticLog
                     rootException?.GetType().Name,
                     rootException?.HResult,
                     !string.IsNullOrWhiteSpace(recognizedText),
-                    recognizedText?.Length ?? 0);
+                    recognizedText?.Length ?? 0,
+                    operationId,
+                    segmentIndex,
+                    route);
                 File.AppendAllText(path, JsonSerializer.Serialize(entry, JsonOptions) + Environment.NewLine,
                     new UTF8Encoding(false));
             }

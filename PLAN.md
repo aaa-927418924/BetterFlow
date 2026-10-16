@@ -901,3 +901,16 @@
 - 未適用・漏出を検知した場合は「完了」にせず、命令文が混ざらない本文保全と失敗表示へ進む。
 
 分類: PTT編集コマンドの静的調査・未実装計画。出典: ユーザー報告、上記ソース、既存の本文を含まない診断ログ、EXEハッシュ・プロセス起動時刻。確認日: 2026-10-16 Asia/Tokyo。信頼度: ソースの分岐・指示矛盾・ログ記録は高、個々の発話の最終経路は未確認。今回行ったのは読み取り調査とMarkdown更新のみ。
+
+## PTT音声コマンドのプロンプト整形修正（2026-10-16）
+
+### 実装結果
+
+- 計画チェックポイント`d54a31c`の後、既知のプロンプト整形指示も専用プロンプトへ分岐させず、通常整形と同じ`RewriteAsync`へ統一した。既知・未知のPTT編集指示は認識文と本文内の位置markerを保持し、`format_as_prompt`は補助情報として渡す。PTT編集時は明示書式の優先度を上げ、通常整形の箇条書き抑制と競合しないsystem messageを組み立てる。未使用の`PromptStyleRewritePrompt`を削除。
+- モデル応答からPTT命令の復唱が検出された場合、文字列を消しただけで成功扱いせずAI失敗経路へ回す。明示的な箇条書き要求には出力行の書式検証を追加し、指示が反映されていない場合は認識本文へフォールバックし、自動送信を止める。通常の意味変換全体が正しいかを機械的に保証するものではない。
+- 音声処理ID、区間番号、プレビュー/最終認識それぞれの分類経路と結果を、本文・音声・認証情報なしで診断ログへ記録する。結果失敗イベントも処理IDで関連付ける。
+- `dotnet build AutoPrompt.csproj -c Release --no-restore`成功（0エラー、NU1900はNuGet脆弱性情報取得警告）。単体EXEを`artifacts/publish-voice-command-prompt-20261016/BetterFlow.exe`へ発行し、`dist/Better Flow.exe`へ配置。両方82,515,126 bytes、SHA-256 `AD266BF52A2DC2E9E82C164F20E9B24055E94FA111D7AFD6A63EEF29407AD31F`で一致。
+- 元の配布EXEは`artifacts/BetterFlow-before-ptt-prompt-fix-20261016.exe`へ退避（82,513,116 bytes、SHA-256 `579D5F352B43E13DDDA574D1338E70B5231B17B71C6122346FE8E0707855B561`）。初回の置換時はファイルロックを持つ完全一致プロセスPID 25092を停止した。最終診断ログ変更を含む再発行では中間版を`artifacts/BetterFlow-before-ptt-prompt-fix-intermediate-20261016.exe`へ退避（82,515,116 bytes、SHA-256 `14D831789E5D4462AD6FAFEDE9A216295240C8D41C898B236A4633D305FECC8B`）し、置換時点では完全一致プロセスはなかった。
+- テストスイートは未実行。Releaseコンパイル・発行・配置一致を確認したが、実マイクの最終認識、Parakeet経路、OpenCodeモデルの実生成、箇条書きの実出力は未確認。
+
+分類: PTT編集コマンドの実装・配布。出典: `MainWindow.xaml.cs`、`Services/AudioInputDiagnosticLog.cs`、`Services/OpenCodeService.cs`、`Services/TranscriptRewritePrompt.cs`、`Services/VoiceCommandParser.cs`、Git、Release build/publishと配布EXE照合。確認日: 2026-10-16 Asia/Tokyo。信頼度: ソース・コンパイル・配置一致は高、実マイクと実モデル動作は未確認。

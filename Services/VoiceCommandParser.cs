@@ -120,6 +120,31 @@ internal static partial class VoiceCommandParser
         return command != VoiceTextCommand.None;
     }
 
+    public static string GetVoiceCommandRoute(string recognizedText)
+    {
+        if (!TryParseVoiceTextCommand(recognizedText, out var command))
+            return "ai-edit";
+
+        return command switch
+        {
+            VoiceTextCommand.InsertNewLine => "local-line-break",
+            VoiceTextCommand.FormatAsPrompt => "ai-prompt-format",
+            VoiceTextCommand.SendAsIs => "local-send-as-is",
+            _ => "ai-edit"
+        };
+    }
+
+    public static bool RequiresBulletListOutput(
+        IReadOnlyList<VoiceEditCommandInstruction>? commands,
+        IReadOnlyList<string>? editInstructions)
+    {
+        var requestedFormatting = (commands?.Select(command => command.RecognizedText) ?? Enumerable.Empty<string>())
+            .Concat(editInstructions ?? Array.Empty<string>());
+        return BulletListRequestRegex().IsMatch(string.Join("\n", requestedFormatting));
+    }
+
+    public static bool HasBulletListOutput(string text) => BulletListLineRegex().IsMatch(text);
+
     public static string RemoveEchoedVoiceCommandText(
         string response,
         string originalTranscript,
@@ -218,6 +243,14 @@ internal static partial class VoiceCommandParser
 
     [GeneratedRegex("__BETTERFLOW_VOICE_COMMAND_(?:LINE_BREAK|APPLIED)_[a-f0-9]{32}_\\d{4,}__", RegexOptions.CultureInvariant)]
     private static partial Regex VoiceCommandOutcomeMarkerRegex();
+
+    [GeneratedRegex("(?:箇条書(?:き|で)?|リスト\\s*(?:形式|で)|bullet(?:ed)?\\s+list)",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    private static partial Regex BulletListRequestRegex();
+
+    [GeneratedRegex("^[ \\t]*(?:[-*•・][ \\t]*|[0-9０-９]+[.)．、][ \\t]*)\\S",
+        RegexOptions.Multiline | RegexOptions.CultureInvariant)]
+    private static partial Regex BulletListLineRegex();
 }
 
 internal enum VoiceTextCommand

@@ -120,24 +120,16 @@ internal sealed class OpenCodeService : IDisposable
         CancellationToken cancellationToken = default,
         string? precedingContext = null,
         IReadOnlyList<string>? voiceEditInstructions = null,
-        IReadOnlyList<VoiceEditCommandInstruction>? voiceEditCommands = null) =>
+        IReadOnlyList<VoiceEditCommandInstruction>? voiceEditCommands = null,
+        bool formatAsPrompt = false) =>
         GenerateTextAsync(providerId, modelId,
             TranscriptRewritePrompt.CreateSystemMessage(precedingContext,
                 voiceEditInstructions?.Count > 0,
-                voiceEditCommands?.Count > 0),
+                voiceEditCommands?.Count > 0,
+                formatAsPrompt),
             TranscriptRewritePrompt.CreateUserMessage(
-                transcript, dictionary, precedingContext, voiceEditInstructions, voiceEditCommands),
+                transcript, dictionary, precedingContext, voiceEditInstructions, voiceEditCommands, formatAsPrompt),
             cancellationToken);
-
-    public Task<string> FormatTranscriptAsPromptAsync(
-        string transcript,
-        string providerId,
-        string modelId,
-        IReadOnlyList<CorrectionDictionaryEntry>? dictionary = null,
-        CancellationToken cancellationToken = default,
-        string? precedingContext = null) =>
-        GenerateTextAsync(providerId, modelId, PromptStyleRewritePrompt.SystemMessage,
-            PromptStyleRewritePrompt.CreateUserMessage(transcript, dictionary, precedingContext), cancellationToken);
 
     public async Task<DictionaryCorrectionReviewResult> ReviewDictionaryCorrectionsAsync(
         IReadOnlyList<DictionaryTermChange> changes,

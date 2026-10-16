@@ -62,6 +62,7 @@ public partial class MainWindow : System.Windows.Window
     private Task? _transcriptPreviewTask;
     private IDisposable? _discordMuteLease;
     private long _transcriptPreviewSession;
+    private string? _audioInputOperationId;
     private AutoDictionaryLearningMonitor? _autoDictionaryLearningMonitor;
     private readonly SemaphoreSlim _dictionaryReviewSemaphore = new(1, 1);
     private CancellationTokenSource? _selectedTextQuestionCancellation;
@@ -2185,16 +2186,18 @@ public partial class MainWindow : System.Windows.Window
 
     private void StartTranscriptPreview()
     {
+        var operationId = Guid.NewGuid().ToString("N");
+        _audioInputOperationId = operationId;
         if (_asr is null) return;
 
         _transcriptPreviewWindow.HidePreview();
         var session = Interlocked.Increment(ref _transcriptPreviewSession);
         var cancellation = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token);
         _transcriptPreviewCancellation = cancellation;
-        _transcriptPreviewTask = RunTranscriptPreviewAsync(session, cancellation.Token);
+        _transcriptPreviewTask = RunTranscriptPreviewAsync(session, operationId, cancellation.Token);
     }
 
-    private async Task RunTranscriptPreviewAsync(long session, CancellationToken cancellationToken)
+    private async Task RunTranscriptPreviewAsync(long session, string operationId, CancellationToken cancellationToken)
     {
         var segmentStates = new List<TranscriptPreviewSegmentState>();
         SileroVoiceActivityDetector? speechVad = null;
@@ -2237,7 +2240,10 @@ public partial class MainWindow : System.Windows.Window
                         if (segment.Samples.Length < minimumSamples)
                         {
                             if (!isActiveSegment)
+                            {
+                                LogPreviewVoiceCommandRoute(operationId, i, state, "rejected-short", string.Empty);
                                 state.IsFinalized = true;
+                            }
                             continue;
                         }
 
@@ -2246,7 +2252,10 @@ public partial class MainWindow : System.Windows.Window
                         {
                             state.Text = string.Empty;
                             if (!isActiveSegment)
+                            {
+                                LogPreviewVoiceCommandRoute(operationId, i, state, "rejected-vad", string.Empty);
                                 state.IsFinalized = true;
+                            }
                             continue;
                         }
 
@@ -2257,7 +2266,15 @@ public partial class MainWindow : System.Windows.Window
                         if (TranscriptFormatter.HasMeaningfulText(transcript))
                             state.Text = transcript;
                         if (!isActiveSegment)
+                        {
+                            LogPreviewVoiceCommandRoute(
+                                operationId,
+                                i,
+                                state,
+                                TranscriptFormatter.HasMeaningfulText(transcript) ? "recognized" : "empty",
+                                transcript);
                             state.IsFinalized = true;
+                        }
                     }
 
                     var previewParts = segmentStates
@@ -2333,6 +2350,29 @@ public partial class MainWindow : System.Windows.Window
         public bool IsVoiceCommand { get; } = isVoiceCommand;
         public string Text { get; set; } = string.Empty;
         public bool IsFinalized { get; set; }
+        public bool DiagnosticRouteLogged { get; set; }
+    }
+
+    private static void LogPreviewVoiceCommandRoute(
+        string operationId,
+        int segmentIndex,
+        TranscriptPreviewSegmentState state,
+        string outcome,
+        string recognizedText)
+    {
+        if (!state.IsVoiceCommand || state.DiagnosticRouteLogged)
+            return;
+
+        state.DiagnosticRouteLogged = true;
+        AudioInputDiagnosticLog.Write(
+            "voice-command-preview",
+            outcome,
+            recognizedText: recognizedText,
+            operationId: operationId,
+            segmentIndex: segmentIndex,
+            route: TranscriptFormatter.HasMeaningfulText(recognizedText)
+                ? VoiceCommandParser.GetVoiceCommandRoute(recognizedText)
+                : "unrecognized");
     }
 
     private async Task StopTranscriptPreviewAsync()
@@ -2799,10 +2839,11 @@ public partial class MainWindow : System.Windows.Window
 
     private async Task<NormalAudioDecodeResult> TranscribeNormalAudioSegmentsAsync(
         IReadOnlyList<AudioRecordingSegment> segments,
+        string operationId,
         CancellationToken cancellationToken)
     {
         var transcript = new StringBuilder();
-        var actions = new List<(float[]? Samples, VoiceTextCommand? Command, string? EditInstruction)>();
+        var actions = new List<(float[]? Samples, VoiceTextCommand? Command, string? EditInstruction, string? RecognizedText)>();
         var editInstructions = new List<string>();
         var voiceEditCommands = new List<VoiceEditCommandInstruction>();
         var voiceCommandSessionId = Guid.NewGuid().ToString("N");
@@ -2820,14 +2861,18 @@ public partial class MainWindow : System.Windows.Window
 
         try
         {
-            foreach (var segment in segments)
+            for (var segmentIndex = 0; segmentIndex < segments.Count; segmentIndex++)
             {
                 cancellationToken.ThrowIfCancellationRequested();
+                var segment = segments[segmentIndex];
                 if (segment.IsVoiceCommand)
                 {
                     if (segment.Samples.Length < 5 * SileroVoiceActivityDetector.WindowSamples)
                     {
                         hadUnrecognizedVoiceCommand = true;
+                        AudioInputDiagnosticLog.Write(
+                            "voice-command-final", "rejected-short", operationId: operationId,
+                            segmentIndex: segmentIndex, route: "unrecognized");
                         continue;
                     }
 
@@ -2835,7 +2880,9 @@ public partial class MainWindow : System.Windows.Window
                     if (!speechVad.ContainsSustainedSpeech(segment.Samples))
                     {
                         hadUnrecognizedVoiceCommand = true;
-                        AudioInputDiagnosticLog.Write("voice-command-vad", "rejected-no-sustained-speech");
+                        AudioInputDiagnosticLog.Write(
+                            "voice-command-final", "rejected-vad", operationId: operationId,
+                            segmentIndex: segmentIndex, route: "unrecognized");
                         continue;
                     }
 
@@ -2845,20 +2892,28 @@ public partial class MainWindow : System.Windows.Window
                     if (!TranscriptFormatter.HasMeaningfulText(recognized))
                     {
                         hadUnrecognizedVoiceCommand = true;
+                        AudioInputDiagnosticLog.Write(
+                            "voice-command-final", "empty", recognizedText: recognized,
+                            operationId: operationId, segmentIndex: segmentIndex, route: "unrecognized");
                         continue;
                     }
 
-                    if (!VoiceCommandParser.TryParseVoiceTextCommand(recognized, out var command))
+                    var recognizedCommand = VoiceCommandParser.TryParseVoiceTextCommand(recognized, out var command);
+                    AudioInputDiagnosticLog.Write(
+                        "voice-command-final", "recognized", recognizedText: recognized,
+                        operationId: operationId, segmentIndex: segmentIndex,
+                        route: VoiceCommandParser.GetVoiceCommandRoute(recognized));
+                    if (!recognizedCommand)
                     {
-                        actions.Add((null, null, recognized));
+                        actions.Add((null, null, recognized, recognized));
                         continue;
                     }
-                    actions.Add((null, command, null));
+                    actions.Add((null, command, null, recognized));
                     continue;
                 }
 
                 if (segment.Samples.Length > 0)
-                    actions.Add((segment.Samples, null, null));
+                    actions.Add((segment.Samples, null, null, null));
             }
 
             var dictatedAudioSegments = new List<float[]>();
@@ -2934,10 +2989,20 @@ public partial class MainWindow : System.Windows.Window
                         }
                         break;
                     case VoiceTextCommand.FormatAsPrompt:
+                        await FlushDictatedAudioAsync();
                         formatAsPrompt = true;
                         if (!editInstructions.Contains(VoiceCommandParser.PromptFormatInstruction,
                                 StringComparer.Ordinal))
                             editInstructions.Add(VoiceCommandParser.PromptFormatInstruction);
+                        var promptMarker = VoiceCommandParser.CreateVoiceCommandMarker(
+                            voiceCommandSessionId, voiceEditCommands.Count);
+                        if (transcript.Length > 0 && !char.IsWhiteSpace(transcript[^1]))
+                            transcript.Append(' ');
+                        transcript.Append(promptMarker).Append(' ');
+                        PreserveRawTranscriptFallback();
+                        voiceEditCommands.Add(new VoiceEditCommandInstruction(
+                            promptMarker,
+                            action.RecognizedText ?? VoiceCommandParser.PromptFormatInstruction));
                         break;
                     case VoiceTextCommand.SendAsIs:
                         await FlushDictatedAudioAsync();
@@ -2985,6 +3050,8 @@ public partial class MainWindow : System.Windows.Window
 
     private async Task StopAndProcessAsync()
     {
+        var operationId = _audioInputOperationId ?? Guid.NewGuid().ToString("N");
+        _audioInputOperationId = null;
         var precedingTextContext = _recordingPrecedingTextContext;
         _recordingPrecedingTextContext = null;
         var processingCancellation = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token);
@@ -3015,16 +3082,14 @@ public partial class MainWindow : System.Windows.Window
             recordingSegments = await _recorder.StopAndGetSegmentsAsync(cancellationToken);
             await StopTranscriptPreviewAsync();
             pipelineStage = "transcription";
-            var decoded = await TranscribeNormalAudioSegmentsAsync(recordingSegments, cancellationToken);
+            var decoded = await TranscribeNormalAudioSegmentsAsync(recordingSegments, operationId, cancellationToken);
             var transcript = decoded.Transcript;
             var formatAsPrompt = decoded.FormatAsPrompt;
             var sendAsIs = decoded.SendAsIs;
             var editInstructions = decoded.EditInstructions;
             var voiceEditCommands = decoded.VoiceEditCommands;
             var hasVoiceEditInstructions = editInstructions.Count > 0 || voiceEditCommands.Count > 0;
-            var hasNonPromptEditInstructions = voiceEditCommands.Count > 0 || editInstructions.Any(instruction =>
-                !string.Equals(instruction, VoiceCommandParser.PromptFormatInstruction, StringComparison.Ordinal));
-            var usePromptStyleRewrite = formatAsPrompt && !hasNonPromptEditInstructions;
+            var isPromptFormattingRequest = formatAsPrompt;
             var transcriptForPaste = VoiceCommandParser.RemoveVoiceCommandMarkers(transcript);
             if (!TranscriptFormatter.HasMeaningfulText(transcriptForPaste))
                 throw new InvalidDataException("文字起こし結果が空、または句読点・記号だけでした。マイクを確認して、もう一度お試しください。");
@@ -3056,7 +3121,7 @@ public partial class MainWindow : System.Windows.Window
             {
                 pipelineStage = "ai-processing";
                 _indicator.ShowStatus("整形中");
-                RuntimeStatus.Text = usePromptStyleRewrite
+                RuntimeStatus.Text = isPromptFormattingRequest
                     ? "音声コマンドに従ってプロンプト風に整えています…"
                     : hasVoiceEditInstructions
                         ? "音声コマンドの編集指示を反映しています…"
@@ -3069,7 +3134,7 @@ public partial class MainWindow : System.Windows.Window
                         StartRecorderWithDiscordMute(_continuousRecorder.StartForSendCommands, selectedInput);
                         sendCommandListenerTask = MonitorSendVoiceCommandsAsync(sendCommandDetected, cancellationToken);
                         _sendCommandListenerTask = sendCommandListenerTask;
-                        RuntimeStatus.Text = usePromptStyleRewrite
+                        RuntimeStatus.Text = isPromptFormattingRequest
                             ? "音声コマンドに従ってプロンプト風に整えています。送信も音声で指示できます。"
                             : hasVoiceEditInstructions
                                 ? "音声コマンドの編集指示を反映しています。送信も音声で指示できます。"
@@ -3088,19 +3153,21 @@ public partial class MainWindow : System.Windows.Window
                     if (!_openCode.IsRunning) await EnsureOpenCodeReadyAsync(cancellationToken);
                     var relevantDictionary = DictionaryTermSelector.SelectRelevant(
                         transcriptForPaste, _settings.CorrectionDictionary);
-                    var response = usePromptStyleRewrite
-                        ? await _openCode.FormatTranscriptAsPromptAsync(
-                            transcriptForAi, _settings.OpenCodeModelProviderId, _settings.OpenCodeModelId,
-                            relevantDictionary, cancellationToken, precedingTextContext)
-                        : await _openCode.RewriteAsync(
-                            transcriptForAi, _settings.OpenCodeModelProviderId, _settings.OpenCodeModelId,
-                            relevantDictionary, cancellationToken, precedingTextContext, editInstructions,
-                            voiceEditCommands);
+                    var response = await _openCode.RewriteAsync(
+                        transcriptForAi, _settings.OpenCodeModelProviderId, _settings.OpenCodeModelId,
+                        relevantDictionary, cancellationToken, precedingTextContext, editInstructions,
+                        voiceEditCommands, formatAsPrompt);
                     cancellationToken.ThrowIfCancellationRequested();
                     response = VoiceCommandParser.RemoveEchoedVoiceCommandText(
                         response, transcript, voiceEditCommands, out var removedCommandEcho);
                     if (removedCommandEcho)
-                        AudioInputDiagnosticLog.Write("voice-command-output", "removed-echoed-instruction");
+                    {
+                        AudioInputDiagnosticLog.Write(
+                            "voice-command-output", "echo-detected", operationId: operationId,
+                            route: isPromptFormattingRequest ? "ai-prompt-format" : "ai-edit");
+                        throw new InvalidDataException(
+                            "AIモデルが音声コマンドを適用せず、指示をそのまま返しました。認識した文章を入力欄へ反映します。自動送信は行いません。");
+                    }
                     if (sendCommandListenerTask is not null)
                     {
                         await StopSendCommandMonitorAsync(sendCommandListenerTask);
@@ -3117,8 +3184,16 @@ public partial class MainWindow : System.Windows.Window
                     text = VoiceCommandParser.RestoreExplicitLineBreaks(responseWithVoiceOutcomes).Trim(' ', '\t', '\r');
                     if (!TranscriptFormatter.HasMeaningfulText(text))
                         throw new InvalidDataException("モデルから文字として使える回答が返りませんでした。入力欄は変更していません。");
+                    if (VoiceCommandParser.RequiresBulletListOutput(voiceEditCommands, editInstructions) &&
+                        !VoiceCommandParser.HasBulletListOutput(text))
+                        throw new InvalidDataException(
+                            "箇条書きの指示を結果で確認できませんでした。認識した文章を入力欄へ反映し、自動送信は行いません。");
+                    if (voiceEditCommands.Count > 0)
+                        AudioInputDiagnosticLog.Write(
+                            "voice-command-output", "validated", operationId: operationId,
+                            route: isPromptFormattingRequest ? "ai-prompt-format" : "ai-edit");
                     RecordDictionaryTermUsage(relevantDictionary);
-                    resultStatus = usePromptStyleRewrite
+                    resultStatus = isPromptFormattingRequest
                         ? "プロンプト風に整えた文章を入力欄へ貼り付けました。"
                         : hasVoiceEditInstructions
                             ? "音声コマンドの編集指示を反映した文章を入力欄へ貼り付けました。"
@@ -3128,7 +3203,9 @@ public partial class MainWindow : System.Windows.Window
                 catch (Exception ex)
                 {
                     _openCode.Stop();
-                    AudioInputDiagnosticLog.Write("ai-processing", "raw-transcript-fallback", ex, transcriptForPaste);
+                    AudioInputDiagnosticLog.Write(
+                        "ai-processing", "raw-transcript-fallback", ex, transcriptForPaste,
+                        operationId, route: isPromptFormattingRequest ? "ai-prompt-format" : "ai-edit");
                     text = transcriptForPaste;
                     var sendWasRequested = sendAfterPaste;
                     sendAfterPaste = false;
@@ -3254,7 +3331,9 @@ public partial class MainWindow : System.Windows.Window
         catch (Exception ex)
         {
             var rawTranscript = _pendingRawTranscriptFallback;
-            AudioInputDiagnosticLog.Write(pipelineStage, "failed", ex, rawTranscript);
+            AudioInputDiagnosticLog.Write(
+                pipelineStage, "failed", ex, rawTranscript, operationId,
+                route: pipelineStage == "ai-processing" ? "ai-edit" : null);
             if (!_closing && !outputAttempted && TranscriptFormatter.HasMeaningfulText(rawTranscript))
             {
                 var usableRawTranscript = rawTranscript!;
