@@ -131,3 +131,13 @@
 - 確認日: 2026-10-17 Asia/Tokyo。
 - 信頼度: ソース、ビルド、配置EXEの一致は高。実画面のドラッグとボタン操作は未確認。
 - 情報区分: ローカルソース確認・実画面未確認。
+
+## ユーザー設定プロンプトの適用（2026-10-17）
+
+- 内容: 設定画面の「指示」ページで入力した追加指示は、`AppSettings.UserSystemPrompt`としてローカル設定に保存する。500文字上限は`StringInfo.ParseCombiningCharacters`でUnicodeテキスト要素単位に扱い、設定画面で残り文字数を表示する。
+- 適用範囲: OpenCodeの共通`GenerateTextAsync`でsystem messageへ加えるため、音声整形、選択文編集・回答、辞書補正判定などのOpenCode要求に適用される。別経路のGPT Live質問セッションにも開始時のsession instructionsとして渡す。空欄なら既存system messageをそのまま使う。タスク固有の目的・出力形式・情報源・安全制約と衝突する場合はタスク固有指示を優先する。
+- 分類: WPF設定UI・ローカル設定保存・AIプロンプト合成。
+- 出典: `MainWindow.xaml`、`MainWindow.xaml.cs`、`Services/AppSettings.cs`、`Services/UserSystemPromptComposer.cs`、`Services/OpenCodeService.cs`、`Services/GptLiveQuestionSession.cs`。2026-10-17 Release build/publishと発行EXE・`dist/Better Flow.exe`のSHA-256一致を確認。
+- 確認日: 2026-10-17 Asia/Tokyo。
+- 信頼度: ソース・ビルド・EXE配置の確認は高。実画面の表示と実モデル応答への影響は未確認。
+- 情報区分: ローカルソース確認・実UI/モデル未確認。
