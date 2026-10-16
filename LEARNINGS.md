@@ -66,10 +66,11 @@
 
 ## OpenCode検索ツールの限定許可（2026-10-16）
 
-- 内容: Web検索を選択テキスト質問モードだけで使う場合、OpenCodeの組み込み`websearch`を有効にする環境変数と、質問専用agentの`permission`を組み合わせる。グローバルと質問agentの`*`をdenyにし、質問agentの`websearch`だけallowする。`webfetch`は許可しない。通常音声入力・音声編集・辞書判定は従来のbuild agentを使い、Web検索を利用させない。
+- 内容: Web検索と検索結果ページの取得を選択テキスト質問モードだけで使う場合、OpenCodeの組み込み`websearch`を有効にする環境変数と、質問専用agentの`permission`を組み合わせる。グローバルと質問agentの`*`をdenyにし、質問agentの`websearch`と`webfetch`だけallowする。通常音声入力・音声編集・辞書判定は従来のbuild agentを使い、Webツールを利用させない。
 - 分類: OpenCodeツール権限とモード分離。
 - 出典: `Services/OpenCodeService.cs`、OpenCode公式[Tools](https://docs.opencode.ai/docs/tools/)・[Permissions](https://docs.opencode.ai/docs/permissions/)ドキュメント、2026-10-16 Release build/publish・`dist/Better Flow.exe`のSHA-256照合。
 - 確認日: 2026-10-16 Asia/Tokyo。
-- 信頼度: ソースとコンパイル、発行EXE/配布EXEの一致は高。実モデルが検索を呼び出すかは未確認。
+- 信頼度: ソースとコンパイル、発行EXE/配布EXEの一致は高。実モデルが検索・ページ取得を呼び出すかは未確認。
 - 情報区分: 実装・ローカル確認・実動作未確認。
-- 配布結果: Release build 0エラー（NU1900警告1件）。EXEは82,526,613 bytes、SHA-256 `D3728F7859C92B272861B85765F5267673DB3845C434D162D4EEEFE3FEEF5284`。更新前EXEは`artifacts/BetterFlow-before-websearch-20261016.exe`へ保存。完全パス一致のPID 10356を停止して`dist/Better Flow.exe`を置換し、発行物とハッシュ一致を確認。テストスイートと実モデルのWeb検索は未実施。
+- OpenCode公式Toolsドキュメントでは`webfetch`はURLページ取得、`websearch`はWeb検索として説明され、両方を個別にallowできる（確認日: 2026-10-16）。
+- 配布結果: Release build/publish成功、0エラー・NU1900警告1件。EXEは82,526,669 bytes、SHA-256 `AA2E96D425AF6CBAAFA8EE0BAA2AB9D37F82FA7A5D6524B226E1F0FB443752B3`。更新前EXEは`artifacts/BetterFlow-before-webfetch-20261016-123854.exe`へ保存。同一パスで実行中の対象プロセスは0件。`dist/Better Flow.exe`を置換し発行物とハッシュ一致を確認。テストスイートと実モデルの検索・ページ取得は未実施。
