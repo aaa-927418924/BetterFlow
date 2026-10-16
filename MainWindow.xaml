@@ -26,6 +26,17 @@
             </Setter>
         </Style>
 
+        <Style x:Key="UserSystemPromptKeyboardFocusVisualStyle" TargetType="{x:Type Control}">
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="{x:Type Control}">
+                        <Border BorderBrush="#9B9B9B" BorderThickness="1" CornerRadius="17"
+                                Background="Transparent" IsHitTestVisible="False" />
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
         <DataTemplate x:Key="DropdownDisplayNameTemplate">
             <TextBlock Text="{Binding DisplayName}"
                        Foreground="{Binding Foreground, RelativeSource={RelativeSource AncestorType={x:Type ComboBoxItem}}, FallbackValue={StaticResource SettingsControlTextBrush}}"
@@ -334,6 +345,7 @@
             <Setter Property="FontSize" Value="15" />
             <Setter Property="VerticalContentAlignment" Value="Top" />
             <Setter Property="SelectionBrush" Value="#9E9E9E" />
+            <Setter Property="FocusVisualStyle" Value="{StaticResource UserSystemPromptKeyboardFocusVisualStyle}" />
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="TextBox">
@@ -345,10 +357,6 @@
                                           Focusable="False" />
                         </Border>
                         <ControlTemplate.Triggers>
-                            <Trigger Property="IsKeyboardFocused" Value="True">
-                                <Setter TargetName="InputSurface" Property="BorderBrush" Value="#101010" />
-                                <Setter TargetName="InputSurface" Property="BorderThickness" Value="2" />
-                            </Trigger>
                             <Trigger Property="IsEnabled" Value="False">
                                 <Setter TargetName="InputSurface" Property="Background" Value="#DADADA" />
                                 <Setter Property="Foreground" Value="#666666" />
@@ -830,6 +838,9 @@
                                                          AcceptsReturn="True" TextWrapping="Wrap"
                                                          VerticalScrollBarVisibility="Auto"
                                                          HorizontalScrollBarVisibility="Disabled"
+                                                         PreviewTextInput="UserSystemPromptTextBox_PreviewTextInput"
+                                                         PreviewKeyDown="UserSystemPromptTextBox_PreviewKeyDown"
+                                                         DataObject.Pasting="UserSystemPromptTextBox_Pasting"
                                                          TextChanged="UserSystemPromptTextBox_TextChanged"
                                                          AutomationProperties.Name="システムプロンプト"
                                                          AutomationProperties.HelpText="AI処理に適用する追加指示を500文字まで入力できます。" />

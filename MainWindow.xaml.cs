@@ -59,6 +59,7 @@ public partial class MainWindow : System.Windows.Window
     private bool _loadingDiscordMuteSettingsUi;
     private bool _loadingIndicatorHintsUi;
     private bool _normalizingUserSystemPromptText;
+    private string _lastAcceptedUserSystemPrompt = string.Empty;
     private bool _isRefreshingOpenCodeModels;
     private bool _loadingOpenCodeModelUi;
     private bool _loadingMicrophoneDeviceUi;
@@ -1987,6 +1988,7 @@ public partial class MainWindow : System.Windows.Window
     {
         var savedPrompt = _settings.UserSystemPrompt ?? string.Empty;
         var limitedPrompt = UserSystemPromptComposer.LimitCharacters(savedPrompt);
+        _lastAcceptedUserSystemPrompt = limitedPrompt;
         _settings.UserSystemPrompt = limitedPrompt;
         _openCode.ConfiguredSystemPrompt = limitedPrompt;
 
@@ -2006,29 +2008,73 @@ public partial class MainWindow : System.Windows.Window
         }
     }
 
+    private void UserSystemPromptTextBox_PreviewTextInput(object sender, TextCompositionEventArgs e)
+    {
+        if (sender is not System.Windows.Controls.TextBox textBox || string.IsNullOrEmpty(e.Text)) return;
+        if (WouldExceedUserSystemPromptLimit(textBox, e.Text)) e.Handled = true;
+    }
+
+    private void UserSystemPromptTextBox_PreviewKeyDown(object sender, System.Windows.Input.KeyEventArgs e)
+    {
+        if (e.Key != Key.Enter || sender is not System.Windows.Controls.TextBox textBox) return;
+        if (WouldExceedUserSystemPromptLimit(textBox, Environment.NewLine)) e.Handled = true;
+    }
+
+    private void UserSystemPromptTextBox_Pasting(object sender, DataObjectPastingEventArgs e)
+    {
+        if (sender is not System.Windows.Controls.TextBox textBox) return;
+
+        string? pastedText = null;
+        if (e.DataObject.GetDataPresent(System.Windows.DataFormats.UnicodeText, true))
+            pastedText = e.DataObject.GetData(System.Windows.DataFormats.UnicodeText, true) as string;
+        else if (e.DataObject.GetDataPresent(System.Windows.DataFormats.Text, true))
+            pastedText = e.DataObject.GetData(System.Windows.DataFormats.Text, true) as string;
+
+        if (pastedText is not null && WouldExceedUserSystemPromptLimit(textBox, pastedText))
+            e.CancelCommand();
+    }
+
+    private static bool WouldExceedUserSystemPromptLimit(System.Windows.Controls.TextBox textBox, string insertedText)
+    {
+        var currentText = textBox.Text ?? string.Empty;
+        var selectionStart = Math.Clamp(textBox.SelectionStart, 0, currentText.Length);
+        var selectionLength = Math.Clamp(textBox.SelectionLength, 0, currentText.Length - selectionStart);
+        var resultingText = currentText.Remove(selectionStart, selectionLength).Insert(selectionStart, insertedText);
+        return UserSystemPromptComposer.CountCharacters(resultingText) > UserSystemPromptComposer.MaximumCharacters;
+    }
+
     private void UserSystemPromptTextBox_TextChanged(object sender, System.Windows.Controls.TextChangedEventArgs e)
     {
         if (_normalizingUserSystemPromptText || sender is not System.Windows.Controls.TextBox textBox) return;
 
         var enteredText = textBox.Text ?? string.Empty;
-        var limitedText = UserSystemPromptComposer.LimitCharacters(enteredText);
-        if (!string.Equals(enteredText, limitedText, StringComparison.Ordinal))
+        if (UserSystemPromptComposer.CountCharacters(enteredText) > UserSystemPromptComposer.MaximumCharacters)
         {
-            var caretIndex = Math.Min(textBox.CaretIndex, limitedText.Length);
-            var selectionStart = Math.Min(textBox.SelectionStart, limitedText.Length);
-            var selectionLength = Math.Min(textBox.SelectionLength, limitedText.Length - selectionStart);
+            var acceptedText = _lastAcceptedUserSystemPrompt;
+            var caretIndex = Math.Clamp(textBox.CaretIndex, 0, acceptedText.Length);
+            var selectionStart = Math.Clamp(textBox.SelectionStart, 0, acceptedText.Length);
+            var selectionLength = Math.Clamp(textBox.SelectionLength, 0, acceptedText.Length - selectionStart);
             _normalizingUserSystemPromptText = true;
-            textBox.Text = limitedText;
-            if (selectionLength > 0)
-                textBox.Select(selectionStart, selectionLength);
-            else
-                textBox.CaretIndex = caretIndex;
-            _normalizingUserSystemPromptText = false;
+            try
+            {
+                textBox.Text = acceptedText;
+                if (selectionLength > 0)
+                    textBox.Select(selectionStart, selectionLength);
+                else
+                    textBox.CaretIndex = caretIndex;
+            }
+            finally
+            {
+                _normalizingUserSystemPromptText = false;
+            }
+
+            return;
         }
 
-        _settings.UserSystemPrompt = limitedText;
-        _openCode.ConfiguredSystemPrompt = limitedText;
-        UpdateUserSystemPromptCharacterCount(limitedText);
+        _lastAcceptedUserSystemPrompt = enteredText;
+        _settings.UserSystemPrompt = enteredText;
+        _openCode.ConfiguredSystemPrompt = enteredText;
+        UpdateUserSystemPromptCharacterCount(enteredText);
         try
         {
             _settingsStore.Save(_settings);
