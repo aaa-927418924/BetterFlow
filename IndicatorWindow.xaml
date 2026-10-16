@@ -28,10 +28,16 @@
                                    Width="3.49" Height="9.2" RadiusX="1.75" RadiusY="1.75" Fill="#2B2B2B" />
                     </Canvas>
                 </Border>
-                <TextBlock x:Name="StatusText" Grid.Column="1" Text="録音中"
-                           FontFamily="Yu Gothic UI" FontSize="9.5" FontWeight="Medium"
-                           Foreground="#F4F4F4" HorizontalAlignment="Center" VerticalAlignment="Center"
-                           TextAlignment="Center" TextWrapping="NoWrap" />
+                <StackPanel Grid.Column="1" VerticalAlignment="Center" HorizontalAlignment="Center">
+                    <TextBlock x:Name="StatusText" Text="録音中"
+                               FontFamily="Yu Gothic UI" FontSize="9.5" FontWeight="Medium"
+                               Foreground="#F4F4F4" HorizontalAlignment="Center"
+                               TextAlignment="Center" TextWrapping="NoWrap" />
+                    <TextBlock x:Name="HintText" Text="右Altで確定" Visibility="Collapsed"
+                               FontFamily="Yu Gothic UI" FontSize="7.5"
+                               Foreground="#D9F4F4F4" HorizontalAlignment="Center"
+                               TextAlignment="Center" TextWrapping="NoWrap" />
+                </StackPanel>
             </Grid>
         </Grid>
     </Border>

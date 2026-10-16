@@ -50,6 +50,13 @@
                             <TextBlock x:Name="ShortcutCaptureStatus" Text="" FontSize="12"
                                        Foreground="{StaticResource MutedBrush}" LineHeight="18"
                                        Margin="0,5,0,0" AutomationProperties.LiveSetting="Polite" />
+                            <CheckBox x:Name="IndicatorHintsCheckBox"
+                                      Content="インジケーターに操作ヒントを表示"
+                                      Foreground="{StaticResource TextBrush}" FontSize="13"
+                                      Margin="0,8,0,0" IsThreeState="False"
+                                      Checked="IndicatorHintsCheckBox_Changed"
+                                      Unchecked="IndicatorHintsCheckBox_Changed"
+                                      AutomationProperties.Name="インジケーターに操作ヒントを表示" />
                         </StackPanel>
                         <StackPanel x:Name="MicrophoneSettingsPanel" Margin="0,16,0,0" Visibility="Collapsed">
                             <TextBlock Text="音声入力デバイス" FontSize="14" FontWeight="SemiBold" />

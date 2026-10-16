@@ -41,6 +41,8 @@ public partial class IndicatorWindow : System.Windows.Window
     private bool _aiRequestActive;
     private bool _assistantTextSeen;
     private bool _progressComplete;
+    private bool _operationHintsEnabled = true;
+    private string _activationShortcutLabel = "右Alt";
 
     public IndicatorWindow()
     {
@@ -71,6 +73,7 @@ public partial class IndicatorWindow : System.Windows.Window
         ResetProgress();
         ProgressFill.Visibility = Visibility.Collapsed;
         StatusText.Text = text;
+        UpdateOperationHint();
         ShowAtBottom();
 
         if (autoHide is { } duration)
@@ -88,6 +91,7 @@ public partial class IndicatorWindow : System.Windows.Window
         _hideTimer.Stop();
         SetProgressStage(stage);
         StatusText.Text = text;
+        UpdateOperationHint();
         ProgressFill.Visibility = Visibility.Visible;
         ShowAtBottom();
         StartProgressAnimation();
@@ -98,6 +102,30 @@ public partial class IndicatorWindow : System.Windows.Window
             _hideTimer.Interval = duration;
             _hideTimer.Start();
         }
+    }
+
+    internal void SetOperationHintSettings(bool enabled, string shortcutLabel)
+    {
+        if (!Dispatcher.CheckAccess())
+        {
+            if (!Dispatcher.HasShutdownStarted && !Dispatcher.HasShutdownFinished)
+                Dispatcher.BeginInvoke(DispatcherPriority.Render,
+                    new Action(() => SetOperationHintSettings(enabled, shortcutLabel)));
+            return;
+        }
+
+        _operationHintsEnabled = enabled;
+        _activationShortcutLabel = string.IsNullOrWhiteSpace(shortcutLabel) ? "右Alt" : shortcutLabel;
+        UpdateOperationHint();
+    }
+
+    private void UpdateOperationHint()
+    {
+        var hint = _operationHintsEnabled && StatusText.Text == "録音中"
+            ? $"{_activationShortcutLabel}で確定"
+            : string.Empty;
+        HintText.Text = hint;
+        HintText.Visibility = string.IsNullOrEmpty(hint) ? Visibility.Collapsed : Visibility.Visible;
     }
 
     internal void ReportOpenCodeProgress(Services.OpenCodeProgressUpdate update)

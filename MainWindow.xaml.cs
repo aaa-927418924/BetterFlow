@@ -53,6 +53,7 @@ public partial class MainWindow : System.Windows.Window
     private bool _isCapturingShortcut;
     private bool _isCapturingDiscordMuteShortcut;
     private bool _loadingDiscordMuteSettingsUi;
+    private bool _loadingIndicatorHintsUi;
     private bool _isRefreshingOpenCodeModels;
     private bool _loadingOpenCodeModelUi;
     private bool _loadingMicrophoneDeviceUi;
@@ -141,6 +142,7 @@ public partial class MainWindow : System.Windows.Window
             CapacityText.Text = string.Empty;
         }
         NormalizeAiSettings();
+        InitializeIndicatorHintsSettingsUi();
         InitializeOpenCodeModelUi();
         RefreshCorrectionDictionaryItems();
         InitializeSelectedTextAnswerModeUi();
@@ -663,6 +665,45 @@ public partial class MainWindow : System.Windows.Window
         }
         catch (Exception ex) { RuntimeStatus.Text = "サインアウトできませんでした。 " + ex.Message; }
         UpdateSelectedTextAnswerModeDisplay();
+    }
+
+    private void InitializeIndicatorHintsSettingsUi()
+    {
+        _loadingIndicatorHintsUi = true;
+        try
+        {
+            IndicatorHintsCheckBox.IsChecked = _settings.ShowIndicatorHints;
+        }
+        finally
+        {
+            _loadingIndicatorHintsUi = false;
+        }
+
+        UpdateShortcutDisplay();
+    }
+
+    private void IndicatorHintsCheckBox_Changed(object sender, System.Windows.RoutedEventArgs e)
+    {
+        if (_loadingIndicatorHintsUi) return;
+
+        var previous = _settings.ShowIndicatorHints;
+        _settings.ShowIndicatorHints = IndicatorHintsCheckBox.IsChecked == true;
+        try
+        {
+            _settingsStore.Save(_settings);
+        }
+        catch (Exception ex)
+        {
+            _settings.ShowIndicatorHints = previous;
+            _loadingIndicatorHintsUi = true;
+            IndicatorHintsCheckBox.IsChecked = previous;
+            _loadingIndicatorHintsUi = false;
+            RuntimeStatus.Text = "操作ヒントの設定を保存できませんでした。 " + ex.Message;
+            UpdateShortcutDisplay();
+            return;
+        }
+
+        UpdateShortcutDisplay();
     }
 
     private void NormalizeAiSettings()
@@ -3951,6 +3992,7 @@ public partial class MainWindow : System.Windows.Window
     {
         var shortcut = GlobalHotkey.Format(GetConfiguredHotkey());
         ShortcutCurrentText.Text = shortcut;
+        _indicator.SetOperationHintSettings(_settings.ShowIndicatorHints, shortcut);
         System.Windows.Automation.AutomationProperties.SetName(
             ShortcutChangeButton, $"ショートカットキーを変更。現在: {shortcut}");
     }
