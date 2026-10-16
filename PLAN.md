@@ -810,4 +810,12 @@
 2. `RestoreVoiceCommandOutcomes`で、line-break result markerに隣接する空白・生改行だけを取り除いてから、必ず改行1個へ変換する。元の本文に含まれる `__BETTERFLOW_EXPLICIT_LINE_BREAK__` markerは対象外として残し、後段で元の改行へ戻す。
 3. Releaseビルドと単体EXEの発行・バックアップ・置換を行う。実マイクと選択モデルでの再現確認はコード検証・ビルドと分けて報告する。
 
-実装前チェックポイント: 作成予定。
+実装前チェックポイント: 1c04c30.
+
+#### 実装結果
+
+- Services/TranscriptRewritePrompt.csで、改行コマンドのresult markerだけがその位置に入れる改行を表し、AIが同位置に通常改行や明示改行markerを重ねないように指定した。
+- Services/VoiceCommandParser.csで、line-break result markerに隣接してAIが出力した空白・通常改行をまとめて除去し、marker 1個につき改行1個へ変換するようにした。複数の別コマンドmarkerが連続する場合はmarkerの数だけ改行を残す。本文由来の明示改行markerはこの処理を通さず保持する。
+- dotnet build AutoPrompt.csproj -c Release --no-restoreと単体EXEのdotnet publishが成功（0エラー、NuGet脆弱性フィード取得のNU1900警告1件）。発行元とdist/Better Flow.exeは82,510,114 bytes、SHA-256 3D119F5B019C353C4D4790863447A34A4AF2CD200F92C5D79E68CA49C9A15BF6で一致。
+- 更新前EXEはartifacts/BetterFlow-before-voice-command-single-break-20261016.exeへ保存し、SHA-256 A112B5AFEDC0429C72AF9E270D6EEFD518E79BE65340770B2C38C9F25349088Fで置換前ファイルとの一致を確認。dist/Better Flow.exeと完全一致するプロセス（PID 4424）を停止して置換した。
+- 実マイクでの発話、選択中のOpenCodeモデルでの改行実行は未確認。ビルドとファイル置換は確認済みだが、実機での症状解消を確認済みとは扱わない。テストスイートは実行していない。

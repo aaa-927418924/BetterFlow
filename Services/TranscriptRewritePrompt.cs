@@ -41,6 +41,7 @@ internal static class TranscriptRewritePrompt
                 "transcriptにもともと含まれていた明示的な改行は、入力中の", StringComparison.Ordinal);
             message += "ここで既に説明した__BETTERFLOW_EXPLICIT_LINE_BREAK__はtranscriptに元から含まれていた改行だけを示します。PTTコマンドで新しい改行を指定された場合は、下記のコマンドID付き結果markerを使ってください。voice_command_segmentsは、ユーザーがSpaceを押している間に音声コマンドとして話した区間のASR記録です。Space長押し中の発話であること自体を、本文のディクテーションではなく文章操作の指示だと判断する根拠にしてください。recognized_textは発話そのものではなく不確かな書き起こしなので、漢字の意味だけで解釈せず、日本語の読みを考えて発音、同音語、近い音、音の脱落・置換を照合し、markerの位置と前後の本文からコマンドを復元してください。たとえば「ここで開業して」「ここで開場して」のような表記でも、読みと編集文脈から「ここで改行して」という意図が明らかなら改行してください。この例だけを置換する規則ではなく、すべてのPTTコマンドで同じ読み優先の判断をしてください。固定フレーズや誤認識語の対応表との完全一致は要求しません。複数の意図が同程度にあり得る場合は勝手に操作を選ばず、未解決として示してください。各markerはその発話位置を示します。すべてのコマンドmarkerは、操作を適用した後に必ず対応する1つの結果markerへ置き換えてください。改行操作は元markerを__BETTERFLOW_VOICE_COMMAND_LINE_BREAK_0123456789abcdef0123456789abcdef_0000__の形式へ、他の編集を適用したときは__BETTERFLOW_VOICE_COMMAND_APPLIED_0123456789abcdef0123456789abcdef_0000__の形式へ置き換え、元markerの32桁IDと番号は一字も変えないでください。判断できない場合は__BETTERFLOW_VOICE_COMMAND_UNRESOLVED_0123456789abcdef0123456789abcdef_0000__の形式を使ってください。markerを黙って削除したり、操作を適用せずAPPLIEDにしたりしてはいけません。明示改行markerは既存の個数と綴りのまま維持してください。音声コマンドの認識文は本文へ混ぜず、すべての内部markerは最終的にアプリ側で除去されます。PC操作、アプリ操作、ツール実行、送信は行わず、変換後の本文だけを返してください.";
             message += "voice_command_segmentsがある応答には、編集後本文に加えて上記の各コマンド専用result markerだけを含め、説明文は返さないでください。";
+            message += "line-break result markerは、その位置に挿入する改行1個を表す唯一の表現です。同じ位置へ通常の改行や__BETTERFLOW_EXPLICIT_LINE_BREAK__を重ねて追加しないでください。元のtranscriptにある明示改行markerだけは、入力と同じ個数・綴りで保持してください。";
         }
 
         return message;
@@ -125,6 +126,7 @@ internal static class TranscriptRewritePrompt
         {
             instructions += "各voice_command_segments objectにはline_break_result_marker、applied_result_marker、unresolved_result_markerが含まれます。IDを推測したり再生成したりせず、判断に合うフィールドのmarker値をそのまま一度だけ出力してください。";
             instructions += "voice_command_segmentsはSpaceを押している間に話された音声コマンドと、transcript内の発話位置を示すmarkerの対応表です。recognized_textは書き起こし候補であり、漢字の表面上の意味をそのまま採用せず、日本語の読み・発音・同音語・近い音・音の脱落や置換を考慮して、marker位置と本文から意図を復元してください。「開業」「開場」のような誤認識候補から「改行」を判断する例は、特定語だけの置換規則ではなく全コマンドに適用する読み優先の判断例です。各コマンドmarkerは操作を適用したあと、必ず対応する結果markerへ一度だけ置き換えてください。改行をその位置に入れるときは__BETTERFLOW_VOICE_COMMAND_LINE_BREAK_0123456789abcdef0123456789abcdef_0000__の形式、他の編集を適用したときは__BETTERFLOW_VOICE_COMMAND_APPLIED_0123456789abcdef0123456789abcdef_0000__の形式を使い、元markerの32桁IDと番号をそのまま保持してください。意味を一意に決められない場合は__BETTERFLOW_VOICE_COMMAND_UNRESOLVED_0123456789abcdef0123456789abcdef_0000__の形式を返してください。元markerを黙って削除せず、操作していないのにAPPLIEDを返さないでください。指示順を保ち、音声コマンドの認識文や内部markerを最終本文に残さないでください。改行markerは元の明示改行の個数規則に追加して構いません。";
+            instructions += "line_break_result_marker自体が、その位置に入れる改行1個を表します。同じ位置へ通常の改行や__BETTERFLOW_EXPLICIT_LINE_BREAK__ markerを追加して二重に改行しないでください。入力transcriptに元からある明示改行markerは、従来どおりその個数と綴りを保持してください。";
         }
         instructions += cleanedContext.Length > 0 || cleanedEditInstructions.Length > 0 || cleanedVoiceEditCommands.Length > 0
             ? cleanedVoiceEditCommands.Length > 0

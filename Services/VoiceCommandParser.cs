@@ -62,12 +62,22 @@ internal static partial class VoiceCommandParser
         string text,
         IReadOnlyList<VoiceEditCommandInstruction> commands)
     {
-        foreach (var command in commands)
+        var lineBreakMarkerAlternation = string.Join("|", commands
+            .Select(command => Regex.Escape(CreateVoiceCommandLineBreakMarker(command.Marker))));
+        if (lineBreakMarkerAlternation.Length > 0)
         {
-            var lineBreakMarker = Regex.Escape(CreateVoiceCommandLineBreakMarker(command.Marker));
-            text = Regex.Replace(text, $"[ \\t]*{lineBreakMarker}[ \\t]*", "\n", RegexOptions.CultureInvariant);
-            text = text.Replace(CreateVoiceCommandAppliedMarker(command.Marker), string.Empty, StringComparison.Ordinal);
+            var lineBreakMarkerRun = new Regex(
+                $"[ \\t\\r\\n]*(?:{lineBreakMarkerAlternation})(?:[ \\t\\r\\n]*(?:{lineBreakMarkerAlternation}))*[ \\t\\r\\n]*",
+                RegexOptions.CultureInvariant);
+            text = lineBreakMarkerRun.Replace(text, match =>
+            {
+                var count = Regex.Matches(match.Value, lineBreakMarkerAlternation, RegexOptions.CultureInvariant).Count;
+                return new string('\n', count);
+            });
         }
+
+        foreach (var command in commands)
+            text = text.Replace(CreateVoiceCommandAppliedMarker(command.Marker), string.Empty, StringComparison.Ordinal);
 
         return Regex.Replace(text, "[ \\t]{2,}", " ").Trim(' ', '\t', '\r');
     }
