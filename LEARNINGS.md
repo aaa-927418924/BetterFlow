@@ -63,3 +63,13 @@
 - 信頼度: 実装箇所、コンパイル、発行物と配布ファイルの一致は高。実際の長文ストリーミング表示は未確認。
 - 情報区分: ソース確認・未確認事項。
 - UI追記（内容: 末尾追従を維持したままストリーミング画面の縦スクロールバーをHiddenにする。分類: デスクトップUI。出典: AnswerWindow.xaml、TranscriptPreviewWindow.xaml、2026-10-16 Release build/publishとSHA-256照合。確認日: 2026-10-16 Asia/Tokyo。信頼度: コンパイル・配置一致は高、実画面は未確認。情報区分: ソース確認・未確認事項）。
+
+## OpenCode検索ツールの限定許可（2026-10-16）
+
+- 内容: Web検索を選択テキスト質問モードだけで使う場合、OpenCodeの組み込み`websearch`を有効にする環境変数と、質問専用agentの`permission`を組み合わせる。グローバルと質問agentの`*`をdenyにし、質問agentの`websearch`だけallowする。`webfetch`は許可しない。通常音声入力・音声編集・辞書判定は従来のbuild agentを使い、Web検索を利用させない。
+- 分類: OpenCodeツール権限とモード分離。
+- 出典: `Services/OpenCodeService.cs`、OpenCode公式[Tools](https://docs.opencode.ai/docs/tools/)・[Permissions](https://docs.opencode.ai/docs/permissions/)ドキュメント、2026-10-16 Release build/publish・`dist/Better Flow.exe`のSHA-256照合。
+- 確認日: 2026-10-16 Asia/Tokyo。
+- 信頼度: ソースとコンパイル、発行EXE/配布EXEの一致は高。実モデルが検索を呼び出すかは未確認。
+- 情報区分: 実装・ローカル確認・実動作未確認。
+- 配布結果: Release build 0エラー（NU1900警告1件）。EXEは82,526,613 bytes、SHA-256 `D3728F7859C92B272861B85765F5267673DB3845C434D162D4EEEFE3FEEF5284`。更新前EXEは`artifacts/BetterFlow-before-websearch-20261016.exe`へ保存。完全パス一致のPID 10356を停止して`dist/Better Flow.exe`を置換し、発行物とハッシュ一致を確認。テストスイートと実モデルのWeb検索は未実施。
