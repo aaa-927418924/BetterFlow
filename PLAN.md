@@ -801,3 +801,13 @@
 - `dotnet build AutoPrompt.csproj -c Release --no-restore`と単体EXEの`dotnet publish`が成功（0エラー、NuGet脆弱性フィード取得のNU1900警告1件）。発行元と`dist/Better Flow.exe`は82,509,762 bytes、SHA-256 `A112B5AFEDC0429C72AF9E270D6EEFD518E79BE65340770B2C38C9F25349088F`で一致。
 - 更新前EXEは`artifacts/BetterFlow-before-voice-command-marker-validation-20261016.exe`へ保存。旧版とバックアップのSHA-256は`91FAD689AC88189DA4C644CCEF8429A08BF687582BBB25B9268B5DC6D14D363C`で一致。配布EXEと完全一致するプロセス（PID 38492）を停止して置換した。
 - 実マイクで「開業」「開場」が改行として解釈されるか、利用中のOpenCodeモデルでの動作はまだ未確認。コード検証とビルドのみで実機の認識成功とは扱わない。
+
+### 追加修正計画: 改行コマンドの重複改行（2026-10-16）
+
+改行コマンド自体は認識されるが、実行結果に複数の改行が入ることがある。現実装はAIにコマンド位置のline-break result markerを出力させ、アプリ側でそのmarkerを `\n` へ変換する。一方で応答検証は元の明示改行markerの個数しか確認せず、コマンド位置のmarker周辺にAIが通常の改行も出した場合、それぞれが最終文章に残る可能性がある。
+
+1. AIプロンプトに、line-break result markerがそのコマンドの改行1個を表す唯一の表現であり、同じ位置に生の改行や明示改行markerを追加しないことを明記する。
+2. `RestoreVoiceCommandOutcomes`で、line-break result markerに隣接する空白・生改行だけを取り除いてから、必ず改行1個へ変換する。元の本文に含まれる `__BETTERFLOW_EXPLICIT_LINE_BREAK__` markerは対象外として残し、後段で元の改行へ戻す。
+3. Releaseビルドと単体EXEの発行・バックアップ・置換を行う。実マイクと選択モデルでの再現確認はコード検証・ビルドと分けて報告する。
+
+実装前チェックポイント: 作成予定。
