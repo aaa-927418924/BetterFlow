@@ -11,6 +11,7 @@ internal enum ProcessingProgressStage
     Recognition,
     Preparing,
     GeneratingOrApplying,
+    Applying,
     Complete
 }
 
@@ -24,12 +25,29 @@ public partial class IndicatorWindow : System.Windows.Window
     private const double LeftBarIdleHeight = IconCanvasHeight * 41 / 77;
     private const double CenterBarIdleHeight = IconCanvasHeight * 46 / 77;
     private const double RightBarIdleHeight = IconCanvasHeight * 29 / 77;
+    private const double MaximumProgressBeforeFirstText = 64;
+    private const double MaximumProgressDuringGeneration = 95;
     private readonly DispatcherTimer _hideTimer;
+    private readonly DispatcherTimer _progressTimer;
     private double _progressPercent;
+    private double _progressTargetPercent;
+    private ProcessingProgressStage? _activeProgressStage;
+    private DateTime _activeStageStartedAt;
+    private DateTime? _aiRequestStartedAt;
+    private int _streamedTextLength;
+    private bool _progressSessionActive;
+    private bool _aiRequestActive;
+    private bool _assistantTextSeen;
+    private bool _progressComplete;
 
     public IndicatorWindow()
     {
         InitializeComponent();
+        _progressTimer = new DispatcherTimer(DispatcherPriority.Render)
+        {
+            Interval = TimeSpan.FromMilliseconds(25)
+        };
+        _progressTimer.Tick += UpdateAnimatedProgress;
         _hideTimer = new DispatcherTimer(DispatcherPriority.Background)
         {
             Interval = TimeSpan.FromMilliseconds(900)
@@ -37,18 +55,23 @@ public partial class IndicatorWindow : System.Windows.Window
         _hideTimer.Tick += (_, _) =>
         {
             _hideTimer.Stop();
+            _progressTimer.Stop();
             ProgressFill.Visibility = Visibility.Collapsed;
             Hide();
         };
         Loaded += (_, _) => UpdateProgressFillWidth();
         SourceInitialized += (_, _) => MakeClickThrough();
-        Closed += (_, _) => _hideTimer.Stop();
+        Closed += (_, _) =>
+        {
+            _hideTimer.Stop();
+            _progressTimer.Stop();
+        };
     }
 
     public void ShowStatus(string text, TimeSpan? autoHide = null)
     {
         _hideTimer.Stop();
-        _progressPercent = 0;
+        ResetProgress();
         ProgressFill.Visibility = Visibility.Collapsed;
         StatusText.Text = text;
         ShowAtBottom();
@@ -66,17 +89,11 @@ public partial class IndicatorWindow : System.Windows.Window
         TimeSpan? autoHide = null)
     {
         _hideTimer.Stop();
-        _progressPercent = stage switch
-        {
-            ProcessingProgressStage.Recognition => 25,
-            ProcessingProgressStage.Preparing => 50,
-            ProcessingProgressStage.GeneratingOrApplying => 75,
-            ProcessingProgressStage.Complete => 100,
-            _ => 0
-        };
+        SetProgressStage(stage);
         StatusText.Text = text;
         ProgressFill.Visibility = Visibility.Visible;
         ShowAtBottom();
+        _progressTimer.Start();
         UpdateProgressFillWidth();
 
         if (autoHide is { } duration)
@@ -84,6 +101,200 @@ public partial class IndicatorWindow : System.Windows.Window
             _hideTimer.Interval = duration;
             _hideTimer.Start();
         }
+    }
+
+    internal void ReportOpenCodeProgress(Services.OpenCodeProgressUpdate update)
+    {
+        if (!Dispatcher.CheckAccess())
+        {
+            if (!Dispatcher.HasShutdownStarted && !Dispatcher.HasShutdownFinished)
+                Dispatcher.BeginInvoke(DispatcherPriority.Render,
+                    new Action(() => ReportOpenCodeProgress(update)));
+            return;
+        }
+
+        if (!_progressSessionActive || _progressComplete)
+            return;
+
+        var now = DateTime.UtcNow;
+        switch (update.Kind)
+        {
+            case Services.OpenCodeProgressKind.RequestStarted:
+                _aiRequestActive = true;
+                _assistantTextSeen = false;
+                _streamedTextLength = 0;
+                _aiRequestStartedAt = now;
+                _activeProgressStage = ProcessingProgressStage.GeneratingOrApplying;
+                _activeStageStartedAt = now;
+                AdvanceProgressTarget(45);
+                break;
+            case Services.OpenCodeProgressKind.ModelReady:
+                AdvanceProgressTarget(48);
+                break;
+            case Services.OpenCodeProgressKind.PromptSubmitted:
+                _aiRequestStartedAt = now;
+                AdvanceProgressTarget(52);
+                break;
+            case Services.OpenCodeProgressKind.AssistantActivity:
+                AdvanceProgressTarget(56);
+                break;
+            case Services.OpenCodeProgressKind.TextUpdated:
+                ReportAssistantTextLength(update.TextLength);
+                break;
+        }
+
+        _progressTimer.Start();
+    }
+
+    internal void ReportAssistantTextLength(int textLength)
+    {
+        if (!Dispatcher.CheckAccess())
+        {
+            if (!Dispatcher.HasShutdownStarted && !Dispatcher.HasShutdownFinished)
+                Dispatcher.BeginInvoke(DispatcherPriority.Render,
+                    new Action(() => ReportAssistantTextLength(textLength)));
+            return;
+        }
+
+        if (!_progressSessionActive || _progressComplete)
+            return;
+        if (textLength <= 0)
+            return;
+
+        if (_activeProgressStage != ProcessingProgressStage.GeneratingOrApplying)
+        {
+            _activeProgressStage = ProcessingProgressStage.GeneratingOrApplying;
+            _activeStageStartedAt = DateTime.UtcNow;
+            AdvanceProgressTarget(45);
+        }
+        _assistantTextSeen = true;
+        _streamedTextLength = Math.Max(_streamedTextLength, Math.Max(0, textLength));
+        var textTarget = 64 + 31 * (1 - Math.Exp(-_streamedTextLength / 450d));
+        AdvanceProgressTarget(Math.Min(MaximumProgressDuringGeneration, textTarget));
+        _progressTimer.Start();
+    }
+
+    private void SetProgressStage(ProcessingProgressStage stage)
+    {
+        var startsNewSession = !_progressSessionActive || _progressComplete ||
+                               (stage == ProcessingProgressStage.Recognition &&
+                                _activeProgressStage != ProcessingProgressStage.Recognition);
+        if (startsNewSession)
+            BeginProgressSession();
+
+        if (_activeProgressStage != stage)
+        {
+            _activeProgressStage = stage;
+            _activeStageStartedAt = DateTime.UtcNow;
+        }
+
+        switch (stage)
+        {
+            case ProcessingProgressStage.Recognition:
+                _aiRequestActive = false;
+                _aiRequestStartedAt = null;
+                _assistantTextSeen = false;
+                _streamedTextLength = 0;
+                AdvanceProgressTarget(25);
+                break;
+            case ProcessingProgressStage.Preparing:
+                AdvanceProgressTarget(34);
+                break;
+            case ProcessingProgressStage.GeneratingOrApplying:
+                AdvanceProgressTarget(45);
+                break;
+            case ProcessingProgressStage.Applying:
+                _aiRequestActive = false;
+                _aiRequestStartedAt = null;
+                AdvanceProgressTarget(96);
+                break;
+            case ProcessingProgressStage.Complete:
+                _aiRequestActive = false;
+                _aiRequestStartedAt = null;
+                _progressComplete = true;
+                AdvanceProgressTarget(100);
+                break;
+        }
+    }
+
+    private void BeginProgressSession()
+    {
+        _progressTimer.Stop();
+        _progressSessionActive = true;
+        _progressComplete = false;
+        _progressPercent = 0;
+        _progressTargetPercent = 0;
+        _activeProgressStage = null;
+        _activeStageStartedAt = DateTime.UtcNow;
+        _aiRequestStartedAt = null;
+        _streamedTextLength = 0;
+        _aiRequestActive = false;
+        _assistantTextSeen = false;
+    }
+
+    private void AdvanceProgressTarget(double targetPercent)
+    {
+        _progressTargetPercent = Math.Max(_progressTargetPercent,
+            Math.Clamp(targetPercent, 0, 100));
+    }
+
+    private void UpdateAnimatedProgress(object? sender, EventArgs e)
+    {
+        if (!_progressSessionActive)
+        {
+            _progressTimer.Stop();
+            return;
+        }
+
+        UpdateEstimatedProgressTarget(DateTime.UtcNow);
+
+        var remaining = _progressTargetPercent - _progressPercent;
+        var smoothing = _progressComplete ? 0.20 : 0.075;
+        _progressPercent += remaining * smoothing;
+        if (Math.Abs(_progressTargetPercent - _progressPercent) < 0.06)
+            _progressPercent = _progressTargetPercent;
+
+        UpdateProgressFillWidth();
+        if (_progressComplete && _progressPercent >= 99.94)
+            _progressTimer.Stop();
+    }
+
+    private void UpdateEstimatedProgressTarget(DateTime now)
+    {
+        var stageSeconds = Math.Max(0, (now - _activeStageStartedAt).TotalSeconds);
+        if (_aiRequestActive && _aiRequestStartedAt is { } aiStartedAt)
+        {
+            var aiSeconds = Math.Max(0, (now - aiStartedAt).TotalSeconds);
+            var elapsedBase = _assistantTextSeen ? 64d : 52d;
+            var elapsedRange = _assistantTextSeen ? 24d : 12d;
+            var elapsedTarget = elapsedBase + elapsedRange * (1 - Math.Exp(-aiSeconds / 35d));
+            AdvanceProgressTarget(Math.Min(_assistantTextSeen ? 90 : MaximumProgressBeforeFirstText,
+                elapsedTarget));
+        }
+        else if (_activeProgressStage == ProcessingProgressStage.Preparing)
+        {
+            AdvanceProgressTarget(Math.Min(43, 34 + stageSeconds * 0.25));
+        }
+        else if (_activeProgressStage == ProcessingProgressStage.GeneratingOrApplying)
+        {
+            // Other live-response paths do not expose OpenCode events; keep their
+            // indicator moving slowly until streamed response text arrives.
+            AdvanceProgressTarget(Math.Min(64, 45 + stageSeconds * 0.18));
+        }
+    }
+
+    private void ResetProgress()
+    {
+        _progressTimer.Stop();
+        _progressSessionActive = false;
+        _progressComplete = false;
+        _progressPercent = 0;
+        _progressTargetPercent = 0;
+        _activeProgressStage = null;
+        _aiRequestStartedAt = null;
+        _streamedTextLength = 0;
+        _aiRequestActive = false;
+        _assistantTextSeen = false;
     }
 
     private void ShowAtBottom()
@@ -113,7 +324,7 @@ public partial class IndicatorWindow : System.Windows.Window
     public void HideStatus()
     {
         _hideTimer.Stop();
-        _progressPercent = 0;
+        ResetProgress();
         ProgressFill.Visibility = Visibility.Collapsed;
         Hide();
     }

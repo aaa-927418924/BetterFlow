@@ -60,7 +60,6 @@ public partial class MainWindow : System.Windows.Window
     private string? _recordingPrecedingTextContext;
     private string? _pendingRawTranscriptFallback;
     private CancellationTokenSource? _audioProcessingCancellation;
-    private Task? _sendCommandListenerTask;
     private CancellationTokenSource? _transcriptPreviewCancellation;
     private Task? _transcriptPreviewTask;
     private IDisposable? _discordMuteLease;
@@ -2069,6 +2068,7 @@ public partial class MainWindow : System.Windows.Window
                 {
                     if (!_closing)
                     {
+                        _indicator.ReportAssistantTextLength(answer.Length);
                         DispatchQuestionUi(() =>
                         {
                             if (!_closing)
@@ -2600,6 +2600,7 @@ public partial class MainWindow : System.Windows.Window
         {
             await foreach (var samples in _continuousRecorder.ReadUtterancesAsync(cancellationToken))
             {
+                _continuousRecorder.SetAcceptingUtterances(false);
                 _undoWindow.HideUndo(stopTimer: false);
                 _isBusy = true;
                 ActionButton.Content = "選択文を編集しています…";
@@ -2637,9 +2638,10 @@ public partial class MainWindow : System.Windows.Window
                         transcript,
                         _settings.OpenCodeModelProviderId,
                         _settings.OpenCodeModelId,
-                        cancellationToken);
+                        cancellationToken,
+                        onProgress: _indicator.ReportOpenCodeProgress);
 
-                    _indicator.ShowProcessingStatus("選択文を反映中", ProcessingProgressStage.GeneratingOrApplying);
+                    _indicator.ShowProcessingStatus("選択文を反映中", ProcessingProgressStage.Applying);
                     var previousText = context.CurrentText;
                     cancellationToken.ThrowIfCancellationRequested();
                     var result = await SelectionEditService.ReplaceCurrentSelectionAsync(
@@ -2653,12 +2655,19 @@ public partial class MainWindow : System.Windows.Window
                     RuntimeStatus.Text = result.Message;
                     if (result.Applied)
                     {
-                        _indicator.ShowProcessingStatus(
-                            result.CanContinue ? "選択文編集中" : "選択維持失敗",
-                            result.CanContinue
-                                ? ProcessingProgressStage.Complete
-                                : ProcessingProgressStage.GeneratingOrApplying,
-                            result.CanContinue ? null : TimeSpan.FromSeconds(1));
+                        if (result.CanContinue)
+                        {
+                            // The edit is complete and the session is listening again.
+                            // Clear the completed bar so the next utterance starts at 0%.
+                            _indicator.ShowStatus("選択文編集中");
+                        }
+                        else
+                        {
+                            _indicator.ShowProcessingStatus(
+                                "選択維持失敗",
+                                ProcessingProgressStage.GeneratingOrApplying,
+                                TimeSpan.FromSeconds(1));
+                        }
                     }
                     else
                     {
@@ -2689,6 +2698,8 @@ public partial class MainWindow : System.Windows.Window
                     _isBusy = false;
                     ActionButton.Content = _selectionEditSessionStopping ? "編集を終了しています…" : "編集セッションを終了";
                     UpdateAiModeDisplay();
+                    if (!_closing && !_selectionEditSessionStopping && _continuousRecorder.IsRecording)
+                        _continuousRecorder.SetAcceptingUtterances(true);
                 }
             }
         }
@@ -2860,6 +2871,7 @@ public partial class MainWindow : System.Windows.Window
         {
             await foreach (var samples in _continuousRecorder.ReadUtterancesAsync(cancellationToken))
             {
+                _continuousRecorder.SetAcceptingUtterances(false);
                 _isBusy = true;
                 UpdateAiModeDisplay();
                 ActionButton.Content = "質問に回答しています…";
@@ -2908,7 +2920,8 @@ public partial class MainWindow : System.Windows.Window
                             _answerWindow.SetCurrentAssistantText(text);
                         },
                         cancellationToken: cancellationToken,
-                        conversationHistory: _selectedTextQuestionHistory.ToArray());
+                        conversationHistory: _selectedTextQuestionHistory.ToArray(),
+                        onProgress: _indicator.ReportOpenCodeProgress);
                     cancellationToken.ThrowIfCancellationRequested();
                     if (!TranscriptFormatter.HasMeaningfulText(answer))
                         throw new InvalidDataException("モデルから回答が返りませんでした。選択中の文章は変更していません。");
@@ -2917,7 +2930,9 @@ public partial class MainWindow : System.Windows.Window
                     _answerWindow.SetFinalAssistantText(answer);
                     _selectedTextQuestionHistory.Add((question, answer));
                     RuntimeStatus.Text = "回答しました。続けて質問できます。";
-                    _indicator.ShowProcessingStatus("質問できます", ProcessingProgressStage.Complete);
+                    // Keep the answer dialog available while listening, but reset and
+                    // hide the progress fill until the next question starts processing.
+                    _indicator.ShowStatus("質問できます");
                 }
                 catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
                 {
@@ -2941,6 +2956,8 @@ public partial class MainWindow : System.Windows.Window
                         ? "質問を終了しています…"
                         : "質問セッションを終了";
                     UpdateAiModeDisplay();
+                    if (!_closing && !_selectedTextQuestionSessionStopping && _continuousRecorder.IsRecording)
+                        _continuousRecorder.SetAcceptingUtterances(true);
                 }
             }
         }
@@ -3277,9 +3294,6 @@ public partial class MainWindow : System.Windows.Window
         RuntimeStatus.Text = "音声をPC内で文字起こししています…";
         _indicator.ShowProcessingStatus("認識中", ProcessingProgressStage.Recognition);
         IReadOnlyList<AudioRecordingSegment>? recordingSegments = null;
-        Task? sendCommandListenerTask = null;
-        var sendCommandDetected = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-        var sendCommandMonitorUnavailable = false;
         var sendAfterPaste = false;
         var pipelineStage = "recording-stop";
         var outputAttempted = false;
@@ -3341,26 +3355,6 @@ public partial class MainWindow : System.Windows.Window
                     : hasVoiceEditInstructions
                         ? "音声コマンドの編集指示を反映しています…"
                     : "OpenCodeを準備しています…";
-                if (!sendAfterPaste)
-                {
-                    try
-                    {
-                        var selectedInput = MicrophoneDeviceCombo.SelectedItem as AudioInputDeviceOption;
-                        StartRecorderWithDiscordMute(_continuousRecorder.StartForSendCommands, selectedInput);
-                        sendCommandListenerTask = MonitorSendVoiceCommandsAsync(sendCommandDetected, cancellationToken);
-                        _sendCommandListenerTask = sendCommandListenerTask;
-                        RuntimeStatus.Text = isPromptFormattingRequest
-                            ? "音声コマンドに従ってプロンプト風に整えています。送信も音声で指示できます。"
-                            : hasVoiceEditInstructions
-                                ? "音声コマンドの編集指示を反映しています。送信も音声で指示できます。"
-                            : "OpenCodeの選択モデルで文章を整えています。音声で送信を指示できます。";
-                    }
-                    catch
-                    {
-                        sendCommandMonitorUnavailable = true;
-                    }
-                }
-
                 var bulletListRequired = VoiceCommandParser.RequiresBulletListOutput(
                     voiceEditCommands, editInstructions);
                 var editOperationCount = voiceEditCommands.Sum(command => command.Operations?.Count ?? 0);
@@ -3373,7 +3367,7 @@ public partial class MainWindow : System.Windows.Window
 
                 try
                 {
-                    if (sendCommandListenerTask is null && !sendAfterPaste && !hasVoiceEditInstructions)
+                    if (!sendAfterPaste && !hasVoiceEditInstructions)
                         RuntimeStatus.Text = "OpenCodeの選択モデルで文章を整えています…";
                     if (!_openCode.IsRunning) await EnsureOpenCodeReadyAsync(cancellationToken);
                     var relevantDictionary = DictionaryTermSelector.SelectRelevant(
@@ -3395,7 +3389,8 @@ public partial class MainWindow : System.Windows.Window
                     var response = await _openCode.RewriteAsync(
                         transcriptForAi, _settings.OpenCodeModelProviderId, _settings.OpenCodeModelId,
                         relevantDictionary, cancellationToken, precedingTextContext, editInstructions,
-                        voiceEditCommands, formatAsPrompt, bulletListRequired);
+                        voiceEditCommands, formatAsPrompt, bulletListRequired,
+                        onProgress: _indicator.ReportOpenCodeProgress);
                     cancellationToken.ThrowIfCancellationRequested();
                     var candidateForFormattingCheck = VoiceCommandParser.RestoreExplicitLineBreaks(
                         VoiceCommandParser.RestoreVoiceCommandOutcomes(response, voiceEditCommands));
@@ -3443,7 +3438,8 @@ public partial class MainWindow : System.Windows.Window
                             relevantDictionary, cancellationToken, precedingTextContext, editInstructions,
                             voiceEditCommands, formatAsPrompt, bulletListRequired,
                             strictFormattingRetry: missingBulletFormat,
-                            strictCommandRetry: retryForCompoundCommands);
+                            strictCommandRetry: retryForCompoundCommands,
+                            onProgress: _indicator.ReportOpenCodeProgress);
                         cancellationToken.ThrowIfCancellationRequested();
                     }
                     response = VoiceCommandParser.RemoveEchoedVoiceCommandText(
@@ -3470,14 +3466,6 @@ public partial class MainWindow : System.Windows.Window
                             route: isPromptFormattingRequest ? "ai-prompt-format" : "ai-edit");
                         throw new InvalidDataException(
                             "AIモデルが音声コマンドを適用せず、指示をそのまま返しました。認識した文章を入力欄へ反映します。自動送信は行いません。");
-                    }
-                    if (sendCommandListenerTask is not null)
-                    {
-                        await StopSendCommandMonitorAsync(sendCommandListenerTask);
-                        if (ReferenceEquals(_sendCommandListenerTask, sendCommandListenerTask))
-                            _sendCommandListenerTask = null;
-                        sendCommandListenerTask = null;
-                        sendAfterPaste = sendCommandDetected.Task.IsCompletedSuccessfully && sendCommandDetected.Task.Result;
                     }
                     returnedLineBreakMarkers = VoiceCommandParser.CountExplicitLineBreakMarkers(response);
                     markersValid = returnedLineBreakMarkers == explicitLineBreakCount &&
@@ -3584,7 +3572,7 @@ public partial class MainWindow : System.Windows.Window
 
             cancellationToken.ThrowIfCancellationRequested();
             pipelineStage = "output";
-            _indicator.ShowProcessingStatus("入力欄へ反映中", ProcessingProgressStage.GeneratingOrApplying);
+            _indicator.ShowProcessingStatus("入力欄へ反映中", ProcessingProgressStage.Applying);
             outputAttempted = true;
             var outputResult = PasteAndShow(text, resultStatus);
             if (outputResult is null && TranscriptFormatter.HasMeaningfulText(_pendingRawTranscriptFallback))
@@ -3631,8 +3619,6 @@ public partial class MainWindow : System.Windows.Window
                         DictionaryLearningDiagnosticLog.Write("monitor_not_ready_before_auto_send", "timeout");
                 }
             }
-            if (sendCommandMonitorUnavailable)
-                RuntimeStatus.Text += " 音声の送信指示を待機できなかったため、Enterは送信していません。";
             if (sendAfterPaste)
             {
                 if (!pasted)
@@ -3658,14 +3644,6 @@ public partial class MainWindow : System.Windows.Window
                 && !_closing
                 && !string.IsNullOrWhiteSpace(_pendingRawTranscriptFallback))
             {
-            if (sendCommandListenerTask is not null)
-                {
-                    await StopSendCommandMonitorAsync(sendCommandListenerTask);
-                    if (ReferenceEquals(_sendCommandListenerTask, sendCommandListenerTask))
-                        _sendCommandListenerTask = null;
-                    sendCommandListenerTask = null;
-                }
-
                 if (!_rawTranscriptFallbackRequested)
                 {
                     _indicator.ShowStatus("キャンセルしました", TimeSpan.FromSeconds(1));
@@ -3728,12 +3706,6 @@ public partial class MainWindow : System.Windows.Window
         }
         finally
         {
-            if (_continuousRecorder.IsRecording || sendCommandListenerTask is not null)
-            {
-                await StopSendCommandMonitorAsync(sendCommandListenerTask);
-                if (ReferenceEquals(_sendCommandListenerTask, sendCommandListenerTask))
-                    _sendCommandListenerTask = null;
-            }
             ReleaseDiscordMuteForAudioSession();
             await StopTranscriptPreviewAsync();
             if (!_closing) _transcriptPreviewWindow.HidePreview();
@@ -3832,66 +3804,6 @@ public partial class MainWindow : System.Windows.Window
         learningMonitor?.CancelPreparedApplicationSubmit();
         RuntimeStatus.Text = "文章は貼り付けましたが、送信ボタンと入力欄のフォーカスを確認できず、送信していません。";
         _indicator.ShowStatus("送信未完了", TimeSpan.FromSeconds(1));
-    }
-
-    private async Task MonitorSendVoiceCommandsAsync(
-        TaskCompletionSource<bool> sendCommandDetected,
-        CancellationToken cancellationToken)
-    {
-        try
-        {
-            await foreach (var utterance in _continuousRecorder.ReadUtterancesAsync(cancellationToken)
-                               .ConfigureAwait(false))
-            {
-                try
-                {
-                    if (sendCommandDetected.Task.IsCompleted) continue;
-                    var recognizer = _asr;
-                    if (recognizer is null) return;
-                    try
-                    {
-                        var recognized = await Task.Run(() => recognizer.Transcribe(utterance), cancellationToken)
-                            .ConfigureAwait(false);
-                        cancellationToken.ThrowIfCancellationRequested();
-                        recognized = TranscriptFormatter.NormalizeTranscript(recognized);
-                        if (VoiceCommandParser.IsStandaloneSendDirective(recognized))
-                            sendCommandDetected.TrySetResult(true);
-                    }
-                    catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-                    {
-                        throw;
-                    }
-                    catch
-                    {
-                        // A single failed voice-command decode must not disable later commands.
-                    }
-                }
-                finally
-                {
-                    Array.Clear(utterance);
-                }
-            }
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { }
-        catch
-        {
-            // Voice command monitoring is best-effort and does not fail the text rewrite.
-        }
-    }
-
-    private async Task StopSendCommandMonitorAsync(Task? monitorTask)
-    {
-        if (_continuousRecorder.IsRecording)
-        {
-            try { await _continuousRecorder.StopAsync(CancellationToken.None); }
-            catch { }
-        }
-
-        if (monitorTask is not null)
-        {
-            try { await monitorTask; }
-            catch { }
-        }
     }
 
     private PasteResult? PasteAndShow(string text, string successStatus)
@@ -4267,7 +4179,6 @@ public partial class MainWindow : System.Windows.Window
         _recorder.Dispose();
         try { _transcriptPreviewTask?.GetAwaiter().GetResult(); } catch { }
         _continuousRecorder.Dispose();
-        try { _sendCommandListenerTask?.GetAwaiter().GetResult(); } catch { }
         _activationSoundPlayer.Dispose();
         _asr?.Dispose();
         _openCode.Dispose();
