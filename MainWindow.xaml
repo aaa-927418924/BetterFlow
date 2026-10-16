@@ -599,6 +599,13 @@
                                                       Unchecked="IndicatorHintsCheckBox_Changed"
                                                       AutomationProperties.Name="インジケーターに操作ヒントを表示"
                                                       ToolTip="録音やAI処理の操作方法を画面に表示します。" />
+                                            <CheckBox x:Name="AutoStopOnSilenceCheckBox" Margin="39,8,0,0"
+                                                      Width="604" Height="38" Content="60秒間無音の場合に自動で入力停止"
+                                                      IsThreeState="False" Style="{StaticResource SettingsCheckBoxStyle}"
+                                                      Checked="AutoStopOnSilenceCheckBox_Changed"
+                                                      Unchecked="AutoStopOnSilenceCheckBox_Changed"
+                                                      AutomationProperties.Name="60秒間無音の場合に音声入力を自動停止"
+                                                      ToolTip="Silero VADで発話を検出します。60秒間発話がなければ録音を停止し、文章を貼り付けずにキャンセルします。" />
                                         </StackPanel>
                                     </ScrollViewer>
                                 </Grid>

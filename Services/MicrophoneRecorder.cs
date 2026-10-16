@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using System.Diagnostics;
 using System.IO;
 using NAudio.Wave;
 
@@ -6,14 +7,25 @@ namespace BetterFlow.Services;
 
 internal sealed class MicrophoneRecorder : IDisposable
 {
+    private static readonly TimeSpan SilenceAutoStopDelay = TimeSpan.FromSeconds(60);
+    private static readonly TimeSpan SilenceMonitorInterval = TimeSpan.FromMilliseconds(250);
     private readonly object _sync = new();
+    private readonly object _silenceMonitorSync = new();
     private WaveInEvent? _waveIn;
     private List<CaptureSegmentBuffer>? _segments;
     private TaskCompletionSource? _stopped;
     private Exception? _recordingError;
     private bool _voiceCommandCaptureActive;
+    private SileroVoiceActivityDetector? _silenceVad;
+    private byte[]? _silenceVadFrameBuffer;
+    private System.Threading.Timer? _silenceTimer;
+    private int _silenceVadFrameBufferedBytes;
+    private long _lastSpeechTimestamp;
+    private int _silenceTimeoutRaised;
 
     public event Action<float?>? AudioLevelChanged;
+    public event Action? SilenceTimeoutReached;
+    public event Action<Exception>? SilenceDetectionFailed;
 
     public static IReadOnlyList<AudioInputDeviceOption> GetInputDevices()
     {
@@ -46,7 +58,7 @@ internal sealed class MicrophoneRecorder : IDisposable
 
     public bool IsRecording => _waveIn is not null;
 
-    public void Start(int deviceNumber = -1)
+    public void Start(int deviceNumber = -1, bool autoStopAfterSixtySecondsOfSilence = false)
     {
         if (_waveIn is not null)
             throw new InvalidOperationException("録音はすでに開始しています。");
@@ -65,24 +77,33 @@ internal sealed class MicrophoneRecorder : IDisposable
         _stopped = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         PublishAudioLevel(0);
 
-        var recorder = new WaveInEvent
-        {
-            DeviceNumber = deviceNumber,
-            WaveFormat = new WaveFormat(16000, 16, 1),
-            BufferMilliseconds = 50
-        };
-        recorder.DataAvailable += OnDataAvailable;
-        recorder.RecordingStopped += OnRecordingStopped;
-        _waveIn = recorder;
-
+        WaveInEvent? recorder = null;
         try
         {
+            if (autoStopAfterSixtySecondsOfSilence)
+                StartSilenceMonitor();
+
+            recorder = new WaveInEvent
+            {
+                DeviceNumber = deviceNumber,
+                WaveFormat = new WaveFormat(16000, 16, 1),
+                BufferMilliseconds = 50
+            };
+            recorder.DataAvailable += OnDataAvailable;
+            recorder.RecordingStopped += OnRecordingStopped;
+            _waveIn = recorder;
             recorder.StartRecording();
         }
         catch
         {
             _waveIn = null;
-            recorder.Dispose();
+            if (recorder is not null)
+            {
+                recorder.DataAvailable -= OnDataAvailable;
+                recorder.RecordingStopped -= OnRecordingStopped;
+                recorder.Dispose();
+            }
+            StopSilenceMonitor();
             ClearAudioBuffer();
             throw;
         }
@@ -159,6 +180,7 @@ internal sealed class MicrophoneRecorder : IDisposable
             recorder.RecordingStopped -= OnRecordingStopped;
             recorder.Dispose();
             _waveIn = null;
+            StopSilenceMonitor();
             ClearAudioBuffer();
             PublishAudioLevel(null);
             throw;
@@ -168,6 +190,7 @@ internal sealed class MicrophoneRecorder : IDisposable
         recorder.RecordingStopped -= OnRecordingStopped;
         recorder.Dispose();
         _waveIn = null;
+        StopSilenceMonitor();
         PublishAudioLevel(null);
 
         if (_recordingError is not null)
@@ -206,6 +229,39 @@ internal sealed class MicrophoneRecorder : IDisposable
         }
 
         return result;
+    }
+
+    public async Task DiscardAsync(CancellationToken cancellationToken = default)
+    {
+        var recorder = _waveIn;
+        if (recorder is null)
+            return;
+
+        var stopped = _stopped!;
+        try
+        {
+            recorder.StopRecording();
+            await stopped.Task.WaitAsync(TimeSpan.FromSeconds(5), cancellationToken);
+        }
+        catch
+        {
+            recorder.DataAvailable -= OnDataAvailable;
+            recorder.RecordingStopped -= OnRecordingStopped;
+            recorder.Dispose();
+            _waveIn = null;
+            StopSilenceMonitor();
+            ClearAudioBuffer();
+            PublishAudioLevel(null);
+            throw;
+        }
+
+        recorder.DataAvailable -= OnDataAvailable;
+        recorder.RecordingStopped -= OnRecordingStopped;
+        recorder.Dispose();
+        _waveIn = null;
+        StopSilenceMonitor();
+        ClearAudioBuffer();
+        PublishAudioLevel(null);
     }
 
     public bool TryGetPreviewSegmentsSnapshot(
@@ -266,6 +322,7 @@ internal sealed class MicrophoneRecorder : IDisposable
 
     public void Dispose()
     {
+        StopSilenceMonitor();
         var recorder = _waveIn;
         _waveIn = null;
         if (recorder is not null)
@@ -288,6 +345,16 @@ internal sealed class MicrophoneRecorder : IDisposable
                 if (_segments is { Count: > 0 } segments)
                     segments[^1].Audio.Write(e.Buffer, 0, e.BytesRecorded);
             }
+            try
+            {
+                ProcessSilenceMonitorAudio(e.Buffer, e.BytesRecorded);
+            }
+            catch (Exception ex)
+            {
+                StopSilenceMonitor();
+                try { SilenceDetectionFailed?.Invoke(ex); }
+                catch { }
+            }
             PublishAudioLevel(AudioInputLevel.GetNormalizedLevel(e.Buffer.AsSpan(0, e.BytesRecorded)));
         }
         catch (Exception ex)
@@ -307,6 +374,109 @@ internal sealed class MicrophoneRecorder : IDisposable
         if (e.Exception is not null)
             _recordingError = e.Exception;
         _stopped?.TrySetResult();
+    }
+
+    private void StartSilenceMonitor()
+    {
+        var vad = new SileroVoiceActivityDetector();
+        lock (_silenceMonitorSync)
+        {
+            _silenceVad = vad;
+            _silenceVadFrameBuffer = new byte[SileroVoiceActivityDetector.WindowBytes];
+            _silenceVadFrameBufferedBytes = 0;
+        }
+
+        Interlocked.Exchange(ref _lastSpeechTimestamp, Stopwatch.GetTimestamp());
+        Interlocked.Exchange(ref _silenceTimeoutRaised, 0);
+        _silenceTimer = new System.Threading.Timer(
+            CheckSilenceTimeout,
+            null,
+            SilenceMonitorInterval,
+            SilenceMonitorInterval);
+    }
+
+    private void ProcessSilenceMonitorAudio(byte[] buffer, int bytesRecorded)
+    {
+        lock (_silenceMonitorSync)
+        {
+            if (_silenceVad is null || _silenceVadFrameBuffer is null)
+                return;
+
+            var sourceOffset = 0;
+            while (sourceOffset < bytesRecorded)
+            {
+                var bytesToCopy = Math.Min(
+                    _silenceVadFrameBuffer.Length - _silenceVadFrameBufferedBytes,
+                    bytesRecorded - sourceOffset);
+                Buffer.BlockCopy(
+                    buffer,
+                    sourceOffset,
+                    _silenceVadFrameBuffer,
+                    _silenceVadFrameBufferedBytes,
+                    bytesToCopy);
+                sourceOffset += bytesToCopy;
+                _silenceVadFrameBufferedBytes += bytesToCopy;
+
+                if (_silenceVadFrameBufferedBytes < _silenceVadFrameBuffer.Length)
+                    continue;
+
+                if (_silenceVad.AcceptPcm16Frame(_silenceVadFrameBuffer))
+                    RegisterSpeechActivity();
+
+                Array.Clear(_silenceVadFrameBuffer);
+                _silenceVadFrameBufferedBytes = 0;
+            }
+        }
+    }
+
+    private void CheckSilenceTimeout(object? state)
+    {
+        if (_waveIn is null || _silenceTimer is null)
+            return;
+
+        var lastSpeechTimestamp = Interlocked.Read(ref _lastSpeechTimestamp);
+        if (Stopwatch.GetElapsedTime(lastSpeechTimestamp) < SilenceAutoStopDelay)
+            return;
+
+        RaiseSilenceTimeoutOnce();
+    }
+
+    private void RegisterSpeechActivity()
+    {
+        var now = Stopwatch.GetTimestamp();
+        var lastSpeechTimestamp = Interlocked.Read(ref _lastSpeechTimestamp);
+        if (Stopwatch.GetElapsedTime(lastSpeechTimestamp, now) >= SilenceAutoStopDelay)
+        {
+            RaiseSilenceTimeoutOnce();
+            return;
+        }
+
+        Interlocked.Exchange(ref _lastSpeechTimestamp, now);
+    }
+
+    private void RaiseSilenceTimeoutOnce()
+    {
+        if (Interlocked.CompareExchange(ref _silenceTimeoutRaised, 1, 0) != 0)
+            return;
+
+        try { SilenceTimeoutReached?.Invoke(); }
+        catch { }
+    }
+
+    private void StopSilenceMonitor()
+    {
+        Interlocked.Exchange(ref _silenceTimeoutRaised, 1);
+        _silenceTimer?.Dispose();
+        _silenceTimer = null;
+        lock (_silenceMonitorSync)
+        {
+            _silenceVad?.Dispose();
+            _silenceVad = null;
+            if (_silenceVadFrameBuffer is not null)
+                Array.Clear(_silenceVadFrameBuffer);
+            _silenceVadFrameBuffer = null;
+            _silenceVadFrameBufferedBytes = 0;
+        }
     }
 
     private void ClearAudioBuffer()

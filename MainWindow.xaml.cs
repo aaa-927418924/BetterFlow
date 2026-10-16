@@ -58,6 +58,7 @@ public partial class MainWindow : System.Windows.Window
     private bool _isCapturingDiscordMuteShortcut;
     private bool _loadingDiscordMuteSettingsUi;
     private bool _loadingIndicatorHintsUi;
+    private bool _loadingAutoStopOnSilenceUi;
     private bool _normalizingUserSystemPromptText;
     private string _lastAcceptedUserSystemPrompt = string.Empty;
     private bool _isRefreshingOpenCodeModels;
@@ -130,6 +131,8 @@ public partial class MainWindow : System.Windows.Window
         _transcriptPreviewWindow = new TranscriptPreviewWindow();
         _answerWindow = new AnswerWindow();
         _recorder.AudioLevelChanged += _indicator.SetAudioLevel;
+        _recorder.SilenceTimeoutReached += HandleNormalAudioSilenceTimeout;
+        _recorder.SilenceDetectionFailed += HandleNormalAudioSilenceDetectionFailure;
         _continuousRecorder.AudioLevelChanged += _indicator.SetAudioLevel;
         _hotkey.VoiceCommandCaptureStartRequested += _recorder.BeginVoiceCommandCapture;
         _hotkey.VoiceCommandCaptureStopRequested += _recorder.EndVoiceCommandCapture;
@@ -692,6 +695,16 @@ public partial class MainWindow : System.Windows.Window
             _loadingIndicatorHintsUi = false;
         }
 
+        _loadingAutoStopOnSilenceUi = true;
+        try
+        {
+            AutoStopOnSilenceCheckBox.IsChecked = _settings.AutoStopOnSilenceEnabled;
+        }
+        finally
+        {
+            _loadingAutoStopOnSilenceUi = false;
+        }
+
         UpdateShortcutDisplay();
     }
 
@@ -717,6 +730,35 @@ public partial class MainWindow : System.Windows.Window
         }
 
         UpdateShortcutDisplay();
+    }
+
+    private void AutoStopOnSilenceCheckBox_Changed(object sender, System.Windows.RoutedEventArgs e)
+    {
+        if (_loadingAutoStopOnSilenceUi) return;
+
+        var previous = _settings.AutoStopOnSilenceEnabled;
+        if (_isBusy || IsAnyRecording)
+        {
+            _loadingAutoStopOnSilenceUi = true;
+            AutoStopOnSilenceCheckBox.IsChecked = previous;
+            _loadingAutoStopOnSilenceUi = false;
+            RuntimeStatus.Text = "録音や処理を終えてから設定を変更してください。";
+            return;
+        }
+
+        _settings.AutoStopOnSilenceEnabled = AutoStopOnSilenceCheckBox.IsChecked == true;
+        try
+        {
+            _settingsStore.Save(_settings);
+        }
+        catch (Exception ex)
+        {
+            _settings.AutoStopOnSilenceEnabled = previous;
+            _loadingAutoStopOnSilenceUi = true;
+            AutoStopOnSilenceCheckBox.IsChecked = previous;
+            _loadingAutoStopOnSilenceUi = false;
+            RuntimeStatus.Text = "無音時の自動停止設定を保存できませんでした。 " + ex.Message;
+        }
     }
 
     private void NormalizeAiSettings()
@@ -2178,7 +2220,9 @@ public partial class MainWindow : System.Windows.Window
                 _recordingPrecedingTextContext = PrecedingTextContextService.Capture(_pasteTarget);
 
                 var selectedInput = MicrophoneDeviceCombo.SelectedItem as AudioInputDeviceOption;
-                StartRecorderWithDiscordMute(_recorder.Start, selectedInput);
+                StartRecorderWithDiscordMute(
+                    deviceNumber => _recorder.Start(deviceNumber, _settings.AutoStopOnSilenceEnabled),
+                    selectedInput);
                 _normalAudioInputActive = true;
                 _normalAudioRecognitionInProgress = false;
                 _skipAiAfterRecognitionRequested = false;
@@ -2537,6 +2581,83 @@ public partial class MainWindow : System.Windows.Window
             {
                 RuntimeStatus.Text = "Escapeでのキャンセルに失敗しました。 " + ex.Message;
                 _indicator.ShowStatus("キャンセル失敗", TimeSpan.FromSeconds(1));
+            }
+        }
+    }
+
+    private void HandleNormalAudioSilenceTimeout()
+    {
+        if (_closing) return;
+        try
+        {
+            Dispatcher.BeginInvoke(new Action(async () => await CancelNormalAudioAfterSilenceAsync()));
+        }
+        catch (InvalidOperationException) { }
+    }
+
+    private void HandleNormalAudioSilenceDetectionFailure(Exception exception)
+    {
+        if (_closing) return;
+        try
+        {
+            Dispatcher.BeginInvoke(new Action(() =>
+            {
+                if (!_closing && _normalAudioInputActive)
+                    RuntimeStatus.Text = "無音検出が停止しました。音声入力は続いているため、ショートカットで停止してください。";
+            }));
+        }
+        catch (InvalidOperationException) { }
+    }
+
+    private async Task CancelNormalAudioAfterSilenceAsync()
+    {
+        if (_closing || !_normalAudioInputActive || !_recorder.IsRecording ||
+            _normalAudioRecognitionInProgress || _isBusy)
+            return;
+
+        _isBusy = true;
+        _normalAudioInputActive = false;
+        _normalAudioRecognitionInProgress = false;
+        _skipAiAfterRecognitionRequested = false;
+        _rawTranscriptFallbackRequested = false;
+        _pendingRawTranscriptFallback = null;
+        _audioInputOperationId = null;
+        ActionButton.IsEnabled = false;
+        ActionButton.Content = "無音入力をキャンセルしています…";
+        _hotkey.SetVoiceCommandPushToTalkEnabled(false);
+        EndVoiceCommandCaptureIfActive();
+        _hotkey.SetEscapeMonitoring(false);
+        CancelTranscriptPreview();
+
+        string? stopError = null;
+        try
+        {
+            await _recorder.DiscardAsync(CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            stopError = ex.Message;
+        }
+        finally
+        {
+            try { await StopTranscriptPreviewAsync(); }
+            catch { }
+            if (!_closing) _transcriptPreviewWindow.HidePreview();
+            _recordingPrecedingTextContext = null;
+            _voiceCommandModeActive = false;
+            ReleaseDiscordMuteForAudioSession();
+            _isBusy = false;
+            if (!_closing)
+            {
+                ActionButton.IsEnabled = true;
+                ActionButton.Content = "録音を開始";
+                RuntimeStatus.Text = stopError is null
+                    ? "60秒間発話がなかったため、音声入力をキャンセルしました。"
+                    : "無音による録音停止に失敗しました。 " + stopError;
+                _indicator.ShowStatus(
+                    stopError is null ? "無音でキャンセル" : "録音停止失敗",
+                    TimeSpan.FromSeconds(1));
+                UpdateAiModeDisplay();
             }
         }
     }

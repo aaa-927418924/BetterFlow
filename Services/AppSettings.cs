@@ -23,6 +23,7 @@ internal sealed class AppSettings
     public uint ShortcutModifiers { get; set; }
     public uint ShortcutVirtualKey { get; set; } = HotkeyBinding.RightAltVirtualKey;
     public bool ShowIndicatorHints { get; set; } = true;
+    public bool AutoStopOnSilenceEnabled { get; set; } = true;
     public bool DiscordAutoMuteEnabled { get; set; }
     public uint DiscordMuteShortcutModifiers { get; set; }
     public uint DiscordMuteShortcutVirtualKey { get; set; }
