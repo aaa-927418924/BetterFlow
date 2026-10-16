@@ -816,6 +816,30 @@
                                                        AutomationProperties.LiveSetting="Polite" />
                                         </DockPanel>
                                     </Canvas>
+
+                                    <Border Canvas.Left="36" Canvas.Top="520" Width="639" Height="0.5"
+                                            Background="#FFFFFF" />
+                                    <Canvas Canvas.Left="35" Canvas.Top="542" Width="639" Height="66">
+                                        <TextBlock Canvas.Left="0" Canvas.Top="10" Width="270" Height="26"
+                                                   Text="設定のエクスポート/インポート" FontSize="16"
+                                                   Foreground="{StaticResource SettingsTextBrush}"
+                                                   VerticalAlignment="Center" />
+                                        <Button Canvas.Left="300" Canvas.Top="0" Content="インポート"
+                                                Width="145" Height="38" Padding="8,0"
+                                                Style="{StaticResource SettingsButtonStyle}"
+                                                Click="ImportSettingsButton_Click"
+                                                AutomationProperties.Name="設定をインポート" />
+                                        <Button Canvas.Left="456" Canvas.Top="0" Content="エクスポート"
+                                                Width="183" Height="38" Padding="8,0"
+                                                Style="{StaticResource SettingsButtonStyle}"
+                                                Click="ExportSettingsButton_Click"
+                                                AutomationProperties.Name="設定をエクスポート" />
+                                        <TextBlock x:Name="SettingsTransferStatus" Canvas.Left="0" Canvas.Top="45"
+                                                   Width="639" Height="18" FontSize="11"
+                                                   Foreground="{StaticResource SettingsMutedBrush}"
+                                                   TextTrimming="CharacterEllipsis"
+                                                   AutomationProperties.LiveSetting="Polite" />
+                                    </Canvas>
                                 </Canvas>
 
                                 <Grid x:Name="UserSystemPromptSettingsPage" Width="691" Height="691"

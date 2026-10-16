@@ -645,6 +645,132 @@ public partial class MainWindow : System.Windows.Window
         UpdateSelectedTextAnswerModeDisplay();
     }
 
+    private void ExportSettingsButton_Click(object sender, System.Windows.RoutedEventArgs e)
+    {
+        var dialog = new Microsoft.Win32.SaveFileDialog
+        {
+            Title = "Better Flowの設定をエクスポート",
+            Filter = "Better Flow設定 (*.betterflow.json)|*.betterflow.json|JSONファイル (*.json)|*.json",
+            DefaultExt = ".betterflow.json",
+            AddExtension = true,
+            FileName = $"Better Flow設定_{DateTime.Now:yyyyMMdd}.betterflow.json",
+            OverwritePrompt = true
+        };
+
+        if (dialog.ShowDialog(this) != true) return;
+
+        try
+        {
+            File.WriteAllText(dialog.FileName, SettingsTransfer.Serialize(_settings), new UTF8Encoding(false));
+            SettingsTransferStatus.Text = "設定をエクスポートしました。";
+        }
+        catch (Exception ex)
+        {
+            SettingsTransferStatus.Text = "設定をエクスポートできませんでした。 " + ex.GetBaseException().Message;
+        }
+    }
+
+    private void ImportSettingsButton_Click(object sender, System.Windows.RoutedEventArgs e)
+    {
+        if (_isBusy || IsAnyRecording)
+        {
+            SettingsTransferStatus.Text = "録音やAI処理を終えてからインポートしてください。";
+            return;
+        }
+
+        var dialog = new Microsoft.Win32.OpenFileDialog
+        {
+            Title = "Better Flowの設定をインポート",
+            Filter = "Better Flow設定 (*.betterflow.json)|*.betterflow.json|JSONファイル (*.json)|*.json",
+            CheckFileExists = true,
+            Multiselect = false
+        };
+        if (dialog.ShowDialog(this) != true) return;
+
+        try
+        {
+            var imported = SettingsTransfer.DeserializeFile(dialog.FileName);
+            var replace = System.Windows.MessageBox.Show(
+                this,
+                "現在の設定、辞書、指示プロンプトをファイルの内容で置き換えます。\n\n" +
+                "現在の設定ファイルは、置き換える前にバックアップされます。続けますか？",
+                "設定のインポート",
+                System.Windows.MessageBoxButton.YesNo,
+                System.Windows.MessageBoxImage.Warning,
+                System.Windows.MessageBoxResult.No);
+            if (replace != System.Windows.MessageBoxResult.Yes) return;
+
+            var importedHotkey = new HotkeyBinding(imported.ShortcutModifiers, imported.ShortcutVirtualKey);
+            if (!importedHotkey.IsUsable)
+                throw new InvalidDataException("インポートするショートカットキーの設定が無効です。");
+
+            var backupPath = string.Empty;
+            if (File.Exists(AppPaths.SettingsFile))
+            {
+                backupPath = AppPaths.SettingsFile + ".backup-" + DateTime.Now.ToString("yyyyMMdd-HHmmss");
+                File.Copy(AppPaths.SettingsFile, backupPath, overwrite: false);
+            }
+
+            var previousSettings = _settings;
+            var previousHotkey = GetConfiguredHotkey();
+            var previousHotkeyRegistered = _hotkeyRegistered;
+            var previousModelProvider = _settings.OpenCodeModelProviderId;
+            var previousModelId = _settings.OpenCodeModelId;
+            var handle = new WindowInteropHelper(this).Handle;
+
+            if (_asr is not null)
+            {
+                _hotkeyRegistered = _hotkey.Register(handle, importedHotkey);
+                if (!_hotkeyRegistered)
+                {
+                    _hotkeyRegistered = _hotkey.Register(handle, previousHotkey);
+                    throw new InvalidOperationException("インポートしたショートカットを登録できませんでした。現在の設定を維持しました。");
+                }
+            }
+
+            try
+            {
+                _settings = imported;
+                NormalizeAiSettings(saveChanges: false);
+                _settings.UserSystemPrompt = UserSystemPromptComposer.LimitCharacters(_settings.UserSystemPrompt ?? string.Empty);
+                _settingsStore.Save(_settings);
+            }
+            catch
+            {
+                _settings = previousSettings;
+                if (_asr is not null)
+                    _hotkeyRegistered = _hotkey.Register(handle, previousHotkey);
+                else
+                    _hotkeyRegistered = previousHotkeyRegistered;
+                throw;
+            }
+
+            InitializeUserSystemPromptUi();
+            InitializeIndicatorHintsSettingsUi();
+            InitializeOpenCodeModelUi();
+            RefreshCorrectionDictionaryItems();
+            InitializeSelectedTextAnswerModeUi();
+            InitializeMicrophoneDeviceUi();
+            InitializeDiscordMuteSettingsUi();
+
+            var modelChanged = !string.Equals(previousModelProvider, _settings.OpenCodeModelProviderId, StringComparison.Ordinal) ||
+                               !string.Equals(previousModelId, _settings.OpenCodeModelId, StringComparison.Ordinal);
+            if (modelChanged)
+                _openCodeReady = false;
+
+            UpdateAiModeDisplay();
+            SettingsTransferStatus.Text = modelChanged
+                ? "設定をインポートしました。OpenCodeモデルを使うには、詳細設定の「再取得」から準備してください。"
+                : backupPath.Length > 0
+                    ? "設定をインポートしました。元の設定のバックアップも作成しました。"
+                    : "設定をインポートしました。";
+        }
+        catch (Exception ex)
+        {
+            SettingsTransferStatus.Text = "設定をインポートできませんでした。 " + ex.GetBaseException().Message;
+        }
+    }
+
     private async void GptLiveSignInButton_Click(object sender, System.Windows.RoutedEventArgs e)
     {
         if (_isBusy || IsAnyRecording) return;
@@ -761,7 +887,7 @@ public partial class MainWindow : System.Windows.Window
         }
     }
 
-    private void NormalizeAiSettings()
+    private void NormalizeAiSettings(bool saveChanges = true)
     {
         var shouldSaveSettings = !File.Exists(AppPaths.SettingsFile);
         var resolveLegacyModelById = false;
@@ -873,7 +999,7 @@ public partial class MainWindow : System.Windows.Window
             .TakeLast(1_000)
             .ToList();
 
-        if (shouldSaveSettings)
+        if (shouldSaveSettings && saveChanges)
             _settingsStore.Save(_settings);
 
         string ResolveLegacyModelProvider()
