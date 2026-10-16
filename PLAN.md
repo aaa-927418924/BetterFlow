@@ -987,3 +987,13 @@
 - 上記2項目は計画段階であり、今回のソース実装には含めない。
 
 分類: 承認済み機能の実装前計画。出典: `Services/AutoDictionaryLearningMonitor.cs`、`MainWindow.xaml.cs`、`Services/OpenCodeService.cs`、`AnswerWindow.xaml(.cs)`、ユーザー指示。確認日: 2026-10-16 Asia/Tokyo。信頼度: 静的コード経路は高、具体的な入力欄認識失敗の再現条件と実行時計測値は未確認。
+
+## 2026-10-16: 承認済み3機能の実装結果
+
+- 自動辞書登録で実際に新規登録・別表記更新された項目だけを差分として保持し、画面下の「辞書に登録しました」表示の上に3秒間の「取り消す」ボタンを追加。取り消し時は対象項目の自動学習状態が変わっていないことを確認してから元へ戻す。後から手動変更された辞書項目には触れず、手動の辞書保存時は古い取り消し操作を無効化する。
+- 質問回答は、モデルが末尾の「出典」セクションへ`[ページタイトル](URL)`形式で返したHTTP/HTTPS参照先を最大8件カード化する。カードにはタイトルとホスト名を表示し、クリックすると既定ブラウザーで開く。質問プロンプトにはwebsearch/webfetchで実際に確認して回答に使ったページだけを記載し、出典がなければセクションを省くよう指定した。カードの根拠はモデル返答の記載であり、アプリはページ訪問履歴を独立取得して照合していない。
+- 通常音声入力のParakeet認識中にショートカットが押された場合、キャンセルせずAI整形スキップを予約する。認識成功後は文字起こし結果をそのまま入力欄へ貼り付け、キーを再度押す必要をなくす。質問・選択文編集やAI処理開始後のショートカット動作は変更しない。
+- Releaseビルドと単一EXE発行に成功（0エラー、NU1900警告1件: NuGet脆弱性情報取得先へ接続できず）。`dist/Better Flow.exe`は82,531,891 bytes、SHA-256 `9E0C86E14230769DC28E8E824B5C7A1FF8B1E2095DCAE4714BC945D66D924EA8`。発行物と配布EXEのハッシュ一致を確認。旧配布版は`artifacts/BetterFlow-before-approved-three-20261016.exe`へ退避し、今回の中間版は`artifacts/BetterFlow-before-approved-three-final-20261016.exe`へ保存した。
+- テストスイートと実アプリでの操作確認は未実施。確認範囲はソース、Release build/publish、配布EXEのハッシュ一致。
+
+分類: 承認済み機能の実装・配布。出典: `MainWindow.xaml.cs`、`AnswerWindow.xaml(.cs)`、`DictionaryUndoWindow.xaml(.cs)`、`Services/AnswerSourceParser.cs`、`Services/OpenCodeService.cs`、Release build/publish、配布EXE照合。確認日: 2026-10-16 Asia/Tokyo。信頼度: ソース・コンパイル・配置ハッシュ一致は高、実画面・実モデルの出典形式・実マイク動作は未確認。

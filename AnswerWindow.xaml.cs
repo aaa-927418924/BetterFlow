@@ -1,8 +1,10 @@
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Interop;
 using System.Windows.Threading;
+using BetterFlow.Services;
 
 namespace BetterFlow;
 
@@ -11,6 +13,7 @@ public partial class AnswerWindow : System.Windows.Window
     private const int GwlExStyle = -20;
     private const long WsExToolWindow = 0x00000080L;
     private string _currentAssistantText = string.Empty;
+    private IReadOnlyList<AnswerSourceCard> _currentSources = Array.Empty<AnswerSourceCard>();
 
     public AnswerWindow()
     {
@@ -23,7 +26,10 @@ public partial class AnswerWindow : System.Windows.Window
         RunOnUi(() =>
         {
             _currentAssistantText = string.Empty;
+            _currentSources = Array.Empty<AnswerSourceCard>();
             AnswerContent.Text = string.Empty;
+            AnswerSourceItems.ItemsSource = _currentSources;
+            SourceSection.Visibility = Visibility.Collapsed;
             Hide();
         });
     }
@@ -42,9 +48,11 @@ public partial class AnswerWindow : System.Windows.Window
     {
         RunOnUi(() =>
         {
-            var nextText = text ?? string.Empty;
+            var parsed = AnswerSourceParser.Parse(text);
+            var nextText = parsed.Text;
             if (!forceReplace && nextText.Length < _currentAssistantText.Length &&
-                _currentAssistantText.StartsWith(nextText, StringComparison.Ordinal))
+                _currentAssistantText.StartsWith(nextText, StringComparison.Ordinal) &&
+                parsed.Sources.SequenceEqual(_currentSources))
                 return;
 
             var hadFocus = AnswerContent.IsKeyboardFocusWithin;
@@ -58,7 +66,10 @@ public partial class AnswerWindow : System.Windows.Window
                                 AnswerContent.CaretIndex == previousText.Length;
 
             _currentAssistantText = nextText;
+            _currentSources = parsed.Sources;
             AnswerContent.Text = _currentAssistantText;
+            AnswerSourceItems.ItemsSource = _currentSources;
+            SourceSection.Visibility = _currentSources.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
 
             if (hadFocus)
             {
@@ -71,7 +82,7 @@ public partial class AnswerWindow : System.Windows.Window
                     AnswerContent.CaretIndex = nextText.Length;
             }
 
-            if (string.IsNullOrWhiteSpace(_currentAssistantText))
+            if (string.IsNullOrWhiteSpace(_currentAssistantText) && parsed.Sources.Count == 0)
                 Hide();
             else
             {
@@ -83,6 +94,20 @@ public partial class AnswerWindow : System.Windows.Window
     }
 
     public void ClearAnswer() => ResetAnswer();
+
+    private void SourceCard_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not System.Windows.Controls.Button { Tag: AnswerSourceCard source } ||
+            !Uri.TryCreate(source.Url, UriKind.Absolute, out var uri) ||
+            (uri.Scheme != Uri.UriSchemeHttps && uri.Scheme != Uri.UriSchemeHttp))
+            return;
+
+        try
+        {
+            Process.Start(new ProcessStartInfo(uri.AbsoluteUri) { UseShellExecute = true });
+        }
+        catch { }
+    }
 
     private void ShowAboveIndicator()
     {

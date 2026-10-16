@@ -30,13 +30,57 @@
                 <ScrollViewer x:Name="AnswerScrollViewer" Grid.Row="1" Margin="0,14,0,0"
                               VerticalScrollBarVisibility="Hidden" HorizontalScrollBarVisibility="Disabled"
                               CanContentScroll="False">
-                    <TextBox x:Name="AnswerContent" Text="" FontFamily="Yu Gothic UI" FontSize="15"
-                             TextWrapping="Wrap" AcceptsReturn="True" IsReadOnly="True"
-                             IsInactiveSelectionHighlightEnabled="True"
-                             Background="Transparent" Foreground="{StaticResource TextBrush}"
-                             BorderThickness="0" Padding="0" CaretBrush="{StaticResource TextBrush}"
-                             HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Disabled"
-                             FocusVisualStyle="{x:Null}" AutomationProperties.LiveSetting="Polite" />
+                    <StackPanel>
+                        <TextBox x:Name="AnswerContent" Text="" FontFamily="Yu Gothic UI" FontSize="15"
+                                 TextWrapping="Wrap" AcceptsReturn="True" IsReadOnly="True"
+                                 IsInactiveSelectionHighlightEnabled="True"
+                                 Background="Transparent" Foreground="{StaticResource TextBrush}"
+                                 BorderThickness="0" Padding="0" CaretBrush="{StaticResource TextBrush}"
+                                 HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Disabled"
+                                 FocusVisualStyle="{x:Null}" AutomationProperties.LiveSetting="Polite" />
+                        <StackPanel x:Name="SourceSection" Visibility="Collapsed" Margin="0,18,0,0">
+                            <TextBlock Text="出典" FontFamily="Yu Gothic UI" FontSize="11"
+                                       FontWeight="SemiBold" Foreground="#C8C8C8" Margin="0,0,0,8" />
+                            <ItemsControl x:Name="AnswerSourceItems">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <Button Tag="{Binding}" Click="SourceCard_Click" Padding="0"
+                                                Margin="0,0,0,7" Background="Transparent" BorderThickness="0"
+                                                HorizontalContentAlignment="Stretch" Cursor="Hand"
+                                                ToolTip="{Binding Url}"
+                                                AutomationProperties.Name="{Binding Title}">
+                                            <Button.Template>
+                                                <ControlTemplate TargetType="Button">
+                                                    <Border x:Name="CardSurface" Background="#2A2A2A"
+                                                            BorderBrush="#454545" BorderThickness="1"
+                                                            CornerRadius="9" Padding="10,8">
+                                                        <StackPanel>
+                                                            <TextBlock Text="{Binding Title}"
+                                                                       FontFamily="Yu Gothic UI" FontSize="12"
+                                                                       FontWeight="Medium" Foreground="#F4F4F4"
+                                                                       TextWrapping="Wrap" />
+                                                            <TextBlock Text="{Binding Host}"
+                                                                       FontFamily="Yu Gothic UI" FontSize="10"
+                                                                       Foreground="#A8A8A8" Margin="0,3,0,0" />
+                                                        </StackPanel>
+                                                    </Border>
+                                                    <ControlTemplate.Triggers>
+                                                        <Trigger Property="IsMouseOver" Value="True">
+                                                            <Setter TargetName="CardSurface" Property="Background" Value="#363636" />
+                                                            <Setter TargetName="CardSurface" Property="BorderBrush" Value="#777777" />
+                                                        </Trigger>
+                                                        <Trigger Property="IsPressed" Value="True">
+                                                            <Setter TargetName="CardSurface" Property="Background" Value="#222222" />
+                                                        </Trigger>
+                                                    </ControlTemplate.Triggers>
+                                                </ControlTemplate>
+                                            </Button.Template>
+                                        </Button>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </StackPanel>
+                    </StackPanel>
                 </ScrollViewer>
             </Grid>
         </Border>

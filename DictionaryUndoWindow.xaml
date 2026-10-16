@@ -1,0 +1,37 @@
+<Window x:Class="BetterFlow.DictionaryUndoWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Width="104" Height="26" WindowStyle="None" AllowsTransparency="True"
+        Background="Transparent" ResizeMode="NoResize" ShowInTaskbar="False"
+        ShowActivated="False" Topmost="True" WindowStartupLocation="Manual"
+        Focusable="False" UseLayoutRounding="True" SnapsToDevicePixels="True">
+    <Button Click="UndoButton_Click" Focusable="True" IsTabStop="True" Padding="0"
+            Background="Transparent" BorderThickness="0"
+            AutomationProperties.Name="辞書の自動登録を取り消す">
+        <Button.Template>
+            <ControlTemplate TargetType="Button">
+                <Border x:Name="Surface" Background="#303030" BorderBrush="#626262"
+                        BorderThickness="1.5" CornerRadius="13" Padding="8,2">
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Center"
+                                VerticalAlignment="Center">
+                        <TextBlock Text="↶" FontFamily="Segoe UI Symbol" FontSize="12"
+                                   Foreground="#F4F4F4" VerticalAlignment="Center"
+                                   Margin="0,0,4,0" />
+                        <TextBlock Text="取り消す" FontFamily="Yu Gothic UI" FontSize="9.5"
+                                   FontWeight="Medium" Foreground="#F4F4F4"
+                                   VerticalAlignment="Center" />
+                    </StackPanel>
+                </Border>
+                <ControlTemplate.Triggers>
+                    <Trigger Property="IsMouseOver" Value="True">
+                        <Setter TargetName="Surface" Property="Background" Value="#454545" />
+                        <Setter TargetName="Surface" Property="BorderBrush" Value="#858585" />
+                    </Trigger>
+                    <Trigger Property="IsPressed" Value="True">
+                        <Setter TargetName="Surface" Property="Background" Value="#222222" />
+                    </Trigger>
+                </ControlTemplate.Triggers>
+            </ControlTemplate>
+        </Button.Template>
+    </Button>
+</Window>

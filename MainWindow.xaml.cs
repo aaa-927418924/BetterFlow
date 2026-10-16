@@ -28,6 +28,7 @@ public partial class MainWindow : System.Windows.Window
     private readonly IndicatorWindow _indicator;
     private readonly TranscriptPreviewWindow _transcriptPreviewWindow;
     private readonly UndoWindow _undoWindow;
+    private readonly DictionaryUndoWindow _dictionaryUndoWindow;
     private readonly AnswerWindow _answerWindow;
     private readonly bool _startHiddenInTray;
     private System.Windows.Forms.NotifyIcon? _trayIcon;
@@ -40,6 +41,8 @@ public partial class MainWindow : System.Windows.Window
     private IntPtr _pasteTarget;
     private bool _isBusy;
     private bool _normalAudioInputActive;
+    private bool _normalAudioRecognitionInProgress;
+    private bool _skipAiAfterRecognitionRequested;
     private volatile bool _voiceCommandModeActive;
     private bool _rawTranscriptFallbackRequested;
     private bool _closing;
@@ -76,6 +79,7 @@ public partial class MainWindow : System.Windows.Window
     private bool _selectionEditSessionStopping;
     private CancellationTokenSource? _selectionEditCancellation;
     private SelectionEditUndoRecord? _lastSelectionEditUndo;
+    private AutomaticDictionaryUndoRecord? _lastAutomaticDictionaryUndo;
     private IReadOnlyList<OpenCodeModelOption> _openCodeModels = Array.Empty<OpenCodeModelOption>();
     private IReadOnlyList<AudioInputDeviceOption> _audioInputDevices = Array.Empty<AudioInputDeviceOption>();
 
@@ -92,6 +96,13 @@ public partial class MainWindow : System.Windows.Window
     private sealed record DictionaryLearningCandidate(
         string PreferredSpelling,
         IReadOnlyList<string> MisrecognizedVariants);
+
+    private sealed record DictionaryEntryUndoDelta(
+        string PreferredSpelling,
+        CorrectionDictionaryEntry? Before,
+        CorrectionDictionaryEntry? After);
+
+    private sealed record AutomaticDictionaryUndoRecord(IReadOnlyList<DictionaryEntryUndoDelta> Changes);
 
     private sealed record SuppressedDictionaryTermOption(string Term)
     {
@@ -119,6 +130,9 @@ public partial class MainWindow : System.Windows.Window
         _undoWindow = new UndoWindow();
         _undoWindow.UndoRequested += UndoWindow_UndoRequested;
         _undoWindow.UndoExpired += UndoWindow_UndoExpired;
+        _dictionaryUndoWindow = new DictionaryUndoWindow();
+        _dictionaryUndoWindow.UndoRequested += DictionaryUndoWindow_UndoRequested;
+        _dictionaryUndoWindow.UndoExpired += DictionaryUndoWindow_UndoExpired;
         _settings = _settingsStore.Load();
         _startHiddenInTray = Bootstrapper.IsModelReady();
         if (_startHiddenInTray)
@@ -1039,6 +1053,7 @@ public partial class MainWindow : System.Windows.Window
 
             cancellationToken.ThrowIfCancellationRequested();
             var submissionId = $"{submission.MonitorId}:{submission.CandidateId}";
+            var dictionaryBeforeLearning = CloneCorrectionDictionary();
             var result = ApplyAutomaticDictionaryLearning(
                 confirmedChanges, pendingChanges, submissionId, submission.MonitorId, submission.CandidateId);
             if (result.SaveFailed)
@@ -1062,7 +1077,7 @@ public partial class MainWindow : System.Windows.Window
                 CorrectionDictionaryStatus.Text = result.AddedCount == 1
                     ? "送信した正しい表記と誤認識例を辞書に登録しました。"
                     : $"送信した修正から表記と誤認識例を{result.AddedCount}件登録しました。";
-                ShowDictionarySavedIndicator();
+                ShowAutomaticDictionarySavedIndicator(dictionaryBeforeLearning);
             }
             else if (result.PendingUpdatedCount > 0)
             {
@@ -1440,6 +1455,7 @@ public partial class MainWindow : System.Windows.Window
         try
         {
             _settingsStore.Save(_settings);
+            InvalidateAutomaticDictionaryUndo();
             RefreshCorrectionDictionaryItems();
             CorrectionDictionaryStatus.Text = successMessage;
             return true;
@@ -1455,6 +1471,123 @@ public partial class MainWindow : System.Windows.Window
 
     private void ShowDictionarySavedIndicator() =>
         _indicator.ShowStatus("辞書に登録しました", TimeSpan.FromSeconds(1.5));
+
+    private void ShowAutomaticDictionarySavedIndicator(
+        IReadOnlyList<CorrectionDictionaryEntry> previousDictionary)
+    {
+        var changes = BuildDictionaryUndoDeltas(previousDictionary, _settings.CorrectionDictionary);
+        if (changes.Count == 0)
+        {
+            ShowDictionarySavedIndicator();
+            return;
+        }
+
+        _lastAutomaticDictionaryUndo = new AutomaticDictionaryUndoRecord(changes);
+        _dictionaryUndoWindow.ShowUndo();
+        _indicator.ShowStatus("辞書に登録しました", TimeSpan.FromSeconds(3));
+    }
+
+    private static IReadOnlyList<DictionaryEntryUndoDelta> BuildDictionaryUndoDeltas(
+        IReadOnlyList<CorrectionDictionaryEntry> before,
+        IReadOnlyList<CorrectionDictionaryEntry> after)
+    {
+        var beforeByTerm = before.GroupBy(entry => entry.PreferredSpelling, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(group => group.Key, group => group.Last(), StringComparer.OrdinalIgnoreCase);
+        var afterByTerm = after.GroupBy(entry => entry.PreferredSpelling, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(group => group.Key, group => group.Last(), StringComparer.OrdinalIgnoreCase);
+        var terms = beforeByTerm.Keys.Concat(afterByTerm.Keys)
+            .Distinct(StringComparer.OrdinalIgnoreCase);
+        var changes = new List<DictionaryEntryUndoDelta>();
+        foreach (var term in terms)
+        {
+            beforeByTerm.TryGetValue(term, out var oldEntry);
+            afterByTerm.TryGetValue(term, out var newEntry);
+            if (DictionaryEntryLearningStateEquals(oldEntry, newEntry)) continue;
+            changes.Add(new DictionaryEntryUndoDelta(
+                term,
+                oldEntry is null ? null : CloneDictionaryEntry(oldEntry),
+                newEntry is null ? null : CloneDictionaryEntry(newEntry)));
+        }
+        return changes;
+    }
+
+    private static bool DictionaryEntryLearningStateEquals(
+        CorrectionDictionaryEntry? first,
+        CorrectionDictionaryEntry? second) =>
+        first is null || second is null
+            ? first is null && second is null
+            : string.Equals(first.PreferredSpelling, second.PreferredSpelling, StringComparison.OrdinalIgnoreCase) &&
+              string.Equals(first.Alternatives, second.Alternatives, StringComparison.Ordinal) &&
+              string.Equals(first.Source, second.Source, StringComparison.Ordinal);
+
+    private static CorrectionDictionaryEntry CloneDictionaryEntry(CorrectionDictionaryEntry entry) => new()
+    {
+        PreferredSpelling = entry.PreferredSpelling,
+        Alternatives = entry.Alternatives,
+        Source = entry.Source,
+        UseCount = entry.UseCount,
+        LastUsedUtc = entry.LastUsedUtc
+    };
+
+    private void DictionaryUndoWindow_UndoRequested(object? sender, EventArgs e)
+    {
+        var undo = _lastAutomaticDictionaryUndo;
+        _lastAutomaticDictionaryUndo = null;
+        if (_closing || undo is null || undo.Changes.Count == 0) return;
+
+        var current = CloneCorrectionDictionary();
+        foreach (var change in undo.Changes)
+        {
+            var currentEntry = _settings.CorrectionDictionary.FirstOrDefault(entry =>
+                string.Equals(entry.PreferredSpelling, change.PreferredSpelling, StringComparison.OrdinalIgnoreCase));
+            if (!DictionaryEntryLearningStateEquals(currentEntry, change.After))
+            {
+                _indicator.ShowStatus("辞書が更新済みです", TimeSpan.FromSeconds(1.5));
+                return;
+            }
+        }
+
+        foreach (var change in undo.Changes)
+        {
+            var index = _settings.CorrectionDictionary.FindIndex(entry =>
+                string.Equals(entry.PreferredSpelling, change.PreferredSpelling, StringComparison.OrdinalIgnoreCase));
+            if (change.Before is null)
+            {
+                if (index >= 0) _settings.CorrectionDictionary.RemoveAt(index);
+            }
+            else if (index >= 0)
+            {
+                var previousEntry = CloneDictionaryEntry(change.Before);
+                previousEntry.UseCount = _settings.CorrectionDictionary[index].UseCount;
+                previousEntry.LastUsedUtc = _settings.CorrectionDictionary[index].LastUsedUtc;
+                _settings.CorrectionDictionary[index] = previousEntry;
+            }
+        }
+
+        try
+        {
+            _settingsStore.Save(_settings);
+            RefreshCorrectionDictionaryItems();
+            CorrectionDictionaryStatus.Text = "自動登録を取り消しました。";
+            _indicator.ShowStatus("登録を取り消しました", TimeSpan.FromSeconds(1.5));
+        }
+        catch (Exception ex)
+        {
+            _settings.CorrectionDictionary = current;
+            RefreshCorrectionDictionaryItems();
+            CorrectionDictionaryStatus.Text = "自動登録を取り消せませんでした。 " + ex.Message;
+            _indicator.ShowStatus("取り消せません", TimeSpan.FromSeconds(1.5));
+        }
+    }
+
+    private void DictionaryUndoWindow_UndoExpired(object? sender, EventArgs e) =>
+        _lastAutomaticDictionaryUndo = null;
+
+    private void InvalidateAutomaticDictionaryUndo()
+    {
+        _lastAutomaticDictionaryUndo = null;
+        _dictionaryUndoWindow.HideUndo();
+    }
 
     private List<CorrectionDictionaryEntry> CloneCorrectionDictionary() => _settings.CorrectionDictionary
         .Select(entry => new CorrectionDictionaryEntry
@@ -1796,6 +1929,8 @@ public partial class MainWindow : System.Windows.Window
                 var selectedInput = MicrophoneDeviceCombo.SelectedItem as AudioInputDeviceOption;
                 StartRecorderWithDiscordMute(_recorder.Start, selectedInput);
                 _normalAudioInputActive = true;
+                _normalAudioRecognitionInProgress = false;
+                _skipAiAfterRecognitionRequested = false;
                 _pendingRawTranscriptFallback = null;
                 _rawTranscriptFallbackRequested = false;
                 if (!_hotkey.SetEscapeMonitoring(true))
@@ -1815,6 +1950,8 @@ public partial class MainWindow : System.Windows.Window
                 if (!_recorder.IsRecording)
                 {
                     _normalAudioInputActive = false;
+                    _normalAudioRecognitionInProgress = false;
+                    _skipAiAfterRecognitionRequested = false;
                     _hotkey.SetVoiceCommandPushToTalkEnabled(false);
                     EndVoiceCommandCaptureIfActive();
                     _hotkey.SetEscapeMonitoring(false);
@@ -3085,6 +3222,8 @@ public partial class MainWindow : System.Windows.Window
         var processingCancellation = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token);
         _audioProcessingCancellation = processingCancellation;
         var cancellationToken = processingCancellation.Token;
+        _normalAudioRecognitionInProgress = true;
+        _skipAiAfterRecognitionRequested = false;
         _isBusy = true;
         UpdateAiModeDisplay();
         ActionButton.IsEnabled = false;
@@ -3111,9 +3250,12 @@ public partial class MainWindow : System.Windows.Window
             await StopTranscriptPreviewAsync();
             pipelineStage = "transcription";
             var decoded = await TranscribeNormalAudioSegmentsAsync(recordingSegments, operationId, cancellationToken);
+            _normalAudioRecognitionInProgress = false;
+            var skipAiAfterRecognition = _skipAiAfterRecognitionRequested;
+            _skipAiAfterRecognitionRequested = false;
             var transcript = decoded.Transcript;
             var formatAsPrompt = decoded.FormatAsPrompt;
-            var sendAsIs = decoded.SendAsIs;
+            var sendAsIs = decoded.SendAsIs || skipAiAfterRecognition;
             var editInstructions = decoded.EditInstructions;
             var voiceEditCommands = decoded.VoiceEditCommands;
             var hasVoiceEditInstructions = editInstructions.Count > 0 || voiceEditCommands.Count > 0;
@@ -3556,6 +3698,8 @@ public partial class MainWindow : System.Windows.Window
                 _audioProcessingCancellation = null;
             processingCancellation.Dispose();
             _normalAudioInputActive = false;
+            _normalAudioRecognitionInProgress = false;
+            _skipAiAfterRecognitionRequested = false;
             _voiceCommandModeActive = false;
             _hotkey.SetVoiceCommandPushToTalkEnabled(false);
             _rawTranscriptFallbackRequested = false;
@@ -4034,6 +4178,13 @@ public partial class MainWindow : System.Windows.Window
         if (msg == GlobalHotkey.MessageId && _hotkey.IsMessage(wParam.ToInt32()))
         {
             handled = true;
+            if (_normalAudioInputActive && _normalAudioRecognitionInProgress)
+            {
+                _skipAiAfterRecognitionRequested = true;
+                RuntimeStatus.Text = "文字起こしが終わったらAI整形をせず、そのまま入力欄へ反映します。";
+                _indicator.ShowStatus("AI整形をスキップ");
+                return IntPtr.Zero;
+            }
             ActionButton_Click(this, new System.Windows.RoutedEventArgs());
         }
         return IntPtr.Zero;
@@ -4063,6 +4214,7 @@ public partial class MainWindow : System.Windows.Window
         _indicator.Close();
         _transcriptPreviewWindow.Close();
         _undoWindow.Close();
+        _dictionaryUndoWindow.Close();
         _answerWindow.Close();
         _recorder.Dispose();
         try { _transcriptPreviewTask?.GetAwaiter().GetResult(); } catch { }
