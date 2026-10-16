@@ -957,3 +957,9 @@
 - テストスイートは未実行。長文を実際にストリーミングしての画面確認も未実施。
 
 分類: ストリーミングプレビューのスクロール追従。出典: TranscriptPreviewWindow.xaml(.cs)、AnswerWindow.xaml(.cs)、Release build/publish、配布EXE SHA-256照合。確認日: 2026-10-16 Asia/Tokyo。信頼度: ソース・コンパイル・配置一致は高、実行時の画面挙動は未確認。情報区分: ソース確認・未確認事項。
+## 2026-10-16: ストリーミング表示のスクロールバー非表示
+
+- 文字起こしプレビューとAI回答ダイアログの縦スクロールバーをHiddenに変更。ScrollViewer自体は有効のままなので、更新時のScrollToEndによる最新位置への自動追従を維持する。
+- Release build/publish成功（0エラー、NU1900警告1件）。発行物とdist/Better Flow.exeは82,526,227 bytes、SHA-256 20D7815BD1733AB37A2336A778A0A99A6C5189F0C8404570BB61058734493500で一致。
+- 置換前EXEはartifacts/BetterFlow-before-streaming-scrollbar-hidden-20261016.exeへバックアップ済み（82,526,207 bytes、SHA-256 9078FE8963B6ECB3A8B798AA3DE9FDE3879C4959C158E4D9482E80DEF628E37A）。置換時に対象EXEと同一パスから起動中のプロセスはなかった。
+- 分類: ストリーミングUI調整。出典: AnswerWindow.xaml、TranscriptPreviewWindow.xaml、Release build/publish、配布EXE照合。確認日: 2026-10-16 Asia/Tokyo。信頼度: コンパイル・ハッシュ一致は高、実画面での確認は未実施。情報区分: ソース確認・未確認事項。

@@ -8,7 +8,7 @@
         UseLayoutRounding="True" SnapsToDevicePixels="True">
     <Border Background="#202020" BorderBrush="#303030" BorderThickness="2"
             CornerRadius="19" Padding="13,9" IsHitTestVisible="False">
-        <ScrollViewer x:Name="PreviewScrollViewer" MaxHeight="98" VerticalScrollBarVisibility="Auto"
+        <ScrollViewer x:Name="PreviewScrollViewer" MaxHeight="98" VerticalScrollBarVisibility="Hidden"
                       HorizontalScrollBarVisibility="Disabled" IsHitTestVisible="False">
             <TextBlock x:Name="PreviewText" FontFamily="Yu Gothic UI" FontSize="13"
                        Foreground="#F4F4F4" TextWrapping="Wrap" />
