@@ -22,7 +22,25 @@ internal static class PasteService
         return PasteCopiedText(targetWindow);
     }
 
-    public static void CopyTextToClipboard(string text) => System.Windows.Clipboard.SetText(text);
+    public static void CopyTextToClipboard(string text)
+    {
+        const int clipboardBusyHResult = unchecked((int)0x800401D0);
+        const int maximumRetries = 3;
+
+        for (var attempt = 0; ; attempt++)
+        {
+            try
+            {
+                System.Windows.Clipboard.SetText(text);
+                return;
+            }
+            catch (System.Runtime.InteropServices.ExternalException exception)
+                when (exception.HResult == clipboardBusyHResult && attempt < maximumRetries)
+            {
+                System.Threading.Thread.Sleep(40 * (attempt + 1));
+            }
+        }
+    }
 
     public static PasteResult PasteCopiedText(IntPtr targetWindow)
         => PasteCopiedTextWithDetails(targetWindow).Result;

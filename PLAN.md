@@ -832,4 +832,13 @@
 4. 音声処理の段階、例外型、HRESULT、原文の有無・文字数、出力結果のみを記録するローカル診断ログを追加する。音声・文字起こし本文は記録しない。
 5. Releaseビルド、単体EXE発行、旧版バックアップ、既存EXEの停止と置換を行う。実マイクと選択モデルの動作確認はビルド結果と分けて報告する。
 
-実装前チェックポイント: 作成予定。
+実装前チェックポイント: 1418d31.
+
+#### 実装結果
+
+- MainWindow.xaml.csで、文字起こし済みの原文を音声区間ごとにメモリ上へ保持するようにした。後続区間、AI準備、AI応答、応答検証で失敗しても、まだ一度も出力していない場合は認識済みテキストを貼り付け／コピーへ回す。
+- AI整形失敗時は、原文を出力して原因をステータスへ残す。失敗後に原文へ切り替えた場合は、自動Enter送信を止める。貼り付けに失敗したときも、原文で一度だけ出力を再試行する。
+- PasteService.csで、Windowsのクリップボード使用中を示すHRESULT 0x800401D0だけを最大3回再試行するようにした。音声処理ログ audio-input-diagnostic.jsonl には段階、結果、例外型・HRESULT、原文有無と文字数だけを記録し、音声・文字起こし本文は保存しない。
+- dotnet build AutoPrompt.csproj -c Release --no-restoreと単体EXEのdotnet publishが成功（0エラー、NU1900警告1件）。最終発行物とdist/Better Flow.exeは82,511,815 bytes、SHA-256 28732946C754235D4F42059D9ADAECE3BFEA190E9BED81BC85866508B663DF44で一致。
+- 置換前の安定版EXEをartifacts/BetterFlow-before-audio-output-fallback-20261016.exeへ保存し、SHA-256 3D119F5B019C353C4D4790863447A34A4AF2CD200F92C5D79E68CA49C9A15BF6を確認。中間発行版もartifacts/BetterFlow-before-final-audio-output-fallback-20261016.exeへ保存。配布EXEと完全一致するPID 25996を先行置換時に停止し、最終置換時は一致するプロセスがないことを確認した。
+- 実マイクと選択モデルによる再現確認は未実施。テストスイートも実行していない。直近のOpenCode計測ログにある4件は成功で、過去2件の空応答失敗は今回の報告と時刻が一致しないため、個別の直近失敗の直接原因とは断定していない。

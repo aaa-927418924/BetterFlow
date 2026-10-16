@@ -2794,6 +2794,13 @@ public partial class MainWindow : System.Windows.Window
         var sendAsIs = false;
         var hadUnrecognizedVoiceCommand = false;
 
+        void PreserveRawTranscriptFallback()
+        {
+            var rawTranscript = VoiceCommandParser.RemoveVoiceCommandMarkers(transcript.ToString());
+            if (TranscriptFormatter.HasMeaningfulText(rawTranscript))
+                _pendingRawTranscriptFallback = rawTranscript;
+        }
+
         try
         {
             foreach (var segment in segments)
@@ -2846,6 +2853,7 @@ public partial class MainWindow : System.Windows.Window
                             if (transcript.Length > 0 && transcript[^1] != '\n' && !char.IsWhiteSpace(transcript[^1]))
                                 transcript.Append(' ');
                             transcript.Append(recognized);
+                            PreserveRawTranscriptFallback();
                         }
                     }
                 }
@@ -2866,6 +2874,7 @@ public partial class MainWindow : System.Windows.Window
                     if (transcript.Length > 0 && !char.IsWhiteSpace(transcript[^1]))
                         transcript.Append(' ');
                     transcript.Append(marker).Append(' ');
+                    PreserveRawTranscriptFallback();
                     voiceEditCommands.Add(new VoiceEditCommandInstruction(marker, editInstruction));
                     continue;
                 }
@@ -2884,7 +2893,10 @@ public partial class MainWindow : System.Windows.Window
                         while (transcript.Length > 0 && char.IsWhiteSpace(transcript[^1]))
                             transcript.Length--;
                         if (transcript.Length > 0 && transcript[^1] != '\n')
+                        {
                             transcript.Append('\n');
+                            PreserveRawTranscriptFallback();
+                        }
                         break;
                     case VoiceTextCommand.FormatAsPrompt:
                         formatAsPrompt = true;
@@ -2900,6 +2912,7 @@ public partial class MainWindow : System.Windows.Window
             }
 
             await FlushDictatedAudioAsync();
+            PreserveRawTranscriptFallback();
 
             return new NormalAudioDecodeResult(
                 transcript.ToString().Trim(' ', '\t', '\r'),
@@ -2952,6 +2965,12 @@ public partial class MainWindow : System.Windows.Window
         var sendCommandDetected = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         var sendCommandMonitorUnavailable = false;
         var sendAfterPaste = false;
+        var pipelineStage = "recording-stop";
+        var outputAttempted = false;
+        var rawFallbackUsed = false;
+        var completionIndicator = "完了";
+        string? aiFailureMessage = null;
+        _pendingRawTranscriptFallback = null;
         try
         {
             _hotkey.SetVoiceCommandPushToTalkEnabled(false);
@@ -2959,6 +2978,7 @@ public partial class MainWindow : System.Windows.Window
             CancelTranscriptPreview();
             recordingSegments = await _recorder.StopAndGetSegmentsAsync(cancellationToken);
             await StopTranscriptPreviewAsync();
+            pipelineStage = "transcription";
             var decoded = await TranscribeNormalAudioSegmentsAsync(recordingSegments, cancellationToken);
             var transcript = decoded.Transcript;
             var formatAsPrompt = decoded.FormatAsPrompt;
@@ -2998,6 +3018,7 @@ public partial class MainWindow : System.Windows.Window
             }
             else
             {
+                pipelineStage = "ai-processing";
                 _indicator.ShowStatus("整形中");
                 RuntimeStatus.Text = usePromptStyleRewrite
                     ? "音声コマンドに従ってプロンプト風に整えています…"
@@ -3067,14 +3088,56 @@ public partial class MainWindow : System.Windows.Window
                 catch (Exception ex)
                 {
                     _openCode.Stop();
-                    RuntimeStatus.Text = "AI変換に失敗しました。入力欄は変更していません。 " + ex.Message;
-                    _indicator.ShowStatus(GetAiFailureIndicatorText(ex), TimeSpan.FromSeconds(1));
-                    return;
+                    AudioInputDiagnosticLog.Write("ai-processing", "raw-transcript-fallback", ex, transcriptForPaste);
+                    text = transcriptForPaste;
+                    var sendWasRequested = sendAfterPaste;
+                    sendAfterPaste = false;
+                    rawFallbackUsed = true;
+                    completionIndicator = "原文を反映";
+                    resultStatus = sendWasRequested
+                        ? "AI整形に失敗したため、文字起こしをそのまま貼り付けました。安全のため自動送信はしていません。"
+                        : "AI整形に失敗したため、文字起こしをそのまま貼り付けました。";
+                    aiFailureMessage = ex.GetBaseException().Message;
                 }
             }
 
             cancellationToken.ThrowIfCancellationRequested();
-            var pasted = PasteAndShow(text, resultStatus);
+            pipelineStage = "output";
+            outputAttempted = true;
+            var outputResult = PasteAndShow(text, resultStatus);
+            if (outputResult is null && TranscriptFormatter.HasMeaningfulText(_pendingRawTranscriptFallback))
+            {
+                var previousOutputFailure = RuntimeStatus.Text;
+                var rawTranscript = _pendingRawTranscriptFallback!;
+                if (!string.Equals(text, rawTranscript, StringComparison.Ordinal))
+                {
+                    text = rawTranscript;
+                    sendAfterPaste = false;
+                    rawFallbackUsed = true;
+                    resultStatus = "貼り付けに失敗したため、文字起こしをそのまま貼り付けました。自動送信はしていません。";
+                }
+                AudioInputDiagnosticLog.Write("output-retry", "recognized-transcript", recognizedText: text);
+                outputResult = PasteAndShow(text, resultStatus);
+                if (!string.IsNullOrWhiteSpace(previousOutputFailure))
+                    RuntimeStatus.Text += " 最初の出力に失敗したため再試行しました。";
+            }
+            var pasted = outputResult == PasteResult.Pasted;
+            completionIndicator = rawFallbackUsed
+                ? outputResult switch
+                {
+                    PasteResult.Pasted => "原文を反映",
+                    PasteResult.CopiedOnly => "原文をコピー",
+                    _ => "出力失敗"
+                }
+                : outputResult switch
+                {
+                    PasteResult.Pasted => "完了",
+                    PasteResult.CopiedOnly => "コピーしました",
+                    _ => "出力失敗"
+                };
+            if (rawFallbackUsed && !string.IsNullOrWhiteSpace(aiFailureMessage))
+                RuntimeStatus.Text += " AIエラー: " + aiFailureMessage;
+            pipelineStage = "post-output";
             if (pasted)
             {
                 StartAutoDictionaryLearningMonitor(text);
@@ -3103,7 +3166,7 @@ public partial class MainWindow : System.Windows.Window
 
             if (decoded.HadUnrecognizedVoiceCommand)
                 RuntimeStatus.Text += " 一部のSpace音声コマンドを認識できず、文字起こしには含めていません。";
-            _indicator.ShowStatus("完了", TimeSpan.FromSeconds(1));
+            _indicator.ShowStatus(completionIndicator, TimeSpan.FromSeconds(1));
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -3126,7 +3189,9 @@ public partial class MainWindow : System.Windows.Window
                 }
 
                 var rawTranscript = _pendingRawTranscriptFallback;
-                var pasted = PasteAndShow(rawTranscript, "文字起こしを入力欄へ貼り付けました。");
+                outputAttempted = true;
+                var outputResult = PasteAndShow(rawTranscript, "文字起こしを入力欄へ貼り付けました。");
+                var pasted = outputResult == PasteResult.Pasted;
                 if (pasted)
                 {
                     StartAutoDictionaryLearningMonitor(rawTranscript);
@@ -3137,7 +3202,10 @@ public partial class MainWindow : System.Windows.Window
                 }
                 else
                 {
-                    _indicator.ShowStatus(sendAfterPaste ? "送信未完了" : "文字起こしをコピー", TimeSpan.FromSeconds(1));
+                    _indicator.ShowStatus(sendAfterPaste
+                        ? "送信未完了"
+                        : outputResult == PasteResult.CopiedOnly ? "文字起こしをコピー" : "コピー失敗",
+                        TimeSpan.FromSeconds(1));
                 }
             }
             else if (_closing) _indicator.HideStatus();
@@ -3145,10 +3213,32 @@ public partial class MainWindow : System.Windows.Window
         }
         catch (Exception ex)
         {
-            RuntimeStatus.Text = ex.Message;
-            _indicator.ShowStatus(ex.Message.Contains("文字起こし結果", StringComparison.Ordinal)
-                ? "音声認識失敗"
-                : "処理に失敗しました", TimeSpan.FromSeconds(1));
+            var rawTranscript = _pendingRawTranscriptFallback;
+            AudioInputDiagnosticLog.Write(pipelineStage, "failed", ex, rawTranscript);
+            if (!_closing && !outputAttempted && TranscriptFormatter.HasMeaningfulText(rawTranscript))
+            {
+                var usableRawTranscript = rawTranscript!;
+                outputAttempted = true;
+                var outputResult = PasteAndShow(
+                    usableRawTranscript,
+                    "音声処理に失敗したため、認識できた文章をそのまま入力欄へ貼り付けました。");
+                if (outputResult == PasteResult.Pasted)
+                    StartAutoDictionaryLearningMonitor(usableRawTranscript);
+                RuntimeStatus.Text += " 音声処理の失敗箇所: " + pipelineStage + "。詳細: " + ex.GetBaseException().Message;
+                _indicator.ShowStatus(outputResult switch
+                {
+                    PasteResult.Pasted => "原文を反映",
+                    PasteResult.CopiedOnly => "原文をコピー",
+                    _ => "出力失敗"
+                }, TimeSpan.FromSeconds(1));
+            }
+            else
+            {
+                RuntimeStatus.Text = ex.Message;
+                _indicator.ShowStatus(ex.Message.Contains("文字起こし結果", StringComparison.Ordinal)
+                    ? "音声認識失敗"
+                    : "処理に失敗しました", TimeSpan.FromSeconds(1));
+            }
         }
         finally
         {
@@ -3217,18 +3307,6 @@ public partial class MainWindow : System.Windows.Window
         _indicator.ShowStatus("送信未完了", TimeSpan.FromSeconds(1));
     }
 
-    private static string GetAiFailureIndicatorText(Exception exception)
-    {
-        var message = exception.GetBaseException().Message;
-        if (message.Contains("OAuth認証を更新", StringComparison.OrdinalIgnoreCase) ||
-            message.Contains("Token refresh failed", StringComparison.OrdinalIgnoreCase) ||
-            message.Contains("invalid_grant", StringComparison.OrdinalIgnoreCase))
-            return "OpenCode再ログイン";
-        if (message.Contains("文字として使える回答", StringComparison.Ordinal))
-            return "AI応答なし";
-        return "AI変換失敗";
-    }
-
     private async Task MonitorSendVoiceCommandsAsync(
         TaskCompletionSource<bool> sendCommandDetected,
         CancellationToken cancellationToken)
@@ -3289,20 +3367,22 @@ public partial class MainWindow : System.Windows.Window
         }
     }
 
-    private bool PasteAndShow(string text, string successStatus)
+    private PasteResult? PasteAndShow(string text, string successStatus)
     {
         try
         {
             var paste = PasteService.CopyAndPaste(text, _pasteTarget);
+            AudioInputDiagnosticLog.Write("output", paste == PasteResult.Pasted ? "pasted" : "copied-only", recognizedText: text);
             RuntimeStatus.Text = paste == PasteResult.Pasted
                 ? successStatus
                 : successStatus + " 自動貼り付けを確認できないため、結果はクリップボードにコピーしました。必要ならCtrl+Vで入力してください。";
-            return paste == PasteResult.Pasted;
+            return paste;
         }
         catch (Exception ex)
         {
+            AudioInputDiagnosticLog.Write("output", "failed", ex, text);
             RuntimeStatus.Text = "自動貼り付けまたはクリップボードへのコピーに失敗しました。 " + ex.Message;
-            return false;
+            return null;
         }
     }
 
