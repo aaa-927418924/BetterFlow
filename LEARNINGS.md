@@ -45,3 +45,12 @@
 
 - PTT編集の切り分けでは、プレビューと最終ASRの区間結果、OpenCode要求のフラグ、出力の本文一致/類似度、箇条書き判定、marker検証を相関IDで記録すると、認識漏れ・指示配線漏れ・モデル無視・検証の見逃しを分けられる。ログには音声、本文、指示文、生成文を残さず、分類と数値メタデータだけにする。
 - 修正・配布の確認（分類: PTT書式指示の要求配線、出典: `voice-command-diagnostics.jsonl`、`Services/VoiceCommandParser.cs`、`Services/TranscriptRewritePrompt.cs`、`Services/OpenCodeService.cs`、`MainWindow.xaml.cs`、Release build/publishと配置EXEのSHA-256、確認日: 2026-10-16 Asia/Tokyo、信頼度: 診断ログとソース/コンパイル/配布一致は高、修正版の実モデル動作は未確認、情報区分: ローカル確認・ユーザー再現ログ）: 11:25 JSTの箇条書き要求は`BulletListRequired=true`と検出されたが、要求生成APIに渡っておらず、応答にリストがないため例外と原文フォールバックになった。11:26 JSTのプロンプト整形要求は診断上は意図が検出された一方、実処理は`FormatAsPrompt=false`で通常編集として通った。診断用分類と実処理用分類を共有し、必須書式をSystem/User promptへ明示する。箇条書きが欠けた場合のみ1回再試行し、依然無効なら原文を保全する。既に整った原文の可能性があるため、類似度だけでプロンプト形式の成否を決めない。最終配布版は82,522,710 bytes、発行物と`dist/Better Flow.exe`のSHA-256は`E9FE8555A5BE640A76CE527846026F465A6736B650ACBF200DDC9CB0399BC5F5`で一致。旧診断版と中間版は`artifacts/BetterFlow-before-ptt-format-enforcement-20261016.exe`（SHA-256 `81E749E65D6CFFF33D1792598E191AE2CEEFE0A3E1C0A6793821A2FB7E6A6263`）および`artifacts/BetterFlow-before-ptt-format-enforcement-final-20261016.exe`（SHA-256 `F60CC45C11480F3A71855F75CB19350E0B4A03DA1487189F806B64AA2F097181`）へ退避。実マイク/モデルでの修正効果とテストスイートは未確認。
+## 複数PTT音声編集操作の順序保持（2026-10-16）
+
+- 内容: 同じSpace長押し区間、または複数Space区間で複数編集指示を出す場合、意図を区間ごとの順序付きoperation listとしてモデル要求へ渡し、marker順に適用する。複合処理でmarker未解決・命令復唱・本文未変更が起きた場合のみ、厳格な指示で一度だけ再要求する。
+- 分類: PTT音声コマンドの構造化と限定再試行。
+- 出典: Services/VoiceCommandParser.cs、Services/TranscriptRewritePrompt.cs、Services/OpenCodeService.cs、MainWindow.xaml.cs、Services/VoiceCommandDiagnosticLog.cs、2026-10-16 11:45〜11:48 JSTの本文非保存診断ログ。
+- 確認日: 2026-10-16 Asia/Tokyo。
+- 信頼度: コード・ビルド・発行EXEとのハッシュ一致は高。修正版の実モデル挙動は未確認。
+- 情報区分: 原因は診断ログの未解決marker/復唱検出とソース構造から確認。operation listで直るという効果は実装上の意図であり、ユーザーの再テスト前なので未確認。
+- 注意点: モデル応答の意味全体をコードだけで証明できない。音声本文や命令文はログへ保存しない。再要求は失敗時の最大1回に限定し、Gemini等のAPIリクエストを常時増やさない。

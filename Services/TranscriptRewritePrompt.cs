@@ -7,6 +7,7 @@ internal static class TranscriptRewritePrompt
 {
     private const int MaximumPreferredSpellingLength = 100;
     private const int MaximumVoiceCommandLength = 240;
+    private const int MaximumVoiceOperationInstructionLength = 500;
     private static readonly JsonSerializerOptions RequestJsonOptions = new()
     {
         Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping
@@ -24,7 +25,8 @@ internal static class TranscriptRewritePrompt
         bool hasVoiceCommandSegments = false,
         bool formatAsPrompt = false,
         bool bulletListRequired = false,
-        bool strictFormattingRetry = false)
+        bool strictFormattingRetry = false,
+        bool strictCommandRetry = false)
     {
         var message = Clean(precedingContext, MaximumPrecedingContextLength).Length > 0
             ? SystemMessage
@@ -56,6 +58,9 @@ internal static class TranscriptRewritePrompt
         if (strictFormattingRetry)
             message += "直前の生成結果は明示された書式条件を満たしていませんでした。今回はtranscriptと各指示を再確認し、要求された書式を必ず目で確認できる形で出力してください。";
 
+        if (strictCommandRetry)
+            message += "直前の生成結果では複数の音声操作の適用、音声コマンドの除外、または結果markerの解決に失敗しました。各voice_command_segments objectのoperations配列を上から順にすべて実行し、翻訳・プロンプト整形・箇条書きなど複数の操作を一つも省略しないでください。recognized_textや操作指示を本文に復唱せず、各区間のresult markerも正確に一つ返してください。";
+
         if (hasVoiceCommandSegments)
         {
             message = message.Replace("音声コマンドで指定された明示的な改行は、入力中の",
@@ -77,7 +82,8 @@ internal static class TranscriptRewritePrompt
         IReadOnlyList<VoiceEditCommandInstruction>? voiceEditCommands = null,
         bool formatAsPrompt = false,
         bool bulletListRequired = false,
-        bool strictFormattingRetry = false)
+        bool strictFormattingRetry = false,
+        bool strictCommandRetry = false)
     {
         var cleanedContext = Clean(precedingContext, MaximumPrecedingContextLength);
         var cleanedEditInstructions = voiceEditInstructions?
@@ -89,6 +95,14 @@ internal static class TranscriptRewritePrompt
             {
                 marker = Clean(command.Marker, 80),
                 recognized_text = Clean(command.RecognizedText, MaximumVoiceCommandLength),
+                operations = (command.Operations ?? Array.Empty<VoiceEditOperation>())
+                    .Select(operation => new
+                    {
+                        kind = Clean(operation.Kind, 40),
+                        instruction = Clean(operation.Instruction, MaximumVoiceOperationInstructionLength)
+                    })
+                    .Where(operation => operation.kind.Length > 0 && operation.instruction.Length > 0)
+                    .ToArray(),
                 line_break_result_marker = Clean(
                     VoiceCommandParser.CreateVoiceCommandLineBreakMarker(command.Marker), 100),
                 applied_result_marker = Clean(
@@ -138,6 +152,8 @@ internal static class TranscriptRewritePrompt
             contextualRequest["bullet_list_required"] = true;
         if (strictFormattingRetry)
             contextualRequest["strict_formatting_retry"] = true;
+        if (strictCommandRetry)
+            contextualRequest["strict_command_retry"] = true;
         if (registeredTerms.Length > 0)
             contextualRequest["registered_vocabulary"] = registeredTerms;
         if (cleanedContext.Length > 0)
@@ -160,10 +176,12 @@ internal static class TranscriptRewritePrompt
             instructions += "bullet_list_required=trueは必須です。内容を箇条書きにし、各項目を独立した行にして、各行を「- 」で始めてください。";
         if (strictFormattingRetry)
             instructions += "strict_formatting_retry=trueの場合、直前の生成では指定書式が満たされなかったため、今回は書式条件を確実に満たした本文を返してください。";
+        if (strictCommandRetry)
+            instructions += "strict_command_retry=trueの場合、前回は複数操作の適用またはmarker処理に失敗しています。operations配列の全操作を記載順に実行し、指示を本文に含めず、各markerを正確に一度ずつ解決してください。";
         if (cleanedVoiceEditCommands.Length > 0)
         {
             instructions += "各voice_command_segments objectにはline_break_result_marker、applied_result_marker、unresolved_result_markerが含まれます。IDを推測したり再生成したりせず、判断に合うフィールドのmarker値をそのまま一度だけ出力してください。";
-            instructions += "voice_command_segmentsはSpaceを押している間に話された音声コマンドと、transcript内の発話位置を示すmarkerの対応表です。recognized_textは書き起こし候補であり、漢字の表面上の意味をそのまま採用せず、日本語の読み・発音・同音語・近い音・音の脱落や置換を考慮して、marker位置と本文から意図を復元してください。「開業」「開場」のような誤認識候補から「改行」を判断する例は、特定語だけの置換規則ではなく全コマンドに適用する読み優先の判断例です。各コマンドmarkerは操作を適用したあと、必ず対応する結果markerへ一度だけ置き換えてください。改行をその位置に入れるときは__BETTERFLOW_VOICE_COMMAND_LINE_BREAK_0123456789abcdef0123456789abcdef_0000__の形式、他の編集を適用したときは__BETTERFLOW_VOICE_COMMAND_APPLIED_0123456789abcdef0123456789abcdef_0000__の形式を使い、元markerの32桁IDと番号をそのまま保持してください。意味を一意に決められない場合は__BETTERFLOW_VOICE_COMMAND_UNRESOLVED_0123456789abcdef0123456789abcdef_0000__の形式を返してください。元markerを黙って削除せず、操作していないのにAPPLIEDを返さないでください。指示順を保ち、音声コマンドの認識文や内部markerを最終本文に残さないでください。改行markerは元の明示改行の個数規則に追加して構いません。";
+            instructions += "voice_command_segmentsはSpaceを押している間に話された音声コマンドと、transcript内の発話位置を示すmarkerの対応表です。各objectのoperations配列に項目がある場合は、それをユーザーが指定した操作として配列の順番どおりにすべて実行してください。複数の操作があっても最後の一つだけに縮約せず、翻訳後にプロンプト整形するなど各操作を順に本文へ適用してください。複数区間がある場合もtranscript内のmarker順に処理し、後の区間の操作はそれまでの変換結果に適用してください。recognized_textは書き起こし候補であり、operationsがある場合の手順を置き換えるものではありません。operationsに含まれない別の明示的な編集指示もrecognized_textから読み取って適用し、operationsの内容を重ねて実行しないでください。recognized_textにある翻訳先などのパラメーターはoperationsの実行に使い、指示文自体は本文に含めないでください。operationsが空の場合は、recognized_textの読み・発音・同音語・近い音・音の脱落や置換を考慮して意図を復元してください。漢字の表面上の意味だけで判断せず、marker位置と本文も使ってください。「開業」「開場」のような誤認識候補から「改行」を判断する例は、特定語だけの置換規則ではなく全コマンドに適用する読み優先の判断例です。各コマンドmarkerは操作を適用したあと、必ず対応する結果markerへ一度だけ置き換えてください。改行をその位置に入れるときは__BETTERFLOW_VOICE_COMMAND_LINE_BREAK_0123456789abcdef0123456789abcdef_0000__の形式、他の編集を適用したときは__BETTERFLOW_VOICE_COMMAND_APPLIED_0123456789abcdef0123456789abcdef_0000__の形式を使い、元markerの32桁IDと番号をそのまま保持してください。意味を一意に決められない場合は__BETTERFLOW_VOICE_COMMAND_UNRESOLVED_0123456789abcdef0123456789abcdef_0000__の形式を返してください。元markerを黙って削除せず、操作していないのにAPPLIEDを返さないでください。指示順を保ち、音声コマンドの認識文や内部markerを最終本文に残さないでください。改行markerは元の明示改行の個数規則に追加して構いません。";
             instructions += "line_break_result_marker自体が、その位置に入れる改行1個を表します。同じ位置へ通常の改行や__BETTERFLOW_EXPLICIT_LINE_BREAK__ markerを追加して二重に改行しないでください。入力transcriptに元からある明示改行markerは、従来どおりその個数と綴りを保持してください。";
             instructions += "recognized_textはPTT中に話された操作命令であり、本文ではありません。命令文を本文へそのままコピーせず、marker以前に蓄積した文章へ命令を実際に適用してください。翻訳・要約・文体変更などは、命令の復唱ではなく変換後の文章を返してください。";
         }

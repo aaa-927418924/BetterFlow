@@ -930,3 +930,21 @@
 - 修正では、PTT指示を語句の完全一致だけでなく書式意図として分類する。プロンプト整形は`format_as_prompt=true`と本文保全の明示指示を、箇条書きは`bullet_list_required=true`と各行を`- `で始める明示指示をOpenCode要求へ加える。箇条書きが最初の応答で確認できない場合に限り、強い書式指示で1回だけ再試行し、二度目も失敗したら従来どおり認識本文を保全して自動送信しない。文字列類似度だけでプロンプト整形失敗と判定しない。
 - 実装版をRelease build/publishし、`dist/Better Flow.exe`へ配置した。最終Release buildは0エラー、NU1900警告1件（NuGet脆弱性情報取得先へ接続できない）。最終発行物と配布EXEは82,522,710 bytes、SHA-256 `E9FE8555A5BE640A76CE527846026F465A6736B650ACBF200DDC9CB0399BC5F5`で一致。置換前の診断版EXEは`artifacts/BetterFlow-before-ptt-format-enforcement-20261016.exe`へ同一ハッシュ`81E749E65D6CFFF33D1792598E191AE2CEEFE0A3E1C0A6793821A2FB7E6A6263`でバックアップし、中間版は`artifacts/BetterFlow-before-ptt-format-enforcement-final-20261016.exe`へハッシュ`F60CC45C11480F3A71855F75CB19350E0B4A03DA1487189F806B64AA2F097181`で保存した。
 - 実マイクとOpenCodeモデルでの修正後の確認は未実施。今回確認したのはユーザーが再現した診断版ログ、ソース、Release build/publish、および配置EXEの一致。テストスイートは実行していない。
+## 2026-10-16: 複数PTT音声コマンドの順次適用
+
+### 原因
+
+- 本文を保存しない診断ログ（2026-10-16 11:45〜11:48 JST）では、同じPTT区間に翻訳とプロンプト整形が検出されたケースで結果markerが未解決になっていた。Space押下を分けたケースでは、複数command markerのある応答に指示文の復唱が検出され、InvalidDataExceptionから元の文字起こしへフォールバックしていた。
+- 旧要求形式はPTT区間ごとに認識文と1つの結果markerを渡し、プロンプト/箇条書きのフラグは別にまとめていた。複数操作の順序と「全操作を適用する」契約がモデル入力に明示されず、1区間の1 markerだけでは各操作が適用されたか判別できなかった。ログ上marker検証が通ったケースもあったが、本文を保存しない設計のため個々の操作が反映されたかは確認できない。
+- このため、ASR認識漏れやOpenCode接続障害と断定せず、操作の要求形式と失敗時の再試行を修正対象にした。
+
+### 実装結果
+
+- VoiceEditCommandInstructionへ順序付きoperationsを追加。各PTT区間の認識文から翻訳・プロンプト整形・箇条書きの意図を拾い、発話内での並び順でモデルへ渡す。複数区間は本文内markerの順に処理するよう指示する。
+- プロンプト/箇条書き操作を、別配列へ重複して渡す方法をやめ、区間ごとの操作リストへ統合した。明示書式の強制フラグは出力書式の制約として維持する。
+- 複合要求でmarkerが未解決、命令が本文へ復唱された、または変換結果が文字起こしと同じ場合に限り、強い再指示で最大1回だけ再要求する。箇条書き欠落の再要求とも一回分を共有し、常時追加要求はしない。本文や操作文はログへ保存せず、操作数・marker件数・結果分類だけ記録する。
+- Release build/publish成功（コンパイル0エラー、NU1900警告1件: NuGetの脆弱性情報取得先へ接続できず）。発行物とdist/Better Flow.exeは82,526,372 bytes、SHA-256 8ACABAF685D1871A69D41E99366A42AA7E050CE6D853225CA763A73F4B5545BDで一致。
+- 置換前EXEはartifacts/BetterFlow-before-compound-voice-commands-20261016.exeへバックアップ済み（82,522,710 bytes、SHA-256 E9FE8555A5BE640A76CE527846026F465A6736B650ACBF200DDC9CB0399BC5F5）。Windowsのロック情報から配布先と完全一致するPID 8264を特定して終了後、発行物を配置し、SHA-256一致を確認。
+- テストスイートは実行していない。修正版EXEを使った実マイクとOpenCodeモデルの再テストもまだのため、確認できた範囲はコード、ビルド、配置一致まで。
+
+分類: 複合PTT音声コマンドの要求・再試行修正。出典: voice-command-diagnostics.jsonl（本文非保存の分類・marker・類似度メタデータ）、MainWindow.xaml.cs、Services/VoiceCommandParser.cs、Services/TranscriptRewritePrompt.cs、Services/OpenCodeService.cs、Release build/publish、配布EXE照合。確認日: 2026-10-16 Asia/Tokyo。信頼度: ログの分岐・ソース・コンパイル・ハッシュ一致は高、実モデルが両操作を正しく反映するかは未確認。情報区分: ユーザー報告・ローカル確認・未確認事項。

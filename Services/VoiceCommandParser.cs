@@ -155,6 +155,44 @@ internal static partial class VoiceCommandParser
         return (promptFormatting, bulletList);
     }
 
+    public static IReadOnlyList<VoiceEditOperation> CreateEditOperations(string recognizedText)
+    {
+        var formattingIntent = AnalyzeFormattingIntent(recognizedText);
+        var operations = new List<(int Index, int Order, VoiceEditOperation Operation)>();
+
+        if (TranslationRequestRegex().IsMatch(recognizedText))
+        {
+            operations.Add((FindFirstIntentIndex(recognizedText,
+                    "翻訳", "英訳", "英語", "日本語", "中国語", "韓国語", "フランス語", "スペイン語", "ドイツ語",
+                    "translate", "translation"),
+                0,
+                new VoiceEditOperation(
+                    "translate",
+                    "このmarkerより前にある本文を、recognized_textで指定された翻訳先へ翻訳してください。翻訳先が明確でない場合は推測せず、翻訳指示を本文へ混ぜないでください。")));
+        }
+
+        if (formattingIntent.PromptFormatting)
+        {
+            operations.Add((FindFirstIntentIndex(recognizedText, "プロンプト", "prompt"),
+                1,
+                new VoiceEditOperation("prompt-format", PromptFormatInstruction)));
+        }
+
+        if (formattingIntent.BulletList)
+        {
+            var match = BulletListRequestRegex().Match(recognizedText);
+            operations.Add((match.Success ? match.Index : recognizedText.Length,
+                2,
+                new VoiceEditOperation("bullet-list", BulletListInstruction)));
+        }
+
+        return operations
+            .OrderBy(item => item.Index)
+            .ThenBy(item => item.Order)
+            .Select(item => item.Operation)
+            .ToArray();
+    }
+
     public static bool RequiresBulletListOutput(
         IReadOnlyList<VoiceEditCommandInstruction>? commands,
         IReadOnlyList<string>? editInstructions)
@@ -165,6 +203,18 @@ internal static partial class VoiceCommandParser
     }
 
     public static bool HasBulletListOutput(string text) => BulletListLineRegex().IsMatch(text);
+
+    public static bool IsRewriteUnchanged(
+        string originalTranscript,
+        string response,
+        IReadOnlyList<VoiceEditCommandInstruction> commands)
+    {
+        var original = RemoveVoiceCommandMarkers(originalTranscript);
+        var rewritten = RestoreVoiceCommandOutcomes(response, commands);
+        var normalizedOriginal = NormalizeForRewriteComparison(original);
+        return normalizedOriginal.Length > 0 &&
+            string.Equals(normalizedOriginal, NormalizeForRewriteComparison(rewritten), StringComparison.Ordinal);
+    }
 
     public static string RemoveEchoedVoiceCommandText(
         string response,
@@ -229,6 +279,19 @@ internal static partial class VoiceCommandParser
         return normalized.Replace("下さい", "ください", StringComparison.Ordinal);
     }
 
+    private static string NormalizeForRewriteComparison(string text) =>
+        new(text.Where(char.IsLetterOrDigit).Select(char.ToLowerInvariant).ToArray());
+
+    private static int FindFirstIntentIndex(string text, params string[] terms)
+    {
+        var index = terms
+            .Select(term => text.IndexOf(term, StringComparison.OrdinalIgnoreCase))
+            .Where(position => position >= 0)
+            .DefaultIfEmpty(text.Length)
+            .Min();
+        return index;
+    }
+
     private static string CreateVoiceCommandOutcomeMarker(string marker, string outcomePrefix)
     {
         if (!marker.StartsWith(VoiceCommandMarkerPrefix, StringComparison.Ordinal) ||
@@ -273,7 +336,7 @@ internal static partial class VoiceCommandParser
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
     private static partial Regex FormattingActionRegex();
 
-    [GeneratedRegex("(?:翻訳|英訳|英語に|translate|translation)",
+    [GeneratedRegex("(?:翻訳|英訳|(?:英語|日本語|中国語|韓国語|フランス語|スペイン語|ドイツ語|イタリア語|ポルトガル語|ロシア語|アラビア語)(?:に|へ)|translate|translation)",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
     private static partial Regex TranslationRequestRegex();
 
@@ -290,4 +353,9 @@ internal enum VoiceTextCommand
     SendAsIs
 }
 
-internal sealed record VoiceEditCommandInstruction(string Marker, string RecognizedText);
+internal sealed record VoiceEditOperation(string Kind, string Instruction);
+
+internal sealed record VoiceEditCommandInstruction(
+    string Marker,
+    string RecognizedText,
+    IReadOnlyList<VoiceEditOperation>? Operations = null);
