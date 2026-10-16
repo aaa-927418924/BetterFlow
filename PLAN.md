@@ -1123,3 +1123,10 @@
 - 実画面のクリック後表示、Tabキーでのフォーカス表示、Setup画面は未確認。テストスイートは実行していない。
 
 分類: Better Flow設定UIのスタイル修正・配布。出典: ユーザー添付画像と依頼、`MainWindow.xaml`、[WPF FocusVisualStyle公式資料](https://learn.microsoft.com/en-us/dotnet/desktop/wpf/advanced/styling-for-focus-in-controls-and-focusvisualstyle)、Git、Release publish、バックアップと配布EXEのハッシュ照合。確認日: 2026-10-16 Asia/Tokyo。信頼度: XAML差分・ビルド・配布ハッシュは高、実画面上の色とフォーカス挙動は未確認。情報区分: 明示依頼・ローカル確認・未確認事項。
+
+## 2026-10-16: 設定サイドバー項目の間隔調整
+
+- 設定サイドバーの位置を「一般」211、「辞書」257、「詳細」303（Canvas DIP）へ調整し、隣り合う項目間を46 DIPに揃えた。Setupウィンドウには変更なし。
+- 実装前チェックポイントは`7ae442a`、実装コミットは`9c0f842`。`git diff --check`成功。Release self-contained win-x64 publish成功（NuGet脆弱性フィードへ接続できず`NU1900`警告）。
+- `dist/Better Flow.exe`を更新前に`artifacts/BetterFlow-before-sidebar-spacing-20261016.exe`へバックアップ（82,539,982 bytes、SHA-256 `0A8B402FDE4C70D9B6F955CC9D54DB81815DACB56BB1F018FFF73DBA0692E513`）。配布先と発行物は82,539,985 bytes、SHA-256 `F9210B46C28FCE64E148CC55C36108F0E5F557838C18D815FCBD559A4D9A48A0`で一致。置換時はフルパス一致のBetter Flow PID 17216のみを停止。
+- 実画面での配置確認とテストスイートは未実施。
