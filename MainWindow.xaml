@@ -106,6 +106,7 @@
             <Setter Property="FontFamily" Value="Inter, Yu Gothic UI" />
             <Setter Property="FontSize" Value="20" />
             <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="FocusVisualStyle" Value="{x:Null}" />
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="ToggleButton">
@@ -130,10 +131,6 @@
                             <Trigger Property="IsMouseOver" Value="True">
                                 <Setter TargetName="TabSurface" Property="Opacity" Value="0.88" />
                             </Trigger>
-                            <Trigger Property="IsKeyboardFocused" Value="True">
-                                <Setter TargetName="TabSurface" Property="BorderBrush" Value="#FFFFFF" />
-                                <Setter TargetName="TabSurface" Property="BorderThickness" Value="2" />
-                            </Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
                 </Setter.Value>
@@ -147,21 +144,28 @@
             <Setter Property="BorderBrush" Value="Transparent" />
             <Setter Property="BorderThickness" Value="0" />
             <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="FocusVisualStyle" Value="{x:Null}" />
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="Button">
                         <Border x:Name="CloseSurface" Background="{TemplateBinding Background}"
                                 BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}"
                                 CornerRadius="14">
-                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                            <Grid>
+                                <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                <Border x:Name="CloseFocusRing" Width="24" Height="24"
+                                        HorizontalAlignment="Center" VerticalAlignment="Center"
+                                        BorderBrush="#FFFFFF" BorderThickness="1" CornerRadius="12"
+                                        Background="Transparent" Visibility="Collapsed"
+                                        IsHitTestVisible="False" />
+                            </Grid>
                         </Border>
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsMouseOver" Value="True">
                                 <Setter TargetName="CloseSurface" Property="Background" Value="#3A3A3A" />
                             </Trigger>
                             <Trigger Property="IsKeyboardFocused" Value="True">
-                                <Setter TargetName="CloseSurface" Property="BorderBrush" Value="#FFFFFF" />
-                                <Setter TargetName="CloseSurface" Property="BorderThickness" Value="2" />
+                                <Setter TargetName="CloseFocusRing" Property="Visibility" Value="Visible" />
                             </Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
