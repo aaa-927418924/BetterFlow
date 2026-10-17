@@ -29,6 +29,7 @@ public partial class IndicatorWindow : System.Windows.Window
     private const double MaximumProgressBeforeFirstText = 64;
     private const double MaximumProgressDuringGeneration = 95;
     private readonly DispatcherTimer _hideTimer;
+    private Services.IndicatorGlassBackdrop? _glassBackdrop;
     private double _progressPercent;
     private double _progressTargetPercent;
     private ProcessingProgressStage? _activeProgressStage;
@@ -64,11 +65,22 @@ public partial class IndicatorWindow : System.Windows.Window
             Hide();
         };
         Loaded += (_, _) => UpdateProgressFillWidth();
-        SourceInitialized += (_, _) => MakeClickThrough();
+        SourceInitialized += (_, _) =>
+        {
+            MakeClickThrough();
+            var source = HwndSource.FromHwnd(new WindowInteropHelper(this).Handle);
+            if (source is null) return;
+            _glassBackdrop = new Services.IndicatorGlassBackdrop(source, GlassBackdropImage);
+        };
         Closed += (_, _) =>
         {
             _hideTimer.Stop();
             StopProgressAnimation();
+            _glassBackdrop?.Dispose();
+        };
+        IsVisibleChanged += (_, _) =>
+        {
+            if (!IsVisible) _glassBackdrop?.ClearBackground();
         };
     }
 
@@ -365,11 +377,24 @@ public partial class IndicatorWindow : System.Windows.Window
         Top = Math.Max(0, SystemParameters.PrimaryScreenHeight - Height - 12);
 
         if (!IsVisible)
+        {
+            new WindowInteropHelper(this).EnsureHandle();
+            _glassBackdrop?.PrepareBackground();
             Show();
+        }
     }
 
     private void IndicatorContent_SizeChanged(object sender, SizeChangedEventArgs e) =>
         UpdateProgressFillWidth();
+
+    private void GlassRoot_SizeChanged(object sender, SizeChangedEventArgs e)
+    {
+        var radius = Math.Min(e.NewSize.Width, e.NewSize.Height) / 2;
+        GlassRoot.Clip = new RectangleGeometry(new Rect(e.NewSize), radius, radius);
+        GlassRefraction.SurfaceSize = new System.Windows.Point(e.NewSize.Width, e.NewSize.Height);
+        if (!RenderCapability.IsPixelShaderVersionSupported(3, 0))
+            LensBackdrop.Effect = null;
+    }
 
     private void UpdateProgressFillWidth()
     {

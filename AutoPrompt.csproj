@@ -33,6 +33,7 @@
   <ItemGroup>
     <Resource Include="Assets\BetterFlow.png" />
     <Resource Include="Assets\BetterFlow.ico" />
+    <Resource Include="Assets\IndicatorGlass.ps" />
   </ItemGroup>
 
   <ItemGroup>
