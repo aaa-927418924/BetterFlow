@@ -1,17 +1,34 @@
 <Window x:Class="BetterFlow.TranscriptPreviewWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:services="clr-namespace:BetterFlow.Services"
         Width="380" MinHeight="42" MaxHeight="126" SizeToContent="Height"
         WindowStyle="None" AllowsTransparency="True" Background="Transparent"
         ResizeMode="NoResize" ShowInTaskbar="False" ShowActivated="False"
         Topmost="True" WindowStartupLocation="Manual" Focusable="False"
         UseLayoutRounding="True" SnapsToDevicePixels="True">
-    <Border Background="#202020" BorderBrush="#303030" BorderThickness="2"
-            CornerRadius="19" Padding="13,9" IsHitTestVisible="False">
-        <ScrollViewer x:Name="PreviewScrollViewer" MaxHeight="98" VerticalScrollBarVisibility="Hidden"
-                      HorizontalScrollBarVisibility="Disabled" IsHitTestVisible="False">
-            <TextBlock x:Name="PreviewText" FontFamily="Yu Gothic UI" FontSize="13"
-                       Foreground="#F4F4F4" TextWrapping="Wrap" />
-        </ScrollViewer>
-    </Border>
+    <Window.Resources>
+        <SolidColorBrush x:Key="PreviewGlassTintBrush" Color="#99111111" />
+    </Window.Resources>
+    <Grid x:Name="GlassRoot" SizeChanged="GlassRoot_SizeChanged">
+        <Grid.Clip>
+            <RectangleGeometry Rect="0,0,380,42" RadiusX="19" RadiusY="19" />
+        </Grid.Clip>
+        <Image x:Name="GlassBackdropImage" Margin="-12" Stretch="Fill" Visibility="Collapsed"
+               IsHitTestVisible="False">
+            <Image.Effect>
+                <BlurEffect Radius="12" KernelType="Gaussian" RenderingBias="Quality" />
+            </Image.Effect>
+        </Image>
+        <Border Background="{StaticResource PreviewGlassTintBrush}" CornerRadius="19"
+                IsHitTestVisible="False" />
+        <Border Background="Transparent" BorderBrush="#303030" BorderThickness="2"
+                CornerRadius="19" Padding="13,9" IsHitTestVisible="False">
+            <ScrollViewer x:Name="PreviewScrollViewer" MaxHeight="98" VerticalScrollBarVisibility="Hidden"
+                          HorizontalScrollBarVisibility="Disabled" IsHitTestVisible="False">
+                <TextBlock x:Name="PreviewText" FontFamily="Yu Gothic UI" FontSize="13"
+                           Foreground="#F4F4F4" TextWrapping="Wrap" />
+            </ScrollViewer>
+        </Border>
+    </Grid>
 </Window>

@@ -247,3 +247,10 @@
 - 配布: Release build/publish成功。NU1900はNuGet脆弱性情報取得の警告。配布先`dist/Better Flow.exe`は82,558,327 bytes、SHA-256 `EDC6E635D56A685F3BB987ECB5F321FF03DA08E142CE464AF5CC255B441F18D4`で発行物と一致。パスと起動時刻が一致するBetter Flowとその子OpenCodeだけを停止して置換。追加EXEバックアップや.bakは作成せず、差し替え後は停止状態。
 - 制約: 前項と同じく背景は表示開始時のサンプル。録画除外は行わないが、録画ソフトごとの映り方は未確認。
 - 分類: WPFインジケーターの外観試作。出典: ユーザーの境界レンズ・プリズム要望、IndicatorWindow.xaml/.cs、Services/IndicatorPrismEffect.cs、Assets/IndicatorPrism.hlsl、Computer Use、Release発行とSHA-256照合。確認日: 2026-10-17 Asia/Tokyo。信頼度: ソース・確認画面・発行/配置一致は高、実録音と録画は未確認。情報区分: 明示要件・ローカル実装と画面確認。
+## 質問回答と音声ストリーミングのフロスト背景（2026-10-17）
+
+- 内容: 回答表示`AnswerWindow`は背景サンプルに半径32のGaussianぼかし、通常音声入力の`TranscriptPreviewWindow`と`IndicatorWindow`は従来どおり半径12。3表示とも`#111111`の約60% Tintと共通の`GlassBackdropSampler`を使用。隠すとサンプル画像を破棄し、録画除外や継続キャプチャはしない。
+- UI: 回答欄は読取/選択、出典カードクリックを維持。文字起こしは従来の折り返し、最下部スクロール、音声コマンドの黄色ハイライトを維持。表示位置を確定してから初回サンプルする。Setup/設定は変更しない。
+- 制約: 各表示を出した時点の背景を使い、表示中は更新しない。答えとプレビューを同時表示するモードではない前提で別々にサンプルする。
+- 分類: WPF質問回答/文字起こし表示の背景表現。出典: ユーザー画像と明示依頼、AnswerWindow.xaml/.cs、TranscriptPreviewWindow.xaml/.cs、GlassBackdropSampler.cs。確認日: 2026-10-17 Asia/Tokyo。情報区分: 実装・Release build/publish確認。画面上で実AI回答/実音声を使った確認は別途必要。
+- 配布: 2026-10-17にRelease build/publish成功（0 errors、NU1900のNuGet脆弱性情報取得警告のみ）。`dist/Better Flow.exe`へ置換済み、82,558,491 bytes、SHA-256 `C27F9BD1AD7E8F9500F97EA8CB9916DB62DD6A547546AE36139F029EE493BFE9`で発行物と一致。置換前にパス一致のBetter Flowと残存する3つの同じOpenCode CLIプロセスを停止。`.bak`は作成せず、アプリは停止状態。実際の音声入力・質問回答を使った画面確認は未実施。

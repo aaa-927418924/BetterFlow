@@ -6,8 +6,8 @@ using System.Windows.Media.Imaging;
 
 namespace BetterFlow.Services;
 
-/// <summary>Provides a subtle frosted layer sampled once before the transparent indicator is shown.</summary>
-internal sealed class IndicatorGlassBackdrop : IDisposable
+/// <summary>Samples a small frosted backdrop once before a transparent overlay is shown.</summary>
+internal sealed class GlassBackdropSampler : IDisposable
 {
     private const int PaddingDip = 12;
     private readonly HwndSource _source;
@@ -15,7 +15,7 @@ internal sealed class IndicatorGlassBackdrop : IDisposable
     private bool _disposed;
     internal bool IsEnabled { get; private set; }
 
-    internal IndicatorGlassBackdrop(HwndSource source, System.Windows.Controls.Image image)
+    internal GlassBackdropSampler(HwndSource source, System.Windows.Controls.Image image)
     {
         _source = source;
         _image = image;

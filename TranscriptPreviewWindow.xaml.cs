@@ -19,11 +19,23 @@ public partial class TranscriptPreviewWindow : Window
     private static readonly SolidColorBrush RegularTextBrush = new(MediaColor.FromRgb(244, 244, 244));
     private static readonly SolidColorBrush VoiceCommandTextBrush = new(MediaColor.FromRgb(38, 33, 20));
     private static readonly SolidColorBrush VoiceCommandHighlightBrush = new(MediaColor.FromRgb(255, 220, 115));
+    private Services.GlassBackdropSampler? _glassBackdrop;
 
     public TranscriptPreviewWindow()
     {
         InitializeComponent();
-        SourceInitialized += (_, _) => MakeClickThrough();
+        SourceInitialized += (_, _) =>
+        {
+            MakeClickThrough();
+            var source = HwndSource.FromHwnd(new WindowInteropHelper(this).Handle);
+            if (source is not null)
+                _glassBackdrop = new Services.GlassBackdropSampler(source, GlassBackdropImage);
+        };
+        IsVisibleChanged += (_, _) =>
+        {
+            if (!IsVisible) _glassBackdrop?.ClearBackground();
+        };
+        Closed += (_, _) => _glassBackdrop?.Dispose();
     }
 
     public void ShowPreview(string text)
@@ -74,13 +86,35 @@ public partial class TranscriptPreviewWindow : Window
             previousText = part.Text;
         }
 
-        if (!IsVisible) Show();
+        UpdateLayout();
+        PreviewScrollViewer.UpdateLayout();
+        Left = Math.Max(0, (SystemParameters.PrimaryScreenWidth - Width) / 2);
+        var previewHeight = ActualHeight > 0 ? ActualHeight : DesiredSize.Height;
+        if (previewHeight <= 0)
+        {
+            GlassRoot.Measure(new System.Windows.Size(Width, MaxHeight));
+            previewHeight = GlassRoot.DesiredSize.Height;
+        }
+        previewHeight = Math.Clamp(previewHeight, MinHeight, MaxHeight);
+        Top = Math.Max(0, SystemParameters.PrimaryScreenHeight - IndicatorBottomGap -
+            IndicatorHeight - GapAboveIndicator - previewHeight);
+        if (!IsVisible)
+        {
+            new WindowInteropHelper(this).EnsureHandle();
+            _glassBackdrop?.PrepareBackground();
+            Show();
+        }
         UpdateLayout();
         PreviewScrollViewer.UpdateLayout();
         PreviewScrollViewer.ScrollToEnd();
-        Left = Math.Max(0, (SystemParameters.PrimaryScreenWidth - Width) / 2);
         Top = Math.Max(0, SystemParameters.PrimaryScreenHeight - IndicatorBottomGap -
             IndicatorHeight - GapAboveIndicator - ActualHeight);
+    }
+
+    private void GlassRoot_SizeChanged(object sender, SizeChangedEventArgs e)
+    {
+        var radius = Math.Min(19, Math.Min(e.NewSize.Width, e.NewSize.Height) / 2);
+        GlassRoot.Clip = new RectangleGeometry(new Rect(e.NewSize), radius, radius);
     }
 
     public void HidePreview()

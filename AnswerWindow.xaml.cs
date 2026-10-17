@@ -3,6 +3,7 @@ using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Interop;
+using System.Windows.Media;
 using System.Windows.Threading;
 using BetterFlow.Services;
 
@@ -12,13 +13,25 @@ public partial class AnswerWindow : System.Windows.Window
 {
     private const int GwlExStyle = -20;
     private const long WsExToolWindow = 0x00000080L;
+    private Services.GlassBackdropSampler? _glassBackdrop;
     private string _currentAssistantText = string.Empty;
     private IReadOnlyList<AnswerSourceCard> _currentSources = Array.Empty<AnswerSourceCard>();
 
     public AnswerWindow()
     {
         InitializeComponent();
-        SourceInitialized += (_, _) => MakeToolWindow();
+        SourceInitialized += (_, _) =>
+        {
+            MakeToolWindow();
+            var source = HwndSource.FromHwnd(new WindowInteropHelper(this).Handle);
+            if (source is not null)
+                _glassBackdrop = new Services.GlassBackdropSampler(source, GlassBackdropImage);
+        };
+        IsVisibleChanged += (_, _) =>
+        {
+            if (!IsVisible) _glassBackdrop?.ClearBackground();
+        };
+        Closed += (_, _) => _glassBackdrop?.Dispose();
     }
 
     public void ResetAnswer()
@@ -117,7 +130,18 @@ public partial class AnswerWindow : System.Windows.Window
         var bottomGap = 12d;
         Left = Math.Max(0, (screenWidth - Width) / 2);
         Top = Math.Max(8, screenHeight - indicatorHeight - bottomGap - Height - 12);
-        if (!IsVisible) Show();
+        if (!IsVisible)
+        {
+            new WindowInteropHelper(this).EnsureHandle();
+            _glassBackdrop?.PrepareBackground();
+            Show();
+        }
+    }
+
+    private void GlassRoot_SizeChanged(object sender, SizeChangedEventArgs e)
+    {
+        var radius = 19d;
+        GlassRoot.Clip = new RectangleGeometry(new Rect(e.NewSize), radius, radius);
     }
 
     private void RunOnUi(Action action)

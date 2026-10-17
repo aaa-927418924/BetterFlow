@@ -1,12 +1,27 @@
 <Window x:Class="BetterFlow.AnswerWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:services="clr-namespace:BetterFlow.Services"
         Width="500" Height="560" MinWidth="320" MinHeight="240" MaxHeight="760"
         WindowStyle="None" AllowsTransparency="True" Background="Transparent"
         ResizeMode="NoResize" ShowInTaskbar="False" ShowActivated="False" Topmost="True"
         WindowStartupLocation="Manual" UseLayoutRounding="True" SnapsToDevicePixels="True">
-    <Grid Background="Transparent">
-        <Border Background="#202020" BorderBrush="#2B2B2B" BorderThickness="2.5"
+    <Window.Resources>
+        <SolidColorBrush x:Key="AnswerGlassTintBrush" Color="#99111111" />
+    </Window.Resources>
+    <Grid x:Name="GlassRoot" SizeChanged="GlassRoot_SizeChanged">
+        <Grid.Clip>
+            <RectangleGeometry Rect="0,0,500,560" RadiusX="19" RadiusY="19" />
+        </Grid.Clip>
+        <Image x:Name="GlassBackdropImage" Margin="-12" Stretch="Fill" Visibility="Collapsed"
+               IsHitTestVisible="False">
+            <Image.Effect>
+                <BlurEffect Radius="32" KernelType="Gaussian" RenderingBias="Quality" />
+            </Image.Effect>
+        </Image>
+        <Border Background="{StaticResource AnswerGlassTintBrush}" CornerRadius="19"
+                IsHitTestVisible="False" />
+        <Border Background="Transparent" BorderBrush="#2B2B2B" BorderThickness="2.5"
                 CornerRadius="19" Padding="18">
             <Grid>
                 <Grid.RowDefinitions>

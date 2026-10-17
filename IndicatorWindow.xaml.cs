@@ -31,7 +31,7 @@ public partial class IndicatorWindow : System.Windows.Window
     private const double MaximumProgressBeforeFirstText = 64;
     private const double MaximumProgressDuringGeneration = 95;
     private readonly DispatcherTimer _hideTimer;
-    private Services.IndicatorGlassBackdrop? _glassBackdrop;
+    private Services.GlassBackdropSampler? _glassBackdrop;
     private double _progressPercent;
     private double _progressTargetPercent;
     private ProcessingProgressStage? _activeProgressStage;
@@ -74,7 +74,7 @@ public partial class IndicatorWindow : System.Windows.Window
             MakeClickThrough();
             var source = HwndSource.FromHwnd(new WindowInteropHelper(this).Handle);
             if (source is null) return;
-            _glassBackdrop = new Services.IndicatorGlassBackdrop(source, GlassBackdropImage);
+            _glassBackdrop = new Services.GlassBackdropSampler(source, GlassBackdropImage);
         };
         Closed += (_, _) =>
         {
