@@ -580,7 +580,7 @@
                                                            AutomationProperties.LiveSetting="Polite" />
                                             </Grid>
 
-                                            <Border Margin="36,0,16,0" Height="1" Background="#FFFFFF" />
+                                            <Border Margin="35,0,17,0" Height="1" Background="#FFFFFF" />
 
                                             <Grid x:Name="MicrophoneSettingsPanel" Margin="35,33,0,0"
                                                   Width="639" MinHeight="112">
@@ -621,7 +621,7 @@
                                                            AutomationProperties.LiveSetting="Polite" />
                                             </Grid>
 
-                                            <Border Margin="36,0,16,0" Height="1" Background="#FFFFFF" />
+                                            <Border Margin="35,0,17,0" Height="1" Background="#FFFFFF" />
 
                                             <CheckBox x:Name="IndicatorHintsCheckBox" Margin="39,22,0,0"
                                                       Width="604" Height="38" Content="インジケーターに操作ヒントを表示"
