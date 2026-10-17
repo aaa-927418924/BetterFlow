@@ -173,3 +173,14 @@
 - 確認日: 2026-10-17 Asia/Tokyo。
 - 信頼度: ソースから確認した配置と選択順は高。実PCのAppData内のファイル存在・使用中rootはサンドボックス制約で未確認。
 - 情報区分: ローカルソース確認・実PCの状態未確認。
+
+## 統計ページの日本語入力集計（2026-10-17）
+
+- 内容: 日本語には空白による単語区切りがないため、単語数と誤認しないよう統計ページは「総入力文字数」として表示する。`StringInfo.LengthInTextElements`で認識済みテキストの書記素数を集計し、PTT音声コマンドは通常音声入力の文字数・時間から除外する。
+- 通常音声は16 kHz録音セグメントのサンプル数から時間を計算する。連続編集・質問はVADが切り出した発話サンプル、GPT Liveは認識イベントのspeech_started〜speech_stopped区間を使うため、AI応答処理時間は含めない。キャンセルや無音入力など、認識テキストのない操作は集計しない。
+- 表示名、累計、256×256へ中央正方形クロップしたPNGプロフィール画像は`AppSettings`に保存され、設定エクスポートにも含まれる。画像は円形のEllipseに表示し、元ファイルパスや本文を統計へ保存しない。
+- 分類: WPF設定UI・ローカル利用統計・日本語テキスト計数。
+- 出典: `MainWindow.xaml`、`MainWindow.xaml.cs`、`Services/AppSettings.cs`、`Services/GptLiveQuestionSession.cs`、`Services/SettingsTransfer.cs`。
+- 確認日: 2026-10-17 Asia/Tokyo。
+- 信頼度: ソースとRelease publishの成功は高。設定画面の実表示、実音声による数値更新、GPT Liveの実際のspeech_stoppedイベントは未確認。
+- 情報区分: 実装・ソース確認・実機動作未確認。

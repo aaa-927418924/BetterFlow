@@ -27,6 +27,10 @@ internal sealed class AppSettings
     public bool DiscordAutoMuteEnabled { get; set; }
     public uint DiscordMuteShortcutModifiers { get; set; }
     public uint DiscordMuteShortcutVirtualKey { get; set; }
+    public string StatisticsDisplayName { get; set; } = Environment.UserName;
+    public string StatisticsAvatarPngBase64 { get; set; } = string.Empty;
+    public long StatisticsTotalInputCharacters { get; set; }
+    public long StatisticsTotalInputMilliseconds { get; set; }
 
     [JsonPropertyName("AiProviderId")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]

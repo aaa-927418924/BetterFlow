@@ -1,4 +1,5 @@
 using System.IO;
+using System.Diagnostics;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Text;
@@ -45,6 +46,8 @@ internal sealed class GptLiveQuestionSession : IAsyncDisposable
     private string _lastUserTranscript = string.Empty;
     private string _pendingUserTranscript = string.Empty;
     private DateTimeOffset _lastUserTranscriptAt;
+    private long? _pendingUserSpeechStartedTimestamp;
+    private long? _pendingUserSpeechStoppedTimestamp;
     private readonly HashSet<string> _reportedUserTranscriptIds = new(StringComparer.Ordinal);
     private readonly HashSet<string> _staleAssistantResponseIds = new(StringComparer.Ordinal);
     private readonly Queue<string> _staleAssistantResponseOrder = new();
@@ -82,6 +85,8 @@ internal sealed class GptLiveQuestionSession : IAsyncDisposable
             ResizeMode = ResizeMode.NoResize
         };
     }
+
+    public event Action<string, TimeSpan>? UserInputRecognized;
 
     public async Task RunAsync(
         string selectedText,
@@ -309,6 +314,10 @@ internal sealed class GptLiveQuestionSession : IAsyncDisposable
             case "input_audio_buffer.committed":
                 MarkPendingUserSpeech();
                 break;
+            case "input_audio_buffer.speech_stopped":
+                if (_pendingUserSpeech && _pendingUserSpeechStartedTimestamp is not null)
+                    _pendingUserSpeechStoppedTimestamp = Stopwatch.GetTimestamp();
+                break;
             case "conversation.item.created":
                 if (liveEvent.TryGetProperty("item", out var createdItem) &&
                     createdItem.ValueKind == JsonValueKind.Object &&
@@ -410,6 +419,12 @@ internal sealed class GptLiveQuestionSession : IAsyncDisposable
     {
         text = text.Trim();
         if (string.IsNullOrWhiteSpace(text)) return;
+        var speechDuration = TimeSpan.Zero;
+        if (_pendingUserSpeechStartedTimestamp is long startedTimestamp)
+        {
+            var stoppedTimestamp = _pendingUserSpeechStoppedTimestamp ?? Stopwatch.GetTimestamp();
+            speechDuration = Stopwatch.GetElapsedTime(startedTimestamp, stoppedTimestamp);
+        }
         var reportedAt = DateTimeOffset.UtcNow;
         if (!string.IsNullOrWhiteSpace(eventId))
         {
@@ -434,6 +449,8 @@ internal sealed class GptLiveQuestionSession : IAsyncDisposable
         _lastUserTranscriptAt = reportedAt;
         _pendingUserTranscript = string.Empty;
         _pendingUserSpeech = false;
+        _pendingUserSpeechStartedTimestamp = null;
+        _pendingUserSpeechStoppedTimestamp = null;
         if (!hasPrestartedResponse)
         {
             RememberCompletedAssistantResponse(_activeAssistantResponseId);
@@ -447,6 +464,7 @@ internal sealed class GptLiveQuestionSession : IAsyncDisposable
         _hasReportedUserQuestion = true;
         _awaitingAssistantResponse = !hasPrestartedResponse;
         _questionHandler?.Invoke(text);
+        UserInputRecognized?.Invoke(text, speechDuration);
         _statusHandler?.Invoke("GPT Liveが回答しています…");
         if (hasPrestartedResponse)
         {
@@ -462,6 +480,8 @@ internal sealed class GptLiveQuestionSession : IAsyncDisposable
         if (_pendingUserSpeech) return;
 
         _pendingUserSpeech = true;
+        _pendingUserSpeechStartedTimestamp = Stopwatch.GetTimestamp();
+        _pendingUserSpeechStoppedTimestamp = null;
         _pendingUserTranscript = string.Empty;
         RememberCompletedAssistantResponse(_activeAssistantResponseId);
         _activeAssistantResponseId = null;

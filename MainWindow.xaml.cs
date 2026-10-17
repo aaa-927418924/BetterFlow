@@ -6,6 +6,7 @@ using System.Windows;
 using System.Windows.Interop;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Media.Imaging;
 using BetterFlow.Services;
 using ToolStripMenuItem = System.Windows.Forms.ToolStripMenuItem;
 using ToolStripSeparator = System.Windows.Forms.ToolStripSeparator;
@@ -63,6 +64,7 @@ public partial class MainWindow : System.Windows.Window
     private string _lastAcceptedUserSystemPrompt = string.Empty;
     private bool _isRefreshingOpenCodeModels;
     private bool _loadingOpenCodeModelUi;
+    private bool _loadingStatisticsUi;
     private bool _loadingMicrophoneDeviceUi;
     private bool _openCodeReady;
     private string? _recordingPrecedingTextContext;
@@ -152,6 +154,7 @@ public partial class MainWindow : System.Windows.Window
         }
         NormalizeAiSettings();
         InitializeUserSystemPromptUi();
+        InitializeStatisticsSettingsUi();
         InitializeIndicatorHintsSettingsUi();
         InitializeOpenCodeModelUi();
         RefreshCorrectionDictionaryItems();
@@ -746,6 +749,7 @@ public partial class MainWindow : System.Windows.Window
             }
 
             InitializeUserSystemPromptUi();
+            InitializeStatisticsSettingsUi();
             InitializeIndicatorHintsSettingsUi();
             InitializeOpenCodeModelUi();
             RefreshCorrectionDictionaryItems();
@@ -2131,6 +2135,7 @@ public partial class MainWindow : System.Windows.Window
         var isDictionary = string.Equals(page, "dictionary", StringComparison.Ordinal);
         var isDetails = string.Equals(page, "details", StringComparison.Ordinal);
         var isUserSystemPrompt = string.Equals(page, "instructions", StringComparison.Ordinal);
+        var isStatistics = string.Equals(page, "statistics", StringComparison.Ordinal);
 
         GeneralSettingsPage.Visibility = isGeneral
             ? System.Windows.Visibility.Visible
@@ -2144,12 +2149,234 @@ public partial class MainWindow : System.Windows.Window
         UserSystemPromptSettingsPage.Visibility = isUserSystemPrompt
             ? System.Windows.Visibility.Visible
             : System.Windows.Visibility.Collapsed;
+        StatisticsSettingsPage.Visibility = isStatistics
+            ? System.Windows.Visibility.Visible
+            : System.Windows.Visibility.Collapsed;
         DiscordMuteTutorialPage.Visibility = System.Windows.Visibility.Collapsed;
 
         SettingsGeneralTab.IsChecked = isGeneral;
         SettingsDictionaryTab.IsChecked = isDictionary;
         SettingsDetailsTab.IsChecked = isDetails;
         SettingsInstructionsTab.IsChecked = isUserSystemPrompt;
+        SettingsStatisticsTab.IsChecked = isStatistics;
+    }
+
+    private void InitializeStatisticsSettingsUi()
+    {
+        var previousName = _settings.StatisticsDisplayName ?? string.Empty;
+        var displayName = string.IsNullOrWhiteSpace(previousName)
+            ? Environment.UserName
+            : previousName.Trim();
+
+        _loadingStatisticsUi = true;
+        try
+        {
+            _settings.StatisticsDisplayName = displayName;
+            ProfileNameTextBox.Text = displayName;
+        }
+        finally
+        {
+            _loadingStatisticsUi = false;
+        }
+
+        StatisticsSettingsStatus.Text = string.Empty;
+        ApplyStatisticsAvatar();
+        RefreshStatisticsPage();
+        if (!string.Equals(previousName, displayName, StringComparison.Ordinal))
+        {
+            try { _settingsStore.Save(_settings); }
+            catch { StatisticsSettingsStatus.Text = "表示名を保存できませんでした。"; }
+        }
+    }
+
+    private void ProfileNameTextBox_TextChanged(object sender, System.Windows.Controls.TextChangedEventArgs e)
+    {
+        if (_loadingStatisticsUi || sender is not System.Windows.Controls.TextBox textBox) return;
+
+        _settings.StatisticsDisplayName = textBox.Text.Trim();
+        try
+        {
+            _settingsStore.Save(_settings);
+            StatisticsSettingsStatus.Text = string.Empty;
+        }
+        catch
+        {
+            StatisticsSettingsStatus.Text = "表示名を保存できませんでした。";
+        }
+    }
+
+    private void ProfileAvatarButton_Click(object sender, System.Windows.RoutedEventArgs e)
+    {
+        if (_isBusy || IsAnyRecording)
+        {
+            StatisticsSettingsStatus.Text = "録音やAI処理を終えてから画像を変更してください。";
+            return;
+        }
+
+        var dialog = new Microsoft.Win32.OpenFileDialog
+        {
+            Title = "プロフィール画像を選択",
+            Filter = "画像ファイル (*.png;*.jpg;*.jpeg;*.bmp;*.gif)|*.png;*.jpg;*.jpeg;*.bmp;*.gif",
+            CheckFileExists = true,
+            Multiselect = false
+        };
+        if (dialog.ShowDialog(this) != true) return;
+
+        var previousAvatar = _settings.StatisticsAvatarPngBase64;
+        try
+        {
+            var avatarBytes = CreateStatisticsAvatarPng(dialog.FileName);
+            _settings.StatisticsAvatarPngBase64 = Convert.ToBase64String(avatarBytes);
+            _settingsStore.Save(_settings);
+            ApplyStatisticsAvatar();
+            StatisticsSettingsStatus.Text = string.Empty;
+        }
+        catch (Exception ex)
+        {
+            _settings.StatisticsAvatarPngBase64 = previousAvatar;
+            ApplyStatisticsAvatar();
+            StatisticsSettingsStatus.Text = "プロフィール画像を保存できませんでした。別の画像を選んでください。";
+            AudioInputDiagnosticLog.Write("statistics-avatar", "save-failed", ex);
+        }
+    }
+
+    private static byte[] CreateStatisticsAvatarPng(string path)
+    {
+        const long maximumSourceBytes = 20 * 1024 * 1024;
+        const int avatarSize = 256;
+        const int maximumAvatarBytes = 512 * 1024;
+        var sourceFile = new FileInfo(path);
+        if (!sourceFile.Exists || sourceFile.Length <= 0 || sourceFile.Length > maximumSourceBytes)
+            throw new InvalidDataException("画像は20 MB以下のファイルを選択してください。");
+
+        using var input = File.OpenRead(path);
+        var decoder = BitmapDecoder.Create(input, BitmapCreateOptions.PreservePixelFormat, BitmapCacheOption.OnLoad);
+        if (decoder.Frames.Count == 0)
+            throw new InvalidDataException("画像を読み込めませんでした。");
+
+        var source = decoder.Frames[0];
+        var cropSide = Math.Min(source.PixelWidth, source.PixelHeight);
+        if (cropSide <= 0)
+            throw new InvalidDataException("画像のサイズを確認できませんでした。");
+
+        var centeredCrop = new CroppedBitmap(source, new Int32Rect(
+            (source.PixelWidth - cropSide) / 2,
+            (source.PixelHeight - cropSide) / 2,
+            cropSide,
+            cropSide));
+        var squareAvatar = new TransformedBitmap(
+            centeredCrop,
+            new ScaleTransform((double)avatarSize / cropSide, (double)avatarSize / cropSide));
+        squareAvatar.Freeze();
+
+        var encoder = new PngBitmapEncoder();
+        encoder.Frames.Add(BitmapFrame.Create(squareAvatar));
+        using var output = new MemoryStream();
+        encoder.Save(output);
+        if (output.Length > maximumAvatarBytes)
+            throw new InvalidDataException("画像を小さくしてから、もう一度選択してください。");
+        return output.ToArray();
+    }
+
+    private void ApplyStatisticsAvatar()
+    {
+        var encodedAvatar = _settings.StatisticsAvatarPngBase64 ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(encodedAvatar))
+        {
+            ProfileAvatarPhoto.Visibility = System.Windows.Visibility.Collapsed;
+            return;
+        }
+
+        try
+        {
+            var bytes = Convert.FromBase64String(encodedAvatar);
+            if (bytes.Length is 0 or > 512 * 1024)
+                throw new InvalidDataException("保存済み画像のサイズが無効です。");
+
+            using var stream = new MemoryStream(bytes, writable: false);
+            var image = new BitmapImage();
+            image.BeginInit();
+            image.CacheOption = BitmapCacheOption.OnLoad;
+            image.StreamSource = stream;
+            image.EndInit();
+            image.Freeze();
+            ProfileAvatarPhoto.Fill = new ImageBrush(image)
+            {
+                Stretch = Stretch.UniformToFill,
+                AlignmentX = AlignmentX.Center,
+                AlignmentY = AlignmentY.Center
+            };
+            ProfileAvatarPhoto.Visibility = System.Windows.Visibility.Visible;
+        }
+        catch (Exception ex)
+        {
+            ProfileAvatarPhoto.Visibility = System.Windows.Visibility.Collapsed;
+            StatisticsSettingsStatus.Text = "保存済みのプロフィール画像を読み込めませんでした。";
+            AudioInputDiagnosticLog.Write("statistics-avatar", "load-failed", ex);
+        }
+    }
+
+    private void RecordInputUsage(string? recognizedText, TimeSpan inputDuration)
+    {
+        var inputCharacters = recognizedText is null
+            ? 0
+            : new StringInfo(recognizedText).LengthInTextElements;
+        var inputMilliseconds = inputDuration <= TimeSpan.Zero
+            ? 0
+            : Math.Max(0, (long)Math.Round(inputDuration.TotalMilliseconds));
+        if (inputCharacters == 0 && inputMilliseconds == 0) return;
+
+        var previousCharacters = Math.Max(0, _settings.StatisticsTotalInputCharacters);
+        var previousMilliseconds = Math.Max(0, _settings.StatisticsTotalInputMilliseconds);
+        _settings.StatisticsTotalInputCharacters = AddSaturated(previousCharacters, inputCharacters);
+        _settings.StatisticsTotalInputMilliseconds = AddSaturated(previousMilliseconds, inputMilliseconds);
+        RefreshStatisticsPage();
+        try
+        {
+            _settingsStore.Save(_settings);
+            StatisticsSettingsStatus.Text = string.Empty;
+        }
+        catch
+        {
+            StatisticsSettingsStatus.Text = "統計を保存できませんでした。";
+        }
+    }
+
+    private static long AddSaturated(long current, long addition) =>
+        addition <= 0 ? current : current > long.MaxValue - addition ? long.MaxValue : current + addition;
+
+    private void RefreshStatisticsPage()
+    {
+        StatisticsCharacterCount.Text = $"{Math.Max(0, _settings.StatisticsTotalInputCharacters).ToString("N0", CultureInfo.CurrentCulture)}文字";
+        StatisticsInputDuration.Text = FormatStatisticsDuration(_settings.StatisticsTotalInputMilliseconds);
+    }
+
+    private static string FormatStatisticsDuration(long totalMilliseconds)
+    {
+        var totalSeconds = Math.Max(0, totalMilliseconds) / 1000;
+        if (totalSeconds < 60) return $"{totalSeconds}秒";
+
+        var totalMinutes = totalSeconds / 60;
+        if (totalMinutes < 60) return $"{totalMinutes}分";
+
+        var hours = totalMinutes / 60;
+        var remainingMinutes = totalMinutes % 60;
+        return remainingMinutes == 0 ? $"{hours}時間" : $"{hours}時間{remainingMinutes}分";
+    }
+
+    private static TimeSpan InputDurationFromSamples(int sampleCount) =>
+        TimeSpan.FromSeconds(Math.Max(0, sampleCount) / 16000d);
+
+    private static TimeSpan InputDurationFromSegments(IReadOnlyList<AudioRecordingSegment>? segments)
+    {
+        if (segments is null) return TimeSpan.Zero;
+        long sampleCount = 0;
+        foreach (var segment in segments)
+        {
+            if (segment.IsVoiceCommand) continue;
+            sampleCount = AddSaturated(sampleCount, segment.Samples.LongLength);
+        }
+        return TimeSpan.FromSeconds(sampleCount / 16000d);
     }
 
     private void InitializeUserSystemPromptUi()
@@ -2271,6 +2498,9 @@ public partial class MainWindow : System.Windows.Window
 
     private void SettingsInstructionsTab_Click(object sender, System.Windows.RoutedEventArgs e) =>
         ShowSettingsPage("instructions");
+
+    private void SettingsStatisticsTab_Click(object sender, System.Windows.RoutedEventArgs e) =>
+        ShowSettingsPage("statistics");
 
     private async Task RecordButton_Click()
     {
@@ -2439,6 +2669,8 @@ public partial class MainWindow : System.Windows.Window
         {
             AcquireDiscordMuteForAudioSession();
             var session = new GptLiveQuestionSession(_gptLiveAuth, _settings.UserSystemPrompt);
+            session.UserInputRecognized += (text, duration) =>
+                DispatchQuestionUi(() => RecordInputUsage(text, duration));
             _selectedTextQuestionCancellation = cancellation;
             _gptLiveQuestionSession = session;
             _gptLiveQuestionActive = true;
@@ -3145,6 +3377,8 @@ public partial class MainWindow : System.Windows.Window
                         continue;
                     }
 
+                    RecordInputUsage(transcript, InputDurationFromSamples(samples.Length));
+
                     if (IsUndoSelectionEditCommand(transcript))
                     {
                         _indicator.ShowStatus(
@@ -3432,6 +3666,8 @@ public partial class MainWindow : System.Windows.Window
                         _indicator.ShowStatus("質問できます", operationHint: "話し終えると回答");
                         continue;
                     }
+
+                    RecordInputUsage(question, InputDurationFromSamples(samples.Length));
 
                     RuntimeStatus.Text = "OpenCodeを準備しています…";
                     _indicator.ShowProcessingStatus(
@@ -3890,6 +4126,7 @@ public partial class MainWindow : System.Windows.Window
                 if (!TranscriptFormatter.HasMeaningfulText(transcriptForPaste))
                     throw new InvalidDataException("送信コマンドの前に文章がありません。入力欄は変更していません。");
             }
+            RecordInputUsage(transcriptForPaste, InputDurationFromSegments(recordingSegments));
             _pendingRawTranscriptFallback = transcriptForPaste;
             _transcriptPreviewWindow.ShowPreview(transcriptForPaste);
             var explicitLineBreakCount = VoiceCommandParser.CountExplicitLineBreaks(transcript);
