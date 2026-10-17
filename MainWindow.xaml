@@ -539,7 +539,7 @@
                                                            AutomationProperties.LiveSetting="Polite" />
                                             </Grid>
 
-                                            <Border Margin="36,0,16,0" Height="1" Background="#FFFFFF" />
+                                            <Border Margin="35,0,17,0" Height="1" Background="#FFFFFF" />
 
                                             <Grid x:Name="OpenCodeModelSettingsPanel" Margin="35,29,0,0"
                                                   Width="639" MinHeight="100">
@@ -592,6 +592,7 @@
                                                     <RowDefinition Height="Auto" />
                                                     <RowDefinition Height="3" />
                                                     <RowDefinition Height="Auto" />
+                                                    <RowDefinition Height="1" />
                                                 </Grid.RowDefinitions>
                                                 <Grid.ColumnDefinitions>
                                                     <ColumnDefinition Width="509" />
@@ -601,7 +602,7 @@
                                                 <TextBlock Grid.Row="0" Grid.ColumnSpan="3" Text="音声入力デバイス"
                                                            FontSize="16" Foreground="{StaticResource SettingsMutedBrush}" />
                                                 <Border x:Name="MicrophoneLevelMeter" Grid.Row="2" Grid.Column="2"
-                                                        Width="74" Height="28" HorizontalAlignment="Right"
+                                                        Width="104" Height="28" HorizontalAlignment="Center"
                                                         VerticalAlignment="Center" CornerRadius="14"
                                                         Background="#252525" BorderBrush="#A0A0A0"
                                                         BorderThickness="1" IsHitTestVisible="False"
@@ -637,9 +638,10 @@
                                                            MinHeight="27" FontSize="11" LineHeight="14"
                                                            TextWrapping="Wrap" Foreground="{StaticResource SettingsMutedBrush}"
                                                            AutomationProperties.LiveSetting="Polite" />
+                                                <Border Grid.Row="7" Grid.ColumnSpan="3" Height="1"
+                                                        VerticalAlignment="Bottom" Background="#FFFFFF"
+                                                        SnapsToDevicePixels="True" />
                                             </Grid>
-
-                                            <Border Margin="35,0,17,0" Height="1" Background="#FFFFFF" />
 
                                             <CheckBox x:Name="IndicatorHintsCheckBox" Margin="39,22,0,0"
                                                       Width="604" Height="38" Content="インジケーターに操作ヒントを表示"

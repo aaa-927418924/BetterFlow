@@ -8,6 +8,7 @@ internal sealed class MicrophoneLevelMonitor : IDisposable
     private int _deviceNumber = -1;
 
     public event Action<float?>? AudioLevelChanged;
+    public event Action<Exception>? MonitoringFailed;
 
     public bool IsMonitoring => _waveIn is not null;
     public int DeviceNumber => _deviceNumber;
@@ -18,8 +19,11 @@ internal sealed class MicrophoneLevelMonitor : IDisposable
             return;
 
         Stop();
-        if (WaveInEvent.DeviceCount == 0 || deviceNumber < -1 || deviceNumber >= WaveInEvent.DeviceCount)
-            return;
+        var deviceCount = WaveInEvent.DeviceCount;
+        if (deviceCount == 0)
+            throw new InvalidOperationException("入力デバイスが見つかりません。");
+        if (deviceNumber < -1 || deviceNumber >= deviceCount)
+            throw new InvalidOperationException("選択中の入力デバイスを開けません。デバイス一覧を再取得してください。");
 
         var recorder = new WaveInEvent
         {
@@ -74,9 +78,10 @@ internal sealed class MicrophoneLevelMonitor : IDisposable
         {
             PublishAudioLevel(AudioInputLevel.GetNormalizedLevel(e.Buffer.AsSpan(0, e.BytesRecorded)));
         }
-        catch
+        catch (Exception ex)
         {
             PublishAudioLevel(0);
+            PublishFailure(ex);
         }
     }
 
@@ -91,11 +96,19 @@ internal sealed class MicrophoneLevelMonitor : IDisposable
         recorder.RecordingStopped -= OnRecordingStopped;
         recorder.Dispose();
         PublishAudioLevel(0);
+        if (e.Exception is not null)
+            PublishFailure(e.Exception);
     }
 
     private void PublishAudioLevel(float? level)
     {
         try { AudioLevelChanged?.Invoke(level); }
+        catch { }
+    }
+
+    private void PublishFailure(Exception exception)
+    {
+        try { MonitoringFailed?.Invoke(exception); }
         catch { }
     }
 }

@@ -140,6 +140,7 @@ public partial class MainWindow : System.Windows.Window
         _recorder.SilenceDetectionFailed += HandleNormalAudioSilenceDetectionFailure;
         _continuousRecorder.AudioLevelChanged += HandleRecorderAudioLevelChanged;
         _microphoneLevelMonitor.AudioLevelChanged += SetMicrophoneInputLevel;
+        _microphoneLevelMonitor.MonitoringFailed += HandleMicrophoneLevelMonitoringFailed;
         _hotkey.VoiceCommandCaptureStartRequested += _recorder.BeginVoiceCommandCapture;
         _hotkey.VoiceCommandCaptureStopRequested += _recorder.EndVoiceCommandCapture;
         _undoWindow = new UndoWindow();
@@ -167,6 +168,7 @@ public partial class MainWindow : System.Windows.Window
         InitializeDiscordMuteSettingsUi();
         InitializeTrayIcon();
         Closing += MainWindow_Closing;
+        Loaded += MainWindow_Loaded;
         IsVisibleChanged += MainWindow_IsVisibleChanged;
         SystemEvents.SessionEnding += SystemEvents_SessionEnding;
     }
@@ -392,6 +394,22 @@ public partial class MainWindow : System.Windows.Window
     private void MainWindow_IsVisibleChanged(object sender, DependencyPropertyChangedEventArgs e) =>
         SynchronizeMicrophoneLevelMonitoring();
 
+    private void MainWindow_Loaded(object sender, RoutedEventArgs e) =>
+        SynchronizeMicrophoneLevelMonitoring();
+
+    private void HandleMicrophoneLevelMonitoringFailed(Exception exception)
+    {
+        if (!Dispatcher.CheckAccess())
+        {
+            if (!Dispatcher.HasShutdownStarted && !Dispatcher.HasShutdownFinished)
+                Dispatcher.BeginInvoke(new Action(() => HandleMicrophoneLevelMonitoringFailed(exception)));
+            return;
+        }
+
+        if (!_closing && GeneralSettingsPage.Visibility == System.Windows.Visibility.Visible)
+            MicrophoneDeviceStatus.Text = "マイク入力レベルを取得できませんでした。マイクの接続とWindowsのマイク使用許可を確認してください。";
+    }
+
     private void HandleRecorderAudioLevelChanged(float? level)
     {
         _indicator.SetAudioLevel(level);
@@ -416,9 +434,10 @@ public partial class MainWindow : System.Windows.Window
         {
             _microphoneLevelMonitor.Start(deviceNumber);
         }
-        catch
+        catch (Exception ex)
         {
             _microphoneLevelMonitor.Stop();
+            HandleMicrophoneLevelMonitoringFailed(ex);
         }
     }
 

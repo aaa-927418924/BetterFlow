@@ -17,9 +17,9 @@ internal static class AudioInputLevel
         }
 
         var rms = Math.Sqrt(squaredTotal / sampleCount);
-        if (rms <= 0.001) return 0;
+        if (rms <= 0.00025) return 0;
 
         var decibels = 20 * Math.Log10(rms);
-        return (float)Math.Clamp((decibels + 55) / 43, 0, 1);
+        return (float)Math.Clamp((decibels + 68) / 42, 0, 1);
     }
 }

@@ -1132,3 +1132,12 @@
 - 実装前チェックポイントは`7ae442a`、実装コミットは`9c0f842`。`git diff --check`成功。Release self-contained win-x64 publish成功（NuGet脆弱性フィードへ接続できず`NU1900`警告）。
 - `dist/Better Flow.exe`を更新前に`artifacts/BetterFlow-before-sidebar-spacing-20261016.exe`へバックアップ（82,539,982 bytes、SHA-256 `0A8B402FDE4C70D9B6F955CC9D54DB81815DACB56BB1F018FFF73DBA0692E513`）。配布先と発行物は82,539,985 bytes、SHA-256 `F9210B46C28FCE64E148CC55C36108F0E5F557838C18D815FCBD559A4D9A48A0`で一致。置換時はフルパス一致のBetter Flow PID 17216のみを停止。
 - 実画面での配置確認とテストスイートは未実施。
+
+## 2026-10-17: マイク入力レベル表示と区切り線の調整
+
+- マイク入力レベル表示を音声入力デバイスの「再取得」ボタンと同じ104 DIP幅・同じ右列に配置し、ボタンの真上へ揃えた。設定欄下端の区切り線は入力欄とボタンの左右端に一致させ、線の高さ1 DIPをグリッド内に移して従来の縦位置を維持した。一般ページ内の変更/再取得ボタンに対応する区切り線の左右マージンも揃えた。
+- 録音レベルの正規化をより静かな声にも反応する範囲へ広げた。設定画面の読み込み完了時にも監視を開始し、デバイスが使えない場合は設定欄に案内を表示する。
+- Release self-contained win-x64 publish成功（NU1900: NuGet脆弱性情報取得先へ接続できない警告）。発行物と`dist/Better Flow.exe`は82,553,366 bytes、SHA-256 `6478A3573F834063D4810D9DE65EE17D34D01C1823750314332F168EC16A8303`で一致。置換時に完全一致パスのアプリは起動していなかったため、プロセス停止は不要だった。`.bak`は作成していない。
+- 実装コミットは`174cfe5`。`git diff --check`成功。テストスイートは未実行。実マイクでのレベル変化と画面上の配置は未確認。
+
+分類: 設定UI配置・マイク入力レベル表示の修正と配布。出典: 添付画像、`MainWindow.xaml`、`MainWindow.xaml.cs`、`Services/AudioInputLevel.cs`、`Services/MicrophoneLevelMonitor.cs`、Release publishとSHA-256照合。確認日: 2026-10-17 Asia/Tokyo。信頼度: ソース・ビルド・配置EXE一致は高、実画面/実マイク動作は未確認。情報区分: ユーザー指定・ローカル確認・実機未確認。
