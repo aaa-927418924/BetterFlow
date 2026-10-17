@@ -862,6 +862,21 @@
                                         </DockPanel>
                                     </Canvas>
 
+                                    <Canvas Canvas.Left="35" Canvas.Top="448" Width="639" Height="62">
+                                        <CheckBox x:Name="DisableShortcutInFullscreenCheckBox"
+                                                  Canvas.Left="0" Canvas.Top="0" Width="639" Height="38"
+                                                  Content="フルスクリーン時はショートカットキーを無効化する"
+                                                  IsThreeState="False" Style="{StaticResource SettingsCheckBoxStyle}"
+                                                  Checked="DisableShortcutInFullscreenCheckBox_Changed"
+                                                  Unchecked="DisableShortcutInFullscreenCheckBox_Changed"
+                                                  AutomationProperties.Name="フルスクリーン時にBetter Flowのショートカットキーを無効化"
+                                                  ToolTip="動画のフルスクリーン表示やゲーム中はショートカットキーをBetter Flowが使用しません。最大化ウィンドウは対象外です。" />
+                                        <TextBlock Canvas.Left="0" Canvas.Top="39" Width="600" Height="18"
+                                                   Text="YouTubeなどの動画の全画面表示やゲーム中に適用します。最大化ウィンドウは対象外です。"
+                                                   FontSize="11" Foreground="{StaticResource SettingsMutedBrush}"
+                                                   TextWrapping="NoWrap" />
+                                    </Canvas>
+
                                     <Border Canvas.Left="36" Canvas.Top="520" Width="639" Height="0.5"
                                             Background="#FFFFFF" />
                                     <Canvas Canvas.Left="35" Canvas.Top="542" Width="639" Height="66">

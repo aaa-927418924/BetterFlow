@@ -50,14 +50,18 @@ internal sealed class GlobalHotkey : IDisposable
     private IntPtr _keyboardHook;
     private HotkeyBinding _binding;
     private LowLevelKeyboardProc? _keyboardProc;
+    private Func<bool>? _isForegroundFullscreen;
     private bool _registeredAsHotkey;
     private bool _registered;
     private bool _escapeMonitoring;
     private bool _escapePressed;
     private bool _rightAltPressed;
+    private bool _fullscreenAwareTargetKeyDown;
+    private bool _fullscreenAwareTargetKeyConsumed;
     private volatile bool _voiceCommandPushToTalkEnabled;
     private bool _spaceVoiceCommandPressed;
     private bool _leftAltDown;
+    private bool _rightAltDown;
     private bool _leftControlDown;
     private bool _rightControlDown;
     private bool _leftShiftDown;
@@ -65,23 +69,18 @@ internal sealed class GlobalHotkey : IDisposable
     private bool _leftWindowsDown;
     private bool _rightWindowsDown;
 
-    public bool Register(IntPtr handle, HotkeyBinding binding)
+    public bool Register(IntPtr handle, HotkeyBinding binding, Func<bool>? isForegroundFullscreen = null)
     {
         Unregister();
         _handle = handle;
         _binding = binding;
+        _isForegroundFullscreen = isForegroundFullscreen;
         if (handle == IntPtr.Zero || !binding.IsUsable)
             return false;
 
-        if (binding.IsStandaloneRightAlt)
+        if (binding.IsStandaloneRightAlt || _isForegroundFullscreen is not null)
         {
-            _leftAltDown = IsKeyDown(VkLMenu);
-            _leftControlDown = IsKeyDown(VkLControl);
-            _rightControlDown = IsKeyDown(VkRControl);
-            _leftShiftDown = IsKeyDown(VkLShift);
-            _rightShiftDown = IsKeyDown(VkRShift);
-            _leftWindowsDown = IsKeyDown(VkLWin);
-            _rightWindowsDown = IsKeyDown(VkRWin);
+            InitializeModifierState();
             InstallKeyboardHook();
             _registered = _keyboardHook != IntPtr.Zero;
             return _registered;
@@ -103,12 +102,16 @@ internal sealed class GlobalHotkey : IDisposable
         _keyboardHook = IntPtr.Zero;
         _keyboardProc = null;
         _registered = false;
+        _isForegroundFullscreen = null;
         _escapeMonitoring = false;
         _escapePressed = false;
         _rightAltPressed = false;
+        _fullscreenAwareTargetKeyDown = false;
+        _fullscreenAwareTargetKeyConsumed = false;
         _voiceCommandPushToTalkEnabled = false;
         _spaceVoiceCommandPressed = false;
         _leftAltDown = false;
+        _rightAltDown = false;
         _leftControlDown = false;
         _rightControlDown = false;
         _leftShiftDown = false;
@@ -135,7 +138,7 @@ internal sealed class GlobalHotkey : IDisposable
         if (enabled)
             return InstallKeyboardHook();
 
-        if (!_binding.IsStandaloneRightAlt)
+        if (!_binding.IsStandaloneRightAlt && _isForegroundFullscreen is null && !_voiceCommandPushToTalkEnabled)
             RemoveKeyboardHook();
         return true;
     }
@@ -244,6 +247,44 @@ internal sealed class GlobalHotkey : IDisposable
                 }
             }
 
+            if (_isForegroundFullscreen is not null)
+            {
+                var targetKey = NormalizeVirtualKey(keyInfo);
+                if (targetKey == _binding.VirtualKey && isKeyDown)
+                {
+                    if (!_fullscreenAwareTargetKeyDown)
+                    {
+                        _fullscreenAwareTargetKeyDown = true;
+                        _fullscreenAwareTargetKeyConsumed = AreConfiguredModifiersDown();
+                        if (_fullscreenAwareTargetKeyConsumed)
+                        {
+                            var fullscreen = false;
+                            try { fullscreen = _isForegroundFullscreen(); }
+                            catch { }
+
+                            _fullscreenAwareTargetKeyConsumed = !fullscreen &&
+                                PostMessage(_handle, MessageId, new IntPtr(HotkeyId), IntPtr.Zero);
+                        }
+                    }
+
+                    var consume = _fullscreenAwareTargetKeyConsumed;
+                    UpdateModifierState(keyInfo, isKeyDown, isKeyUp);
+                    return consume ? new IntPtr(1) : CallNextHookEx(_keyboardHook, code, wParam, lParam);
+                }
+
+                if (targetKey == _binding.VirtualKey && isKeyUp)
+                {
+                    var consume = _fullscreenAwareTargetKeyDown && _fullscreenAwareTargetKeyConsumed;
+                    _fullscreenAwareTargetKeyDown = false;
+                    _fullscreenAwareTargetKeyConsumed = false;
+                    UpdateModifierState(keyInfo, isKeyDown, isKeyUp);
+                    return consume ? new IntPtr(1) : CallNextHookEx(_keyboardHook, code, wParam, lParam);
+                }
+
+                UpdateModifierState(keyInfo, isKeyDown, isKeyUp);
+                return CallNextHookEx(_keyboardHook, code, wParam, lParam);
+            }
+
             if (!_binding.IsStandaloneRightAlt)
                 return CallNextHookEx(_keyboardHook, code, wParam, lParam);
 
@@ -300,6 +341,33 @@ internal sealed class GlobalHotkey : IDisposable
         _leftAltDown || _leftControlDown || _rightControlDown
         || _leftShiftDown || _rightShiftDown || _leftWindowsDown || _rightWindowsDown;
 
+    private bool AreConfiguredModifiersDown()
+    {
+        uint active = 0;
+        if (_leftAltDown || _rightAltDown) active |= ModAlt;
+        if (_leftControlDown || _rightControlDown) active |= ModControl;
+        if (_leftShiftDown || _rightShiftDown) active |= ModShift;
+        if (_leftWindowsDown || _rightWindowsDown) active |= ModWindows;
+        return active == (_binding.Modifiers & (ModAlt | ModControl | ModShift | ModWindows));
+    }
+
+    private void InitializeModifierState()
+    {
+        _leftAltDown = IsKeyDown(VkLMenu);
+        _rightAltDown = IsKeyDown((int)HotkeyBinding.RightAltVirtualKey);
+        _leftControlDown = IsKeyDown(VkLControl);
+        _rightControlDown = IsKeyDown(VkRControl);
+        _leftShiftDown = IsKeyDown(VkLShift);
+        _rightShiftDown = IsKeyDown(VkRShift);
+        _leftWindowsDown = IsKeyDown(VkLWin);
+        _rightWindowsDown = IsKeyDown(VkRWin);
+    }
+
+    private static uint NormalizeVirtualKey(KeyboardData keyInfo) =>
+        keyInfo.VirtualKey == VkMenu && (keyInfo.Flags & LlkhfExtended) != 0
+            ? HotkeyBinding.RightAltVirtualKey
+            : keyInfo.VirtualKey;
+
     private void UpdateModifierState(KeyboardData keyInfo, bool isKeyDown, bool isKeyUp)
     {
         if ((!isKeyDown && !isKeyUp) || (keyInfo.Flags & LlkhfInjected) != 0)
@@ -317,6 +385,7 @@ internal sealed class GlobalHotkey : IDisposable
         switch (key)
         {
             case VkLMenu: _leftAltDown = down; break;
+            case (int)HotkeyBinding.RightAltVirtualKey: _rightAltDown = down; break;
             case VkLControl: _leftControlDown = down; break;
             case VkRControl: _rightControlDown = down; break;
             case VkLShift: _leftShiftDown = down; break;

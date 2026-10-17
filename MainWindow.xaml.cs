@@ -63,6 +63,7 @@ public partial class MainWindow : System.Windows.Window
     private bool _loadingDiscordMuteSettingsUi;
     private bool _loadingIndicatorHintsUi;
     private bool _loadingAutoStopOnSilenceUi;
+    private bool _loadingFullscreenShortcutUi;
     private bool _normalizingUserSystemPromptText;
     private string _lastAcceptedUserSystemPrompt = string.Empty;
     private bool _isRefreshingOpenCodeModels;
@@ -174,6 +175,7 @@ public partial class MainWindow : System.Windows.Window
         InitializeUserSystemPromptUi();
         InitializeStatisticsSettingsUi();
         InitializeIndicatorHintsSettingsUi();
+        InitializeFullscreenShortcutSettingsUi();
         InitializeOpenCodeModelUi();
         RefreshCorrectionDictionaryItems();
         InitializeSelectedTextAnswerModeUi();
@@ -842,10 +844,10 @@ public partial class MainWindow : System.Windows.Window
 
             if (_asr is not null)
             {
-                _hotkeyRegistered = _hotkey.Register(handle, importedHotkey);
+                _hotkeyRegistered = RegisterHotkey(handle, importedHotkey, imported.DisableShortcutInFullscreen);
                 if (!_hotkeyRegistered)
                 {
-                    _hotkeyRegistered = _hotkey.Register(handle, previousHotkey);
+                    _hotkeyRegistered = RegisterHotkey(handle, previousHotkey, previousSettings.DisableShortcutInFullscreen);
                     throw new InvalidOperationException("インポートしたショートカットを登録できませんでした。現在の設定を維持しました。");
                 }
             }
@@ -861,7 +863,7 @@ public partial class MainWindow : System.Windows.Window
             {
                 _settings = previousSettings;
                 if (_asr is not null)
-                    _hotkeyRegistered = _hotkey.Register(handle, previousHotkey);
+                    _hotkeyRegistered = RegisterHotkey(handle, previousHotkey, previousSettings.DisableShortcutInFullscreen);
                 else
                     _hotkeyRegistered = previousHotkeyRegistered;
                 throw;
@@ -870,6 +872,7 @@ public partial class MainWindow : System.Windows.Window
             InitializeUserSystemPromptUi();
             InitializeStatisticsSettingsUi();
             InitializeIndicatorHintsSettingsUi();
+            InitializeFullscreenShortcutSettingsUi();
             InitializeOpenCodeModelUi();
             RefreshCorrectionDictionaryItems();
             InitializeSelectedTextAnswerModeUi();
@@ -955,6 +958,55 @@ public partial class MainWindow : System.Windows.Window
         }
 
         UpdateShortcutDisplay();
+    }
+
+    private void InitializeFullscreenShortcutSettingsUi()
+    {
+        _loadingFullscreenShortcutUi = true;
+        try
+        {
+            DisableShortcutInFullscreenCheckBox.IsChecked = _settings.DisableShortcutInFullscreen;
+        }
+        finally
+        {
+            _loadingFullscreenShortcutUi = false;
+        }
+    }
+
+    private void DisableShortcutInFullscreenCheckBox_Changed(object sender, System.Windows.RoutedEventArgs e)
+    {
+        if (_loadingFullscreenShortcutUi) return;
+
+        var previous = _settings.DisableShortcutInFullscreen;
+        if (_isBusy || IsAnyRecording)
+        {
+            InitializeFullscreenShortcutSettingsUi();
+            RuntimeStatus.Text = "録音や処理を終えてから設定を変更してください。";
+            return;
+        }
+
+        _settings.DisableShortcutInFullscreen = DisableShortcutInFullscreenCheckBox.IsChecked == true;
+        try
+        {
+            _settingsStore.Save(_settings);
+        }
+        catch (Exception ex)
+        {
+            _settings.DisableShortcutInFullscreen = previous;
+            InitializeFullscreenShortcutSettingsUi();
+            RuntimeStatus.Text = "フルスクリーン時のショートカット設定を保存できませんでした。 " + ex.Message;
+            return;
+        }
+
+        if (_asr is not null && !RegisterConfiguredHotkey())
+        {
+            _settings.DisableShortcutInFullscreen = previous;
+            try { _settingsStore.Save(_settings); }
+            catch (Exception ex) { RuntimeStatus.Text = "設定を元に戻せませんでした。 " + ex.Message; }
+            InitializeFullscreenShortcutSettingsUi();
+            RegisterConfiguredHotkey();
+            RuntimeStatus.Text = "ショートカット設定を適用できませんでした。以前の設定に戻しました。";
+        }
     }
 
     private void IndicatorHintsCheckBox_Changed(object sender, System.Windows.RoutedEventArgs e)
@@ -4874,9 +4926,9 @@ public partial class MainWindow : System.Windows.Window
     {
         var current = GetConfiguredHotkey();
         var handle = new WindowInteropHelper(this).Handle;
-        if (!_hotkey.Register(handle, binding))
+        if (!RegisterHotkey(handle, binding))
         {
-            var restored = _hotkey.Register(handle, current);
+            var restored = RegisterHotkey(handle, current);
             if (restored)
             {
                 _hotkey.Unregister();
@@ -4898,7 +4950,7 @@ public partial class MainWindow : System.Windows.Window
         {
             _settings.ShortcutModifiers = oldModifiers;
             _settings.ShortcutVirtualKey = oldVirtualKey;
-            _hotkeyRegistered = _hotkey.Register(handle, current);
+            _hotkeyRegistered = RegisterHotkey(handle, current);
             _isCapturingShortcut = false;
             ShortcutChangeButton.Content = "変更";
             UpdateShortcutDisplay();
@@ -4918,7 +4970,7 @@ public partial class MainWindow : System.Windows.Window
     private void CancelShortcutCapture()
     {
         _isCapturingShortcut = false;
-        _hotkeyRegistered = _hotkey.Register(new WindowInteropHelper(this).Handle, GetConfiguredHotkey());
+        _hotkeyRegistered = RegisterHotkey(new WindowInteropHelper(this).Handle, GetConfiguredHotkey());
         ShortcutChangeButton.Content = "変更";
         ShortcutCaptureStatus.Text = "変更をキャンセルしました。";
     }
@@ -4945,16 +4997,26 @@ public partial class MainWindow : System.Windows.Window
             ShortcutChangeButton, $"ショートカットキーを変更。現在: {shortcut}");
     }
 
-    private void RegisterConfiguredHotkey()
+    private bool RegisterConfiguredHotkey()
     {
         _hotkey.Unregister();
         _hotkeyRegistered = false;
-        if (_asr is null || _exitRequested) return;
+        if (_asr is null || _exitRequested) return false;
 
         var helper = new WindowInteropHelper(this);
         var handle = helper.EnsureHandle();
         AttachWindowMessageHook(handle);
-        _hotkeyRegistered = _hotkey.Register(handle, GetConfiguredHotkey());
+        _hotkeyRegistered = RegisterHotkey(handle, GetConfiguredHotkey());
+        return _hotkeyRegistered;
+    }
+
+    private bool RegisterHotkey(IntPtr handle, HotkeyBinding binding, bool? disableInFullscreen = null)
+    {
+        var shouldDisable = disableInFullscreen ?? _settings.DisableShortcutInFullscreen;
+        Func<bool>? isFullscreen = shouldDisable
+            ? FullscreenWindowDetector.IsForegroundFullscreen
+            : null;
+        return _hotkey.Register(handle, binding, isFullscreen);
     }
 
     private void AttachWindowMessageHook(IntPtr handle)
