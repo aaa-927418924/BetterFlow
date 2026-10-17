@@ -209,6 +209,8 @@
 - Gemini要求はこの追加計測で計3回、各要求の間隔を1分以上空け、再試行やバックグラウンド要求は行わなかった。テストスイートは実行していない。新EXEの実UI/実音声経路と`opencode-timing.jsonl`への初回記録は未確認。
 - 根拠: [OpenCode Server API](https://dev.opencode.ai/docs/server/)は同期`/message`、非同期`/prompt_async`、server-sent event streamを掲載。[OpenCode Models](https://docs.opencode.ai/docs/models/)はmodel variants/optionsで推論effort等を設定でき、agent設定がglobal optionsを上書きし得ると説明する。
 
+- 2026-10-16の読み取り専用比較: `opencode-timing.jsonl`の各モデル直近30件を確認。GPT 6 Luna Fast (`gpt-6-luna-fast`) は29成功・1キャンセルで、TTFT中央値2.212秒（平均2.247秒、p90 3.338秒）、総時間中央値2.359秒（平均2.591秒、p90 3.916秒）。TTFT 3秒以内は23/29、総時間5秒以内は29/29。DeepSeek V4.1 Flash Free (`deepseek-v4.1-flash-free`) は27成功・3キャンセルで、TTFT中央値4.288秒（平均5.770秒、p90 9.189秒）、総時間中央値4.343秒（平均5.844秒、p90 9.516秒）。ログ上の最新時刻はGPTが12:06 JST、DeepSeekが21:36 JSTで、同時刻・同一プロンプトの比較ではないため参考値。GPTの直近記録は測定時点から約9.5時間前だった。ログにはeffort値がない。現行ソースの一時エージェント設定は`reasoningEffort=low`。新しいCLI呼び出しは`opencode.log`への`FileSystem.open`エラーで実測を確認できず、ソース・設定・EXEは変更していない。
+
 ## 選択文編集キャンセル時の表示（2026-10-14）
 
 - 選択文編集セッション中にショートカットでキャンセルした場合は、終了処理でインジケーターを即時非表示にする。通常の音声入力のキャンセル表示「キャンセルしました」は維持する。
