@@ -9,7 +9,7 @@ internal sealed class AppSettings
     public string UserSystemPrompt { get; set; } = string.Empty;
     public string SelectionEditEngine { get; set; } = "opencode";
     public string SelectedTextAnswerMode { get; set; } = "opencode";
-    public bool DisableShortcutInFullscreen { get; set; }
+    public bool DisableShortcutInFullscreen { get; set; } = true;
     public string OpenCodeModelProviderId { get; set; } = "opencode";
     public string OpenCodeModelId { get; set; } = "deepseek-v4.1-flash-free";
     public List<CorrectionDictionaryEntry> CorrectionDictionary { get; set; } = new();
