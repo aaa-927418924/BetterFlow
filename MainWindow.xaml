@@ -837,7 +837,7 @@
                                                           AutomationProperties.Name="GPT Liveの音声会話" />
                                         </ComboBox>
                                         <TextBlock Canvas.Left="0" Canvas.Top="86" Width="400" Height="18"
-                                                   Text="GPT LiveにはChatGPTサブスクリプションが必要です。"
+                                                   Text="GPT LiveにはChatGPTサブスクリプションが必要です。&#x0a;GPT Liveでは検索ツールは使用できません。"
                                                    FontSize="10" Foreground="{StaticResource SettingsMutedBrush}"
                                                    TextWrapping="Wrap" />
                                         <DockPanel x:Name="GptLiveSignInPanel" Canvas.Left="0" Canvas.Top="115"
