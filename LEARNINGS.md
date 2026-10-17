@@ -254,3 +254,10 @@
 - 制約: 各表示を出した時点の背景を使い、表示中は更新しない。答えとプレビューを同時表示するモードではない前提で別々にサンプルする。
 - 分類: WPF質問回答/文字起こし表示の背景表現。出典: ユーザー画像と明示依頼、AnswerWindow.xaml/.cs、TranscriptPreviewWindow.xaml/.cs、GlassBackdropSampler.cs。確認日: 2026-10-17 Asia/Tokyo。情報区分: 実装・Release build/publish確認。画面上で実AI回答/実音声を使った確認は別途必要。
 - 配布: 2026-10-17にRelease build/publish成功（0 errors、NU1900のNuGet脆弱性情報取得警告のみ）。`dist/Better Flow.exe`へ置換済み、82,558,491 bytes、SHA-256 `C27F9BD1AD7E8F9500F97EA8CB9916DB62DD6A547546AE36139F029EE493BFE9`で発行物と一致。置換前にパス一致のBetter Flowと残存する3つの同じOpenCode CLIプロセスを停止。`.bak`は作成せず、アプリは停止状態。実際の音声入力・質問回答を使った画面確認は未実施。
+
+## Better Flowの設定ZIPを別PCへ移行（2026-10-17）
+
+- 内容: エクスポートZIPにはBetter Flowの`AppSettings`全項目、辞書・指示・ショートカット等の設定、表示名、累計統計値、プロフィールPNGを含める。統計はローカル保存時だけWindows DPAPI（現在のWindowsユーザー）で保護し、ZIPには移行可能な値として保存する。別ユーザー/PCでのインポート後、通常の設定保存で移行先ユーザーのDPAPI鍵を使って再保護する。旧JSONエクスポートも読み込み可能。OpenCodeの認証情報はBetter Flow設定外で別管理されるためZIPには含まれない。
+- セキュリティ上の境界: ローカルJSONの平文改変防止には使えるが、ポータブルZIP内の値はインポート可能性のため平文であり、ZIP編集を防ぐものではない。壊れたDPAPI値は統計を0にせず、設定本体を維持してインポート復旧を案内する。
+- 確認: Release build/publish成功。ZIPの設定・画像・名前・統計の往復、旧JSON互換、DPAPI往復と改ざん検出のスモーク確認成功。`dist/Better Flow.exe`と発行EXEは82,561,276 bytes、SHA-256 `19DE9D1B2C0B86D81E631CCDDECA5E01C60169632D130D5F5A1853C3F342781A`で一致。ライブUI/実マイクは未確認。
+- 分類: 設定移行・ローカル統計保護。出典: `Services/SettingsTransfer.cs`、`Services/StatisticsDataProtection.cs`、`Services/AppSettings.cs`、`MainWindow.xaml.cs`、Release build/publish、移行テスト出力。確認日: 2026-10-17 Asia/Tokyo。信頼度: ソース・ビルド・往復確認・配布ハッシュは高、ユーザー環境でのライブ動作は未確認。情報区分: 明示要件・実装確認。

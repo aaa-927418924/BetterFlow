@@ -772,10 +772,10 @@ public partial class MainWindow : System.Windows.Window
         var dialog = new Microsoft.Win32.SaveFileDialog
         {
             Title = "Better Flowの設定をエクスポート",
-            Filter = "Better Flow設定 (*.betterflow.json)|*.betterflow.json|JSONファイル (*.json)|*.json",
-            DefaultExt = ".betterflow.json",
+            Filter = "Better Flow設定 ZIP (*.betterflow.zip)|*.betterflow.zip",
+            DefaultExt = ".betterflow.zip",
             AddExtension = true,
-            FileName = $"Better Flow設定_{DateTime.Now:yyyyMMdd}.betterflow.json",
+            FileName = $"Better Flow設定_{DateTime.Now:yyyyMMdd}.betterflow.zip",
             OverwritePrompt = true
         };
 
@@ -783,8 +783,8 @@ public partial class MainWindow : System.Windows.Window
 
         try
         {
-            File.WriteAllText(dialog.FileName, SettingsTransfer.Serialize(_settings), new UTF8Encoding(false));
-            SettingsTransferStatus.Text = "設定をエクスポートしました。";
+            File.WriteAllBytes(dialog.FileName, SettingsTransfer.SerializeArchive(_settings));
+            SettingsTransferStatus.Text = "設定、統計、プロフィールをエクスポートしました。";
         }
         catch (Exception ex)
         {
@@ -803,7 +803,7 @@ public partial class MainWindow : System.Windows.Window
         var dialog = new Microsoft.Win32.OpenFileDialog
         {
             Title = "Better Flowの設定をインポート",
-            Filter = "Better Flow設定 (*.betterflow.json)|*.betterflow.json|JSONファイル (*.json)|*.json",
+            Filter = "Better Flow設定 ZIP (*.betterflow.zip)|*.betterflow.zip|以前のJSON設定 (*.betterflow.json;*.json)|*.betterflow.json;*.json",
             CheckFileExists = true,
             Multiselect = false
         };
@@ -814,7 +814,7 @@ public partial class MainWindow : System.Windows.Window
             var imported = SettingsTransfer.DeserializeFile(dialog.FileName);
             var replace = System.Windows.MessageBox.Show(
                 this,
-                "現在の設定、辞書、指示プロンプトをファイルの内容で置き換えます。\n\n" +
+                "現在の設定、辞書、指示プロンプト、統計、プロフィール（名前・画像）をファイルの内容で置き換えます。\n\n" +
                 "現在の設定ファイルは、置き換える前にバックアップされます。続けますか？",
                 "設定のインポート",
                 System.Windows.MessageBoxButton.YesNo,
@@ -883,10 +883,10 @@ public partial class MainWindow : System.Windows.Window
 
             UpdateAiModeDisplay();
             SettingsTransferStatus.Text = modelChanged
-                ? "設定をインポートしました。OpenCodeモデルを使うには、詳細設定の「再取得」から準備してください。"
+                ? "設定、統計、プロフィールをインポートしました。OpenCodeモデルを使うには、詳細設定の「再取得」から準備してください。"
                 : backupPath.Length > 0
-                    ? "設定をインポートしました。元の設定のバックアップも作成しました。"
-                    : "設定をインポートしました。";
+                    ? "設定、統計、プロフィールをインポートしました。元の設定のバックアップも作成しました。"
+                    : "設定、統計、プロフィールをインポートしました。";
         }
         catch (Exception ex)
         {
@@ -2303,7 +2303,7 @@ public partial class MainWindow : System.Windows.Window
             _loadingStatisticsUi = false;
         }
 
-        StatisticsSettingsStatus.Text = string.Empty;
+        StatisticsSettingsStatus.Text = _settings.StatisticsProtectionStatusMessage ?? string.Empty;
         ApplyStatisticsAvatar();
         RefreshStatisticsPage();
         if (!string.Equals(previousName, displayName, StringComparison.Ordinal))
@@ -2321,7 +2321,7 @@ public partial class MainWindow : System.Windows.Window
         try
         {
             _settingsStore.Save(_settings);
-            StatisticsSettingsStatus.Text = string.Empty;
+            StatisticsSettingsStatus.Text = _settings.StatisticsProtectionStatusMessage ?? string.Empty;
         }
         catch
         {
@@ -2353,7 +2353,7 @@ public partial class MainWindow : System.Windows.Window
             _settings.StatisticsAvatarPngBase64 = Convert.ToBase64String(avatarBytes);
             _settingsStore.Save(_settings);
             ApplyStatisticsAvatar();
-            StatisticsSettingsStatus.Text = string.Empty;
+            StatisticsSettingsStatus.Text = _settings.StatisticsProtectionStatusMessage ?? string.Empty;
         }
         catch (Exception ex)
         {
@@ -2442,6 +2442,13 @@ public partial class MainWindow : System.Windows.Window
 
     private void RecordInputUsage(string? recognizedText, TimeSpan inputDuration)
     {
+        if (_settings.StatisticsProtectionError)
+        {
+            StatisticsSettingsStatus.Text = _settings.StatisticsProtectionStatusMessage ??
+                                            "統計データを復号できないため、入力統計を記録できません。";
+            return;
+        }
+
         var inputCharacters = recognizedText is null
             ? 0
             : new StringInfo(recognizedText).LengthInTextElements;

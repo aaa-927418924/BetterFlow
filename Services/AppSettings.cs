@@ -29,8 +29,23 @@ internal sealed class AppSettings
     public uint DiscordMuteShortcutVirtualKey { get; set; }
     public string StatisticsDisplayName { get; set; } = Environment.UserName;
     public string StatisticsAvatarPngBase64 { get; set; } = string.Empty;
+
+    // Usage totals are encrypted in the local settings file. Portable exports carry
+    // the decrypted values in their archive manifest and intentionally omit this blob.
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? StatisticsProtectedPayload { get; set; }
+
+    [JsonIgnore]
     public long StatisticsTotalInputCharacters { get; set; }
+
+    [JsonIgnore]
     public long StatisticsTotalInputMilliseconds { get; set; }
+
+    [JsonIgnore]
+    public bool StatisticsProtectionError { get; set; }
+
+    [JsonIgnore]
+    public string? StatisticsProtectionStatusMessage { get; set; }
 
     [JsonPropertyName("AiProviderId")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
@@ -83,19 +98,61 @@ internal sealed class SettingsStore
 
             var json = File.ReadAllText(AppPaths.SettingsFile);
             var settings = System.Text.Json.JsonSerializer.Deserialize<AppSettings>(json) ?? new AppSettings();
-            var hasObsoleteSpeechModelSettings = false;
-            using (var document = System.Text.Json.JsonDocument.Parse(json))
+            using var document = System.Text.Json.JsonDocument.Parse(json);
+            var root = document.RootElement;
+
+            if (!string.IsNullOrWhiteSpace(settings.StatisticsProtectedPayload))
             {
-                if (document.RootElement.ValueKind == System.Text.Json.JsonValueKind.Object)
+                if (StatisticsDataProtection.TryUnprotect(
+                        settings.StatisticsProtectedPayload,
+                        out var statistics))
                 {
-                    hasObsoleteSpeechModelSettings = document.RootElement.EnumerateObject().Any(property =>
-                        property.Name.Equals("SpeechRecognitionModelId", StringComparison.OrdinalIgnoreCase) ||
-                        property.Name.Equals("SpeechRecognitionModelPreferenceVersion", StringComparison.OrdinalIgnoreCase));
+                    settings.StatisticsTotalInputCharacters = statistics.TotalInputCharacters;
+                    settings.StatisticsTotalInputMilliseconds = statistics.TotalInputMilliseconds;
+                }
+                else
+                {
+                    // Keep the unreadable blob intact when saving unrelated settings. A
+                    // damaged stats record must not reset the rest of the user's settings.
+                    settings.StatisticsProtectionError = true;
+                    settings.StatisticsProtectionStatusMessage =
+                        "統計データを復号できませんでした。設定をインポートすると復旧できます。";
                 }
             }
+            else
+            {
+                // Migrate totals written by earlier versions as plain JSON numbers.
+                settings.StatisticsTotalInputCharacters = ReadLegacyNonNegativeLong(
+                    root, "StatisticsTotalInputCharacters");
+                settings.StatisticsTotalInputMilliseconds = ReadLegacyNonNegativeLong(
+                    root, "StatisticsTotalInputMilliseconds");
+            }
 
-            if (hasObsoleteSpeechModelSettings)
-                Save(settings);
+            var hasObsoleteSpeechModelSettings = false;
+            var hasLegacyStatistics = false;
+            if (root.ValueKind == System.Text.Json.JsonValueKind.Object)
+            {
+                hasObsoleteSpeechModelSettings = root.EnumerateObject().Any(property =>
+                    property.Name.Equals("SpeechRecognitionModelId", StringComparison.OrdinalIgnoreCase) ||
+                    property.Name.Equals("SpeechRecognitionModelPreferenceVersion", StringComparison.OrdinalIgnoreCase));
+                hasLegacyStatistics = HasProperty(root, "StatisticsTotalInputCharacters") ||
+                                      HasProperty(root, "StatisticsTotalInputMilliseconds");
+            }
+
+            if (hasObsoleteSpeechModelSettings || (hasLegacyStatistics && settings.StatisticsProtectedPayload is null))
+            {
+                try
+                {
+                    Save(settings);
+                    settings.StatisticsProtectionStatusMessage = null;
+                }
+                catch
+                {
+                    // Keep the old file intact if migration cannot be written. The app
+                    // can still load and use its other settings, and a later save retries.
+                    settings.StatisticsProtectionStatusMessage = "統計を暗号化して保存できませんでした。";
+                }
+            }
             return settings;
         }
         catch
@@ -106,9 +163,38 @@ internal sealed class SettingsStore
 
     public void Save(AppSettings settings)
     {
+        ArgumentNullException.ThrowIfNull(settings);
+        if (!settings.StatisticsProtectionError)
+        {
+            settings.StatisticsProtectedPayload = StatisticsDataProtection.Protect(
+                settings.StatisticsTotalInputCharacters,
+                settings.StatisticsTotalInputMilliseconds);
+            settings.StatisticsProtectionStatusMessage = null;
+        }
+
         AppPaths.EnsureDirectories();
         var temporary = AppPaths.SettingsFile + ".tmp";
         File.WriteAllText(temporary, System.Text.Json.JsonSerializer.Serialize(settings));
         File.Move(temporary, AppPaths.SettingsFile, overwrite: true);
+    }
+
+    private static bool HasProperty(System.Text.Json.JsonElement root, string name) =>
+        root.EnumerateObject().Any(property => property.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
+
+    private static long ReadLegacyNonNegativeLong(System.Text.Json.JsonElement root, string name)
+    {
+        if (root.ValueKind != System.Text.Json.JsonValueKind.Object)
+            return 0;
+
+        foreach (var property in root.EnumerateObject())
+        {
+            if (!property.Name.Equals(name, StringComparison.OrdinalIgnoreCase))
+                continue;
+            if (property.Value.ValueKind == System.Text.Json.JsonValueKind.Number &&
+                property.Value.TryGetInt64(out var value))
+                return Math.Max(0, value);
+            return 0;
+        }
+        return 0;
     }
 }
