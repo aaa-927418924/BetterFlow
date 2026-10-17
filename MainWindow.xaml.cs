@@ -4750,6 +4750,10 @@ public partial class MainWindow : System.Windows.Window
     {
         var shortcut = GlobalHotkey.Format(GetConfiguredHotkey());
         ShortcutCurrentText.Text = shortcut;
+        SettingsIntroText.Text =
+            $"入力欄にカーソルがある状態で「{shortcut}」を押すと、音声入力が始まります。\n" +
+            "録音中にSpaceを長押しすると、音声コマンドで文章を編集したり、改行・整形・送信したりできます。\n" +
+            "編集できる文章を選択中は音声で編集し、通常の文章を選択中はその文章について質問できます。";
         _indicator.SetOperationHintSettings(_settings.ShowIndicatorHints, shortcut);
         System.Windows.Automation.AutomationProperties.SetName(
             ShortcutChangeButton, $"ショートカットキーを変更。現在: {shortcut}");

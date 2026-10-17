@@ -504,7 +504,7 @@
                                         <StackPanel MinHeight="691">
                                              <TextBlock x:Name="SettingsIntroText" Margin="35,34,0,0"
                                                         Width="509" MinHeight="76" FontSize="16" LineHeight="19"
-                                                       Text="入力欄で押すと音声入力を始めます。録音中にSpaceを長押しすると、&#10;改行·プロンプト整形·そのまま送信の音声コマンドを使えます。&#10;編集できる文章を選択中なら音声で編集し、&#10;通常の文章を選択中ならその文章について質問できます。" />
+                                                       Text="入力欄にカーソルがある状態でショートカットキーを押すと、音声入力が始まります。" />
 
                                             <Grid x:Name="ShortcutSettingsPanel" Margin="35,47,0,0"
                                                   Width="639" MinHeight="94">
