@@ -29,6 +29,18 @@
         </Grid>
         <Border x:Name="GlassTint" CornerRadius="19"
                 Background="{StaticResource IndicatorGlassTintBrush}" />
+        <!-- Experimental rim is independent of the existing blur and tint. -->
+        <Grid x:Name="PrismRim" ClipToBounds="True" Visibility="Collapsed">
+            <Grid.Effect>
+                <services:IndicatorPrismEffect x:Name="PrismRefraction" />
+            </Grid.Effect>
+            <Image Source="{Binding Source, ElementName=GlassBackdropImage}"
+                   Margin="-12" Stretch="Fill">
+                <Image.Effect>
+                    <BlurEffect Radius="1.5" KernelType="Gaussian" RenderingBias="Quality" />
+                </Image.Effect>
+            </Image>
+        </Grid>
         <Border CornerRadius="18.5" Margin="0.5">
             <Border.Background>
                 <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">

@@ -18,6 +18,8 @@ internal enum ProcessingProgressStage
 
 public partial class IndicatorWindow : System.Windows.Window
 {
+    // Trial appearance only. False restores the saved blur without changing capture or UI behavior.
+    private const bool EnablePrismTrial = true;
     private const int GwlExStyle = -20;
     private const long WsExTransparent = 0x00000020L;
     private const long WsExToolWindow = 0x00000080L;
@@ -50,6 +52,8 @@ public partial class IndicatorWindow : System.Windows.Window
     public IndicatorWindow()
     {
         InitializeComponent();
+        PrismRim.Visibility = EnablePrismTrial && !SystemParameters.HighContrast &&
+            RenderCapability.IsPixelShaderVersionSupported(3, 0) ? Visibility.Visible : Visibility.Collapsed;
         _hideTimer = new DispatcherTimer(DispatcherPriority.Background)
         {
             Interval = TimeSpan.FromMilliseconds(900)
@@ -392,6 +396,7 @@ public partial class IndicatorWindow : System.Windows.Window
         var radius = Math.Min(e.NewSize.Width, e.NewSize.Height) / 2;
         GlassRoot.Clip = new RectangleGeometry(new Rect(e.NewSize), radius, radius);
         GlassRefraction.SurfaceSize = new System.Windows.Point(e.NewSize.Width, e.NewSize.Height);
+        PrismRefraction.SurfaceSize = new System.Windows.Point(e.NewSize.Width, e.NewSize.Height);
         if (!RenderCapability.IsPixelShaderVersionSupported(3, 0))
             LensBackdrop.Effect = null;
     }

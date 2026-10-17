@@ -1150,3 +1150,9 @@
 - 配布: Releaseをcleanしてからself-contained win-x64 publish成功。NU1900はNuGet脆弱性情報取得先へ接続できない警告のみ。診断用コピーは`.xml`へ変更し、最終リソース9件に`artifacts/*.baml`が含まれないことを確認。発行物と`dist/Better Flow.exe`は82,553,332 bytes、SHA-256 `43E3A46559E3FD99821263776C7CF3BE81073C0E91CD9CD41B32C673F423FE5F`で一致。実行パスと起動時刻が一致したBetter Flow/子OpenCodeだけを停止して置換し、両方の終了を確認。`.bak`は作成していない。復元点は`65c1968`。
 
 分類: WPF設定画面の配置修正・実座標計測。出典: ユーザー添付画像、`MainWindow.xaml`、`artifacts/Measure-SettingsLayout.ps1`、`artifacts/settings-layout-validation.json`、Git `4f9c54b`/`65c1968`。確認日: 2026-10-17 Asia/Tokyo。信頼度: 原因・WPF座標/描画は高、通常起動したアプリの実画面は未確認。情報区分: 実測・ソース確認。
+## 2026-10-17: 境界レンズとプリズムの外観試作
+
+- ぼかしの復元点: `4202b35`。設定/Setupは対象外。
+- 元の背景処理を変更せず、静止したカプセル境界の屈折と控えめな色分離を別レイヤーで追加。`EnablePrismTrial=false`で今回の外観だけを無効化できる。背景更新は表示開始時のみ。
+- Computer Useの白/暗色/縞背景、3モード、クリック透過、50%ゲージの表示を確認。実音声/録画/GPU負荷は未測定。
+- Release発行と配布先EXEのハッシュ一致を確認。Better Flowと所有するOpenCodeを終了して差し替え済み。詳細と復元方法は`LEARNINGS.md`に記録。
