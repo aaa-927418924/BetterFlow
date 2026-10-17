@@ -510,8 +510,8 @@
                                                         Width="509" MinHeight="76" FontSize="16" LineHeight="19"
                                                        Text="入力欄にカーソルがある状態でショートカットキーを押すと、音声入力が始まります。" />
 
-                                            <Grid x:Name="ShortcutSettingsPanel" Margin="35,47,0,0"
-                                                  Width="639" MinHeight="94">
+                                            <Grid x:Name="ShortcutSettingsPanel" Margin="35,47,17,0"
+                                                  HorizontalAlignment="Stretch" MinHeight="94">
                                                 <Grid.RowDefinitions>
                                                     <RowDefinition Height="19" />
                                                     <RowDefinition Height="7" />
@@ -520,7 +520,7 @@
                                                     <RowDefinition Height="Auto" />
                                                 </Grid.RowDefinitions>
                                                 <Grid.ColumnDefinitions>
-                                                    <ColumnDefinition Width="535" />
+                                                    <ColumnDefinition Width="*" />
                                                     <ColumnDefinition Width="104" />
                                                 </Grid.ColumnDefinitions>
                                                 <TextBlock Grid.Row="0" Grid.ColumnSpan="2" Text="ショートカットキー"
@@ -541,8 +541,8 @@
 
                                             <Border Margin="35,0,17,0" Height="1" Background="#FFFFFF" />
 
-                                            <Grid x:Name="OpenCodeModelSettingsPanel" Margin="35,29,0,0"
-                                                  Width="639" MinHeight="100">
+                                            <Grid x:Name="OpenCodeModelSettingsPanel" Margin="35,29,17,0"
+                                                  HorizontalAlignment="Stretch" MinHeight="100">
                                                 <Grid.RowDefinitions>
                                                     <RowDefinition Height="19" />
                                                     <RowDefinition Height="13" />
@@ -551,14 +551,14 @@
                                                     <RowDefinition Height="Auto" />
                                                 </Grid.RowDefinitions>
                                                 <Grid.ColumnDefinitions>
-                                                    <ColumnDefinition Width="509" />
+                                                    <ColumnDefinition Width="*" />
                                                     <ColumnDefinition Width="26" />
                                                     <ColumnDefinition Width="104" />
                                                 </Grid.ColumnDefinitions>
                                                 <TextBlock Grid.Row="0" Grid.ColumnSpan="3" Text="OpenCodeモデル"
                                                            FontSize="16" Foreground="{StaticResource SettingsMutedBrush}" />
                                                 <ComboBox x:Name="OpenCodeModelCombo" Grid.Row="2" Grid.Column="0"
-                                                          Width="509" MinHeight="38" IsEditable="False"
+                                                          MinHeight="38" IsEditable="False"
                                                           Background="{StaticResource SettingsControlBrush}"
                                                           Foreground="{StaticResource SettingsControlTextBrush}"
                                                           FontSize="15" ItemTemplate="{StaticResource DropdownDisplayNameTemplate}"
@@ -582,27 +582,26 @@
 
                                             <Border Margin="35,0,17,0" Height="1" Background="#FFFFFF" />
 
-                                            <Grid x:Name="MicrophoneSettingsPanel" Margin="35,33,0,0"
-                                                  Width="639" MinHeight="130">
+                                            <Grid x:Name="MicrophoneSettingsPanel" Margin="35,33,17,0"
+                                                  HorizontalAlignment="Stretch" MinHeight="112">
                                                 <Grid.RowDefinitions>
                                                     <RowDefinition Height="19" />
-                                                    <RowDefinition Height="10" />
-                                                    <RowDefinition Height="28" />
-                                                    <RowDefinition Height="3" />
+                                                    <RowDefinition Height="23" />
                                                     <RowDefinition Height="Auto" />
                                                     <RowDefinition Height="3" />
                                                     <RowDefinition Height="Auto" />
-                                                    <RowDefinition Height="1" />
                                                 </Grid.RowDefinitions>
                                                 <Grid.ColumnDefinitions>
-                                                    <ColumnDefinition Width="509" />
+                                                    <ColumnDefinition Width="*" />
                                                     <ColumnDefinition Width="26" />
                                                     <ColumnDefinition Width="104" />
                                                 </Grid.ColumnDefinitions>
-                                                <TextBlock Grid.Row="0" Grid.ColumnSpan="3" Text="音声入力デバイス"
+                                                <TextBlock Grid.Row="0" Grid.Column="0" Text="音声入力デバイス"
                                                            FontSize="16" Foreground="{StaticResource SettingsMutedBrush}" />
-                                                <Border x:Name="MicrophoneLevelMeter" Grid.Row="2" Grid.Column="2"
+                                                <!-- Overlay the 28-DIP meter on the existing 19-DIP heading row. -->
+                                                <Border x:Name="MicrophoneLevelMeter" Grid.Row="0" Grid.Column="2"
                                                         Width="104" Height="28" HorizontalAlignment="Center"
+                                                        Margin="0,-4.5,0,-4.5"
                                                         VerticalAlignment="Center" CornerRadius="14"
                                                         Background="#252525" BorderBrush="#A0A0A0"
                                                         BorderThickness="1" IsHitTestVisible="False"
@@ -617,8 +616,8 @@
                                                                 CornerRadius="3" Background="#F2F2F2" />
                                                     </StackPanel>
                                                 </Border>
-                                                <ComboBox x:Name="MicrophoneDeviceCombo" Grid.Row="4" Grid.Column="0"
-                                                          Width="509" MinHeight="38" IsEditable="False"
+                                                <ComboBox x:Name="MicrophoneDeviceCombo" Grid.Row="2" Grid.Column="0"
+                                                          MinHeight="38" IsEditable="False"
                                                           Background="{StaticResource SettingsControlBrush}"
                                                           Foreground="{StaticResource SettingsControlTextBrush}"
                                                           FontSize="15" ItemTemplate="{StaticResource AudioInputDisplayNameTemplate}"
@@ -628,20 +627,19 @@
                                                           SelectionChanged="MicrophoneDeviceCombo_SelectionChanged"
                                                           ToolTip="{Binding SelectedItem.DisplayName, RelativeSource={RelativeSource Self}}"
                                                           AutomationProperties.Name="音声入力デバイス" />
-                                                <Button x:Name="RefreshMicrophoneDevicesButton" Grid.Row="4" Grid.Column="2"
+                                                <Button x:Name="RefreshMicrophoneDevicesButton" Grid.Row="2" Grid.Column="2"
                                                         Content="再取得" Width="104" Height="38" Padding="6,0"
                                                         VerticalAlignment="Center"
                                                         Style="{StaticResource SettingsButtonStyle}"
                                                         Click="RefreshMicrophoneDevices_Click"
                                                         AutomationProperties.Name="音声入力デバイス一覧を再取得" />
-                                                <TextBlock x:Name="MicrophoneDeviceStatus" Grid.Row="6" Grid.ColumnSpan="3"
+                                                <TextBlock x:Name="MicrophoneDeviceStatus" Grid.Row="4" Grid.ColumnSpan="3"
                                                            MinHeight="27" FontSize="11" LineHeight="14"
                                                            TextWrapping="Wrap" Foreground="{StaticResource SettingsMutedBrush}"
                                                            AutomationProperties.LiveSetting="Polite" />
-                                                <Border Grid.Row="7" Grid.ColumnSpan="3" Height="1"
-                                                        VerticalAlignment="Bottom" Background="#FFFFFF"
-                                                        SnapsToDevicePixels="True" />
                                             </Grid>
+
+                                            <Border Margin="35,0,17,0" Height="1" Background="#FFFFFF" />
 
                                             <CheckBox x:Name="IndicatorHintsCheckBox" Margin="39,22,0,0"
                                                       Width="604" Height="38" Content="インジケーターに操作ヒントを表示"

@@ -189,9 +189,10 @@
 
 - 内容: NAudio `WaveInEvent`のPCM16 RMS値をUIメーターへ渡す場合、録音処理と同じデバイス番号・16kHz monoを使い、ウィンドウの`Loaded`と`IsVisibleChanged`の両方から監視状態を同期する。デバイスが開けない場合に例外を握りつぶすと、静止したメーターとの区別がつかないため、設定欄に短い確認案内を表示する。
 - 今回のレベル値はRMS 0.00025以下を無音として扱い、dBFS -68〜-26を0〜1へ正規化する。以前のゲート0.001では静かな発話がゼロになりやすかった。オーバーレイの音声レベルも同じ正規化関数を使うため、しきい値変更時は表示感度も変わる点に注意する。
-- 設定行の横位置を揃える場合、列幅509+26+104 DIP、左マージン35 DIP、右余白17 DIPの範囲がドロップダウンとボタンの両端になる。区切り線をグリッド内へ移動する場合は、既存の外側1 DIP線を同じ1 DIPの行として置き換えると下の項目の縦位置が変わらない。
+- 設定行の横位置は、区切り線と同じ左右マージン35/17 DIPでStretchし、入力欄の列を`*`、間隔26 DIP、ボタン104 DIPとする。固定幅639 DIPと左マージン35 DIPだけを指定すると、WPFが余った幅を中央寄せし、実測では入力欄/ボタンが区切り線より9 DIP右へずれた。スクロールバーの有無でも余り幅が変わるため、幅の数値だけを合わせても整列を保証できない。
+- メーターは既存19 DIPの見出し行へ置き、28 DIPの高さを上下-4.5 DIPの余白で重ねる。マイク欄の行構成19/23/Auto/3/Auto DIP、MinHeight=112、外側1 DIP区切り線を追加前へ戻すと、入力欄・区切り線・後続チェック項目の縦座標が追加前と一致する。見出しとの中心差はレイアウト丸めにより0.5 DIP以内。
 - 分類: NAudio/WPF音量レベルUI・設定レイアウト。
-- 出典: `MainWindow.xaml`、`MainWindow.xaml.cs`、`Services/AudioInputLevel.cs`、`Services/MicrophoneLevelMonitor.cs`。2026-10-17 Release publish、`dist/Better Flow.exe`とのSHA-256一致を確認。
+- 出典: `MainWindow.xaml`、`MainWindow.xaml.cs`、`Services/AudioInputLevel.cs`、`Services/MicrophoneLevelMonitor.cs`、Git `4f9c54b`との比較、`artifacts/settings-layout-validation.json`。WPFで実際のXAMLをMeasure/Arrangeして、通常/長い名称・スクロール有無の4条件で176項目を照合した。clean Release publishと配布EXEのSHA-256一致も確認。
 - 確認日: 2026-10-17 Asia/Tokyo。
-- 信頼度: ソース・ビルド・配置一致は高。実マイクの感度と実画面の位置は未確認。
-- 情報区分: ローカル実装確認・実機動作未確認。
+- 信頼度: ソース、WPFの実座標・ソースからの描画は高。実マイクの感度と通常起動したアプリの実画面は未確認。
+- 情報区分: ローカル実装・WPF描画確認・実機動作未確認。
