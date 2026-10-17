@@ -390,11 +390,6 @@ public partial class MainWindow : System.Windows.Window
         {
             DiscordMuteEnabledCheckBox.IsChecked = _settings.DiscordAutoMuteEnabled;
             UpdateDiscordMuteShortcutDisplay();
-            DiscordMuteStatus.Text = !_settings.DiscordAutoMuteEnabled
-                ? string.Empty
-                : DiscordPushToMuteController.IsSupportedBinding(GetDiscordMuteShortcut())
-                    ? "有効です。"
-                    : "有効です。Discord側にキーを登録した後、Better Flowでも「変更」から同じキーを設定してください。";
         }
         finally { _loadingDiscordMuteSettingsUi = false; }
     }
@@ -429,7 +424,6 @@ public partial class MainWindow : System.Windows.Window
             _loadingDiscordMuteSettingsUi = true;
             DiscordMuteEnabledCheckBox.IsChecked = previous;
             _loadingDiscordMuteSettingsUi = false;
-            DiscordMuteStatus.Text = "録音や処理を終えてから変更してください。";
             return;
         }
 
@@ -437,12 +431,6 @@ public partial class MainWindow : System.Windows.Window
         try
         {
             _settingsStore.Save(_settings);
-            if (!requested)
-                DiscordMuteStatus.Text = "無効にしました。";
-            else if (!DiscordPushToMuteController.IsSupportedBinding(GetDiscordMuteShortcut()))
-                DiscordMuteStatus.Text = "有効にしました。Discord側にキーを登録した後、Better Flowでも「変更」から同じキーを設定してください。";
-            else
-                DiscordMuteStatus.Text = "有効にしました。";
         }
         catch (Exception ex)
         {
@@ -450,7 +438,6 @@ public partial class MainWindow : System.Windows.Window
             _loadingDiscordMuteSettingsUi = true;
             DiscordMuteEnabledCheckBox.IsChecked = previous;
             _loadingDiscordMuteSettingsUi = false;
-            DiscordMuteStatus.Text = "設定を保存できませんでした。";
             RuntimeStatus.Text = ex.Message;
         }
     }
@@ -531,7 +518,6 @@ public partial class MainWindow : System.Windows.Window
         {
             _settings.DiscordMuteShortcutModifiers = oldModifiers;
             _settings.DiscordMuteShortcutVirtualKey = oldVirtualKey;
-            DiscordMuteStatus.Text = "ショートカットを保存できませんでした。";
             RuntimeStatus.Text = ex.Message;
             CancelDiscordMuteShortcutCapture(announceCancellation: false);
             return;
@@ -541,7 +527,6 @@ public partial class MainWindow : System.Windows.Window
         DiscordMuteShortcutChangeButton.Content = "変更";
         UpdateDiscordMuteShortcutDisplay();
         DiscordMuteShortcutCaptureStatus.Text = string.Empty;
-        DiscordMuteStatus.Text = "キーを保存しました。";
         RegisterConfiguredHotkey();
         UpdateDiscordMuteControlsEnabled();
     }
@@ -4643,7 +4628,16 @@ public partial class MainWindow : System.Windows.Window
             return;
         }
 
-        if (!_isCapturingShortcut) return;
+        if (!_isCapturingShortcut)
+        {
+            if (TryNavigateSettingsPageWithTab(key))
+            {
+                e.Handled = true;
+                return;
+            }
+
+            return;
+        }
 
         if (key == Key.Escape)
         {
@@ -4682,6 +4676,36 @@ public partial class MainWindow : System.Windows.Window
         }
 
         e.Handled = true;
+    }
+
+    private bool TryNavigateSettingsPageWithTab(Key key)
+    {
+        if (SettingsViewbox.Visibility != System.Windows.Visibility.Visible
+            || DiscordMuteTutorialPage.Visibility == System.Windows.Visibility.Visible
+            || key != Key.Tab
+            || (Keyboard.Modifiers != ModifierKeys.None && Keyboard.Modifiers != ModifierKeys.Shift))
+        {
+            return false;
+        }
+
+        var pages = new (string Name, System.Windows.Controls.Primitives.ToggleButton Tab)[]
+        {
+            ("general", SettingsGeneralTab),
+            ("dictionary", SettingsDictionaryTab),
+            ("details", SettingsDetailsTab),
+            ("instructions", SettingsInstructionsTab),
+            ("statistics", SettingsStatisticsTab)
+        };
+
+        var currentIndex = Array.FindIndex(pages, page => page.Tab.IsChecked == true);
+        if (currentIndex < 0)
+            currentIndex = Keyboard.Modifiers == ModifierKeys.Shift ? 0 : pages.Length - 1;
+
+        var direction = Keyboard.Modifiers == ModifierKeys.Shift ? -1 : 1;
+        var nextIndex = (currentIndex + direction + pages.Length) % pages.Length;
+        ShowSettingsPage(pages[nextIndex].Name);
+        pages[nextIndex].Tab.Focus();
+        return true;
     }
 
     private void ApplyShortcut(HotkeyBinding binding)

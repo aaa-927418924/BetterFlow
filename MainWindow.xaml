@@ -141,8 +141,8 @@
         </Style>
 
         <Style x:Key="SettingsCloseButtonStyle" TargetType="Button">
-            <Setter Property="Width" Value="32" />
-            <Setter Property="Height" Value="32" />
+            <Setter Property="Width" Value="28" />
+            <Setter Property="Height" Value="28" />
             <Setter Property="Background" Value="Transparent" />
             <Setter Property="BorderBrush" Value="Transparent" />
             <Setter Property="BorderThickness" Value="0" />
@@ -152,7 +152,7 @@
                     <ControlTemplate TargetType="Button">
                         <Border x:Name="CloseSurface" Background="{TemplateBinding Background}"
                                 BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}"
-                                CornerRadius="16">
+                                CornerRadius="14">
                             <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
                         </Border>
                         <ControlTemplate.Triggers>
@@ -488,10 +488,10 @@
                                       Content="統計" Style="{StaticResource SettingsNavigationButtonStyle}"
                                       Click="SettingsStatisticsTab_Click" AutomationProperties.Name="統計" />
 
-                        <Button Canvas.Left="164" Canvas.Top="50" Style="{StaticResource SettingsCloseButtonStyle}"
+                        <Button Canvas.Left="166" Canvas.Top="52" Style="{StaticResource SettingsCloseButtonStyle}"
                                 Click="CloseButton_Click" ToolTip="閉じる" AutomationProperties.Name="閉じる">
-                            <Path Width="23" Height="23" Data="M 1 1 L 22 22 M 22 1 L 1 22" Stroke="#AEAEAE"
-                                  StrokeThickness="1.8" StrokeStartLineCap="Round" StrokeEndLineCap="Round" />
+                            <Path Width="19" Height="19" Data="M 1 1 L 18 18 M 18 1 L 1 18" Stroke="#AEAEAE"
+                                  StrokeThickness="1.6" StrokeStartLineCap="Round" StrokeEndLineCap="Round" />
                         </Button>
 
                         <Border x:Name="SettingsContentPanel" Canvas.Left="226" Canvas.Top="28"
@@ -769,10 +769,6 @@
                                                 Style="{StaticResource SettingsButtonStyle}"
                                                 Click="DiscordMuteTutorialButton_Click"
                                                 AutomationProperties.Name="Discordミュートの設定方法を表示" />
-                                        <TextBlock x:Name="DiscordMuteStatus" Canvas.Left="0" Canvas.Top="43"
-                                                   Width="639" Height="20" FontSize="11"
-                                                   Foreground="{StaticResource SettingsMutedBrush}"
-                                                   AutomationProperties.LiveSetting="Polite" />
                                     </Canvas>
 
                                     <Canvas x:Name="DiscordMuteShortcutPanel" Canvas.Left="35" Canvas.Top="157"
