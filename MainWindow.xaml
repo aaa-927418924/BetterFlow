@@ -966,9 +966,6 @@
                                                          Style="{StaticResource ProfileNameInputStyle}"
                                                          TextChanged="ProfileNameTextBox_TextChanged"
                                                          AutomationProperties.Name="統計画面の表示名" />
-                                                <TextBlock Text="画像を押すとプロフィール画像を変更できます。"
-                                                           FontSize="11" Foreground="{StaticResource SettingsMutedBrush}"
-                                                           Margin="0,3,0,0" />
                                             </StackPanel>
                                         </Grid>
                                         <Border Width="310" Height="68" Margin="0,14,0,0"
