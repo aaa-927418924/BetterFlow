@@ -7,11 +7,7 @@
         ShowActivated="False" Topmost="True" WindowStartupLocation="Manual"
         Focusable="False" UseLayoutRounding="True" SnapsToDevicePixels="True">
     <Window.Resources>
-        <LinearGradientBrush x:Key="IndicatorGlassTintBrush" StartPoint="0,0" EndPoint="0.85,1">
-            <GradientStop Color="#B30F1B31" Offset="0" />
-            <GradientStop Color="#B00C172B" Offset="0.55" />
-            <GradientStop Color="#B3162440" Offset="1" />
-        </LinearGradientBrush>
+        <SolidColorBrush x:Key="IndicatorGlassTintBrush" Color="#B3111111" />
     </Window.Resources>
     <Grid x:Name="GlassRoot" IsHitTestVisible="False" SizeChanged="GlassRoot_SizeChanged">
         <Grid.Clip>
