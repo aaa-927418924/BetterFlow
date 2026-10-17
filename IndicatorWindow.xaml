@@ -50,17 +50,6 @@
                 </LinearGradientBrush>
             </Border.Background>
         </Border>
-        <Border CornerRadius="19" BorderThickness="0.75">
-            <Border.BorderBrush>
-                <LinearGradientBrush StartPoint="0,0" EndPoint="0.85,1">
-                    <GradientStop Color="#A6E6EFFF" Offset="0" />
-                    <GradientStop Color="#36BDCAE5" Offset="0.4" />
-                    <GradientStop Color="#1A8497BF" Offset="0.7" />
-                    <GradientStop Color="#6EBDCFEE" Offset="1" />
-                </LinearGradientBrush>
-            </Border.BorderBrush>
-        </Border>
-        <Border CornerRadius="18" Margin="1" BorderThickness="0.5" BorderBrush="#12FFFFFF" />
         <Border Padding="5">
         <Grid x:Name="IndicatorContent" SizeChanged="IndicatorContent_SizeChanged">
             <Border x:Name="ProgressFill" Width="0" HorizontalAlignment="Left"
