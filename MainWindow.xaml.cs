@@ -8,6 +8,7 @@ using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Animation;
 using System.Windows.Media.Imaging;
+using System.Windows.Threading;
 using BetterFlow.Services;
 using ToolStripMenuItem = System.Windows.Forms.ToolStripMenuItem;
 using ToolStripSeparator = System.Windows.Forms.ToolStripSeparator;
@@ -80,6 +81,16 @@ public partial class MainWindow : System.Windows.Window
     private string? _audioInputOperationId;
     private AutoDictionaryLearningMonitor? _autoDictionaryLearningMonitor;
     private readonly SemaphoreSlim _dictionaryReviewSemaphore = new(1, 1);
+    private readonly DispatcherTimer _correctionDictionaryStatusClearTimer = new()
+    {
+        Interval = TimeSpan.FromSeconds(4)
+    };
+    private readonly DispatcherTimer _dictionaryListStatusClearTimer = new()
+    {
+        Interval = TimeSpan.FromSeconds(4)
+    };
+    private string? _correctionDictionaryStatusPendingClear;
+    private string? _dictionaryListStatusPendingClear;
     private CancellationTokenSource? _selectedTextQuestionCancellation;
     private GptLiveQuestionSession? _gptLiveQuestionSession;
     private readonly List<(string Question, string Answer)> _selectedTextQuestionHistory = new();
@@ -132,6 +143,8 @@ public partial class MainWindow : System.Windows.Window
     public MainWindow()
     {
         InitializeComponent();
+        _correctionDictionaryStatusClearTimer.Tick += CorrectionDictionaryStatusClearTimer_Tick;
+        _dictionaryListStatusClearTimer.Tick += DictionaryListStatusClearTimer_Tick;
         _indicator = new IndicatorWindow();
         _transcriptPreviewWindow = new TranscriptPreviewWindow();
         _answerWindow = new AnswerWindow();
@@ -174,6 +187,42 @@ public partial class MainWindow : System.Windows.Window
     }
 
     internal bool ShouldStartHiddenInTray => _startHiddenInTray;
+
+    private void SetCorrectionDictionaryStatus(string message, bool clearAfterDelay = false)
+    {
+        _correctionDictionaryStatusClearTimer.Stop();
+        _correctionDictionaryStatusPendingClear = clearAfterDelay ? message : null;
+        CorrectionDictionaryStatus.Text = message;
+        if (clearAfterDelay)
+            _correctionDictionaryStatusClearTimer.Start();
+    }
+
+    private void CorrectionDictionaryStatusClearTimer_Tick(object? sender, EventArgs e)
+    {
+        _correctionDictionaryStatusClearTimer.Stop();
+        if (_correctionDictionaryStatusPendingClear is { } message &&
+            string.Equals(CorrectionDictionaryStatus.Text, message, StringComparison.Ordinal))
+            CorrectionDictionaryStatus.Text = string.Empty;
+        _correctionDictionaryStatusPendingClear = null;
+    }
+
+    private void SetDictionaryListStatus(string message, bool clearAfterDelay = false)
+    {
+        _dictionaryListStatusClearTimer.Stop();
+        _dictionaryListStatusPendingClear = clearAfterDelay ? message : null;
+        DictionaryListStatus.Text = message;
+        if (clearAfterDelay)
+            _dictionaryListStatusClearTimer.Start();
+    }
+
+    private void DictionaryListStatusClearTimer_Tick(object? sender, EventArgs e)
+    {
+        _dictionaryListStatusClearTimer.Stop();
+        if (_dictionaryListStatusPendingClear is { } message &&
+            string.Equals(DictionaryListStatus.Text, message, StringComparison.Ordinal))
+            DictionaryListStatus.Text = string.Empty;
+        _dictionaryListStatusPendingClear = null;
+    }
 
     internal void StartHiddenInTray()
     {
@@ -1261,13 +1310,13 @@ public partial class MainWindow : System.Windows.Window
         {
             _settingsStore.Save(_settings);
             RefreshCorrectionDictionaryItems();
-            DictionaryListStatus.Text = $"{term}の再学習を許可しました。次に手修正した文章を送信すると候補を判定します。";
+            SetDictionaryListStatus($"{term}の再学習を許可しました。次に手修正した文章を送信すると候補を判定します。", clearAfterDelay: true);
         }
         catch (Exception ex)
         {
             _settings.SuppressedAutomaticDictionaryTerms = previous;
             RefreshCorrectionDictionaryItems();
-            DictionaryListStatus.Text = "再学習の設定を保存できませんでした。 " + ex.Message;
+            SetDictionaryListStatus("再学習の設定を保存できませんでした。 " + ex.Message);
         }
     }
 
@@ -1277,13 +1326,13 @@ public partial class MainWindow : System.Windows.Window
         _autoDictionaryLearningMonitor = AutoDictionaryLearningMonitor.TryStart(_pasteTarget, pastedText);
         if (_autoDictionaryLearningMonitor is null)
         {
-            CorrectionDictionaryStatus.Text = "入力欄の監視を開始できず、自動登録を待機できません。";
+            SetCorrectionDictionaryStatus("入力欄の監視を開始できず、自動登録を待機できません。");
             return;
         }
 
         _autoDictionaryLearningMonitor.SubmissionConfirmed += AutoDictionaryLearningMonitor_SubmissionConfirmed;
         _autoDictionaryLearningMonitor.StatusChanged += AutoDictionaryLearningMonitor_StatusChanged;
-        CorrectionDictionaryStatus.Text = "音声入力した文章を送信するまで監視しています。";
+        SetCorrectionDictionaryStatus("音声入力した文章を送信するまで監視しています。");
     }
 
     private void AutoDictionaryLearningMonitor_StatusChanged(
@@ -1295,7 +1344,7 @@ public partial class MainWindow : System.Windows.Window
             if (!_closing && sender is AutoDictionaryLearningMonitor monitor &&
                 ReferenceEquals(_autoDictionaryLearningMonitor, monitor) &&
                 string.Equals(update.MonitorId, monitor.MonitorId, StringComparison.Ordinal))
-                CorrectionDictionaryStatus.Text = update.Message;
+                SetCorrectionDictionaryStatus(update.Message);
         }));
     }
 
@@ -1331,7 +1380,7 @@ public partial class MainWindow : System.Windows.Window
             changes.Count, submission.MonitorId, submission.CandidateId);
         if (changes.Count == 0)
         {
-            CorrectionDictionaryStatus.Text = "単語単位の修正候補を特定できず、辞書は変更していません。";
+            SetCorrectionDictionaryStatus("単語単位の修正候補を特定できず、辞書は変更していません。", clearAfterDelay: true);
             return;
         }
 
@@ -1340,7 +1389,7 @@ public partial class MainWindow : System.Windows.Window
             var skipReason = !_openCodeReady ? "model-not-ready" : "opencode-not-running";
             DictionaryLearningDiagnosticLog.Write("learning_skipped", skipReason, changes.Count,
                 submission.MonitorId, submission.CandidateId);
-            CorrectionDictionaryStatus.Text = "OpenCodeモデルが準備できていないため、今回は登録を見送りました。";
+            SetCorrectionDictionaryStatus("OpenCodeモデルが準備できていないため、今回は登録を見送りました。");
             return;
         }
 
@@ -1390,7 +1439,7 @@ public partial class MainWindow : System.Windows.Window
             {
                 DictionaryLearningDiagnosticLog.Write("dictionary_save_failed", "settings-write-failed",
                     confirmedChanges.Length + pendingChanges.Length, submission.MonitorId, submission.CandidateId);
-                CorrectionDictionaryStatus.Text = "辞書を保存できませんでした。設定ファイルを確認してください。";
+                SetCorrectionDictionaryStatus("辞書を保存できませんでした。設定ファイルを確認してください。");
                 return;
             }
 
@@ -1404,33 +1453,33 @@ public partial class MainWindow : System.Windows.Window
             {
                 DictionaryLearningDiagnosticLog.Write("learning_completed", "saved", result.AddedCount,
                     submission.MonitorId, submission.CandidateId);
-                CorrectionDictionaryStatus.Text = result.AddedCount == 1
+                SetCorrectionDictionaryStatus(result.AddedCount == 1
                     ? "送信した正しい表記と誤認識例を辞書に登録しました。"
-                    : $"送信した修正から表記と誤認識例を{result.AddedCount}件登録しました。";
+                    : $"送信した修正から表記と誤認識例を{result.AddedCount}件登録しました。", clearAfterDelay: true);
                 ShowAutomaticDictionarySavedIndicator(dictionaryBeforeLearning);
             }
             else if (result.PendingUpdatedCount > 0)
             {
                 var remaining = Math.Max(1, result.RemainingConfirmations);
-                CorrectionDictionaryStatus.Text = $"用語候補を保留しました。同じ表記への独立した修正をあと{remaining}回確認すると登録します。";
+                SetCorrectionDictionaryStatus($"用語候補を保留しました。同じ表記への独立した修正をあと{remaining}回確認すると登録します。", clearAfterDelay: true);
             }
             else if (result.SuppressedCount > 0)
             {
-                CorrectionDictionaryStatus.Text = "削除済みの用語は自動登録しませんでした。";
+                SetCorrectionDictionaryStatus("削除済みの用語は自動登録しませんでした。", clearAfterDelay: true);
             }
             else if (pendingCount > 0 && result.DuplicateSubmissionCount > 0)
             {
-                CorrectionDictionaryStatus.Text = "同じ送信の重複は学習回数に含めませんでした。";
+                SetCorrectionDictionaryStatus("同じ送信の重複は学習回数に含めませんでした。", clearAfterDelay: true);
             }
             else
             {
                 DictionaryLearningDiagnosticLog.Write("learning_completed", "no-new-entry", confirmedChanges.Length,
                     submission.MonitorId, submission.CandidateId);
-                CorrectionDictionaryStatus.Text = confirmedChanges.Length == 0 && pendingCount == 0
+                SetCorrectionDictionaryStatus(confirmedChanges.Length == 0 && pendingCount == 0
                     ? "選択モデルが登録可能な用語修正を承認しませんでした。辞書は変更していません。"
                     : result.CapacitySkippedCount > 0
                         ? "辞書の登録上限に達したため、候補を追加できませんでした。"
-                        : "候補は確認しましたが、新しい辞書項目は追加されませんでした。既登録の可能性があります。";
+                        : "候補は確認しましたが、新しい辞書項目は追加されませんでした。既登録の可能性があります。", clearAfterDelay: true);
             }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { }
@@ -1438,7 +1487,7 @@ public partial class MainWindow : System.Windows.Window
         {
             DictionaryLearningDiagnosticLog.Write("learning_failed", ex.GetType().Name, changes.Count,
                 submission.MonitorId, submission.CandidateId);
-            CorrectionDictionaryStatus.Text = "自動登録の判定に失敗しました。辞書は変更していません。詳細は診断ログを確認してください。";
+            SetCorrectionDictionaryStatus("自動登録の判定に失敗しました。辞書は変更していません。詳細は診断ログを確認してください。");
         }
         finally
         {
@@ -1700,7 +1749,7 @@ public partial class MainWindow : System.Windows.Window
         var preferred = CleanDictionaryField(DictionaryPreferredSpellingBox.Text, 100);
         if (preferred.Length == 0)
         {
-            CorrectionDictionaryStatus.Text = "正しい表記を入力してください。";
+            SetCorrectionDictionaryStatus("正しい表記を入力してください。", clearAfterDelay: true);
             return;
         }
 
@@ -1710,7 +1759,7 @@ public partial class MainWindow : System.Windows.Window
             existing?.Alternatives, ParseDictionaryAlternatives(DictionaryAlternativesBox.Text), preferred);
         if (existing is null && _settings.CorrectionDictionary.Count >= 100)
         {
-            CorrectionDictionaryStatus.Text = "登録できる単語は100件までです。";
+            SetCorrectionDictionaryStatus("登録できる単語は100件までです。", clearAfterDelay: true);
             return;
         }
 
@@ -1724,7 +1773,7 @@ public partial class MainWindow : System.Windows.Window
             _settings.SuppressedAutomaticDictionaryTerms.Contains(preferred, StringComparer.OrdinalIgnoreCase);
         if (!wasChanged)
         {
-            CorrectionDictionaryStatus.Text = "この単語と誤認識例はすでに登録されています。";
+            SetCorrectionDictionaryStatus("この単語と誤認識例はすでに登録されています。", clearAfterDelay: true);
             return;
         }
 
@@ -1787,14 +1836,14 @@ public partial class MainWindow : System.Windows.Window
             _settingsStore.Save(_settings);
             InvalidateAutomaticDictionaryUndo();
             RefreshCorrectionDictionaryItems();
-            CorrectionDictionaryStatus.Text = successMessage;
+            SetCorrectionDictionaryStatus(successMessage, clearAfterDelay: true);
             return true;
         }
         catch (Exception ex)
         {
             _settings.CorrectionDictionary = previous;
             RefreshCorrectionDictionaryItems();
-            CorrectionDictionaryStatus.Text = "辞書を保存できませんでした。 " + ex.Message;
+            SetCorrectionDictionaryStatus("辞書を保存できませんでした。 " + ex.Message);
             return false;
         }
     }
@@ -1898,14 +1947,14 @@ public partial class MainWindow : System.Windows.Window
         {
             _settingsStore.Save(_settings);
             RefreshCorrectionDictionaryItems();
-            CorrectionDictionaryStatus.Text = "自動登録を取り消しました。";
+            SetCorrectionDictionaryStatus("自動登録を取り消しました。", clearAfterDelay: true);
             _indicator.ShowStatus("登録を取り消しました", TimeSpan.FromSeconds(1.5));
         }
         catch (Exception ex)
         {
             _settings.CorrectionDictionary = current;
             RefreshCorrectionDictionaryItems();
-            CorrectionDictionaryStatus.Text = "自動登録を取り消せませんでした。 " + ex.Message;
+            SetCorrectionDictionaryStatus("自動登録を取り消せませんでした。 " + ex.Message);
             _indicator.ShowStatus("取り消せません", TimeSpan.FromSeconds(1.5));
         }
     }
@@ -5081,6 +5130,8 @@ public partial class MainWindow : System.Windows.Window
         }
 
         _closing = true;
+        _correctionDictionaryStatusClearTimer.Stop();
+        _dictionaryListStatusClearTimer.Stop();
         _lifetime.Cancel();
         _microphoneLevelMonitor.Dispose();
         CancelTranscriptPreview();
