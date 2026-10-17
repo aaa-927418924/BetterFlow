@@ -7,7 +7,7 @@
         ShowActivated="False" Topmost="True" WindowStartupLocation="Manual"
         Focusable="False" UseLayoutRounding="True" SnapsToDevicePixels="True">
     <Window.Resources>
-        <SolidColorBrush x:Key="IndicatorGlassTintBrush" Color="#B3111111" />
+        <SolidColorBrush x:Key="IndicatorGlassTintBrush" Color="#99111111" />
     </Window.Resources>
     <Grid x:Name="GlassRoot" IsHitTestVisible="False" SizeChanged="GlassRoot_SizeChanged">
         <Grid.Clip>
