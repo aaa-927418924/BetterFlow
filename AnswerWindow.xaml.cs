@@ -14,12 +14,16 @@ public partial class AnswerWindow : System.Windows.Window
     private const int GwlExStyle = -20;
     private const long WsExToolWindow = 0x00000080L;
     private Services.GlassBackdropSampler? _glassBackdrop;
+    private readonly DispatcherTimer _toolCallAnimationTimer = new() { Interval = TimeSpan.FromMilliseconds(360) };
+    private string _toolCallStatusLabel = string.Empty;
+    private int _animatedToolCallDots;
     private string _currentAssistantText = string.Empty;
     private IReadOnlyList<AnswerSourceCard> _currentSources = Array.Empty<AnswerSourceCard>();
 
     public AnswerWindow()
     {
         InitializeComponent();
+        _toolCallAnimationTimer.Tick += ToolCallAnimationTimer_Tick;
         SourceInitialized += (_, _) =>
         {
             MakeToolWindow();
@@ -31,7 +35,11 @@ public partial class AnswerWindow : System.Windows.Window
         {
             if (!IsVisible) _glassBackdrop?.ClearBackground();
         };
-        Closed += (_, _) => _glassBackdrop?.Dispose();
+        Closed += (_, _) =>
+        {
+            _toolCallAnimationTimer.Stop();
+            _glassBackdrop?.Dispose();
+        };
     }
 
     public void ResetAnswer()
@@ -40,27 +48,59 @@ public partial class AnswerWindow : System.Windows.Window
         {
             _currentAssistantText = string.Empty;
             _currentSources = Array.Empty<AnswerSourceCard>();
+            ClearToolCallStatusCore();
             AnswerContent.Text = string.Empty;
             AnswerSourceItems.ItemsSource = _currentSources;
             SourceSection.Visibility = Visibility.Collapsed;
+            AnswerScrollViewer.ScrollToTop();
             Hide();
         });
     }
 
-    public void SetCurrentAssistantText(string text)
+    public void SetCurrentAssistantText(string text, bool followLatest, bool resetToTop = false)
     {
-        SetAssistantText(text, forceReplace: false);
+        SetAssistantText(text, forceReplace: false, followLatest: followLatest, resetToTop: resetToTop);
     }
 
-    public void SetFinalAssistantText(string text)
+    public void SetFinalAssistantText(string text, bool followLatest, bool resetToTop = false)
     {
-        SetAssistantText(text, forceReplace: true);
+        SetAssistantText(text, forceReplace: true, followLatest: followLatest, resetToTop: resetToTop);
     }
 
-    private void SetAssistantText(string text, bool forceReplace)
+    public void SetToolCallStatus(string? toolName)
     {
         RunOnUi(() =>
         {
+            if (string.IsNullOrWhiteSpace(toolName))
+            {
+                ClearToolCallStatusCore();
+                return;
+            }
+
+            _toolCallStatusLabel = toolName.Contains("search", StringComparison.OrdinalIgnoreCase) ||
+                                   toolName.Contains("exa", StringComparison.OrdinalIgnoreCase) ||
+                                   toolName.Contains("検索", StringComparison.Ordinal)
+                ? "検索中"
+                : toolName.Contains("fetch", StringComparison.OrdinalIgnoreCase) ||
+                  toolName.Contains("取得", StringComparison.Ordinal)
+                    ? "ページを確認中"
+                    : "ツールを実行中";
+            _animatedToolCallDots = 1;
+            ToolCallStatusText.Text = _toolCallStatusLabel + ".";
+            ToolCallStatusSurface.Visibility = Visibility.Visible;
+            _toolCallAnimationTimer.Stop();
+            _toolCallAnimationTimer.Start();
+            ShowAboveIndicator();
+            AnswerScrollViewer.UpdateLayout();
+            AnswerScrollViewer.ScrollToEnd();
+        });
+    }
+
+    private void SetAssistantText(string text, bool forceReplace, bool followLatest, bool resetToTop)
+    {
+        RunOnUi(() =>
+        {
+            ClearToolCallStatusCore();
             var parsed = AnswerSourceParser.Parse(text);
             var nextText = parsed.Text;
             if (!forceReplace && nextText.Length < _currentAssistantText.Length &&
@@ -68,6 +108,7 @@ public partial class AnswerWindow : System.Windows.Window
                 parsed.Sources.SequenceEqual(_currentSources))
                 return;
 
+            var wasVisible = IsVisible;
             var hadFocus = AnswerContent.IsKeyboardFocusWithin;
             var previousText = _currentAssistantText;
             var selectionStart = AnswerContent.SelectionStart;
@@ -101,9 +142,26 @@ public partial class AnswerWindow : System.Windows.Window
             {
                 ShowAboveIndicator();
                 AnswerScrollViewer.UpdateLayout();
-                AnswerScrollViewer.ScrollToEnd();
+                if (followLatest)
+                    AnswerScrollViewer.ScrollToEnd();
+                else if (resetToTop || !wasVisible)
+                    AnswerScrollViewer.ScrollToTop();
             }
         });
+    }
+
+    private void ToolCallAnimationTimer_Tick(object? sender, EventArgs e)
+    {
+        _animatedToolCallDots = _animatedToolCallDots % 3 + 1;
+        ToolCallStatusText.Text = _toolCallStatusLabel + new string('.', _animatedToolCallDots);
+    }
+
+    private void ClearToolCallStatusCore()
+    {
+        _toolCallAnimationTimer.Stop();
+        _toolCallStatusLabel = string.Empty;
+        _animatedToolCallDots = 0;
+        ToolCallStatusSurface.Visibility = Visibility.Collapsed;
     }
 
     public void ClearAnswer() => ResetAnswer();

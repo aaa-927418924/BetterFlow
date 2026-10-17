@@ -2852,7 +2852,7 @@ public partial class MainWindow : System.Windows.Window
                             indicatorText,
                             ProcessingProgressStage.GeneratingOrApplying,
                             operationHint: ShortcutOperationHint("会話終了"));
-                    else if (indicatorText == "質問できます")
+                    else if (indicatorText is "質問できます" or "追加処理はOpenCodeへ")
                         _indicator.ShowStatus(
                             indicatorText,
                             operationHint: ShortcutOperationHint("会話終了"));
@@ -2871,23 +2871,23 @@ public partial class MainWindow : System.Windows.Window
                         _indicator.ReportAssistantTextLength(answer.Length);
                         DispatchQuestionUi(() =>
                         {
-                            if (!_closing)
+                            if (!_closing && !session.HasUnavailableDelegationThisTurn)
                                 _indicator.ShowProcessingStatus(
                                     "回答中",
                                     ProcessingProgressStage.GeneratingOrApplying,
                                     operationHint: ShortcutOperationHint("会話終了"));
                         });
-                        _answerWindow.SetCurrentAssistantText(answer);
+                        _answerWindow.SetCurrentAssistantText(answer, followLatest: true);
                     }
                 },
                 finalAnswer =>
                 {
                     if (!_closing)
                     {
-                        _answerWindow.SetFinalAssistantText(finalAnswer);
+                        _answerWindow.SetFinalAssistantText(finalAnswer, followLatest: true);
                         DispatchQuestionUi(() =>
                         {
-                            if (!_closing)
+                            if (!_closing && !session.HasUnavailableDelegationThisTurn)
                                 _indicator.ShowProcessingStatus(
                                     "質問できます",
                                     ProcessingProgressStage.Complete,
@@ -2955,11 +2955,17 @@ public partial class MainWindow : System.Windows.Window
 
     private static string GetGptLiveIndicatorText(string message)
     {
+        if (message.Contains("この追加処理に対応していません", StringComparison.Ordinal))
+            return "追加処理はOpenCodeへ";
         if (message.Contains("失敗", StringComparison.Ordinal) || message.Contains("できません", StringComparison.Ordinal))
             return "Live接続失敗";
         if (message.Contains("質問を認識", StringComparison.Ordinal)) return "質問認識中";
-        if (message.Contains("回答", StringComparison.Ordinal)) return "回答中";
         if (message.Contains("質問できます", StringComparison.Ordinal)) return "質問できます";
+        if (message.Contains("回答しています", StringComparison.Ordinal) ||
+            message.Contains("回答を準備しています", StringComparison.Ordinal))
+            return "回答中";
+        if (message.Contains("チャネルが準備できました", StringComparison.Ordinal))
+            return "GPT Live接続中";
         if (message.Contains("接続", StringComparison.Ordinal) || message.Contains("セッション", StringComparison.Ordinal))
             return "GPT Live接続中";
         if (message.Contains("準備", StringComparison.Ordinal)) return "音声準備中";
@@ -3828,7 +3834,8 @@ public partial class MainWindow : System.Windows.Window
                         modelId,
                         onTextUpdate: text =>
                         {
-                            if (Interlocked.Exchange(ref responseStarted, 1) == 0)
+                            var isFirstTextUpdate = Interlocked.Exchange(ref responseStarted, 1) == 0;
+                            if (isFirstTextUpdate)
                             {
                                 Dispatcher.BeginInvoke(new Action(() =>
                                 {
@@ -3839,7 +3846,10 @@ public partial class MainWindow : System.Windows.Window
                                             operationHint: ShortcutOperationHint("キャンセル"));
                                 }));
                             }
-                            _answerWindow.SetCurrentAssistantText(text);
+                            _answerWindow.SetCurrentAssistantText(
+                                text,
+                                followLatest: false,
+                                resetToTop: isFirstTextUpdate);
                         },
                         cancellationToken: cancellationToken,
                         conversationHistory: _selectedTextQuestionHistory.ToArray(),
@@ -3849,7 +3859,11 @@ public partial class MainWindow : System.Windows.Window
                         throw new InvalidDataException("モデルから回答が返りませんでした。選択中の文章は変更していません。");
 
                     answer = answer.Trim();
-                    _answerWindow.SetFinalAssistantText(answer);
+                    var resetAnswerToTop = Interlocked.CompareExchange(ref responseStarted, 1, 0) == 0;
+                    _answerWindow.SetFinalAssistantText(
+                        answer,
+                        followLatest: false,
+                        resetToTop: resetAnswerToTop);
                     _selectedTextQuestionHistory.Add((question, answer));
                     RuntimeStatus.Text = "回答しました。続けて質問できます。";
                     // Keep the answer dialog available while listening, but reset and
