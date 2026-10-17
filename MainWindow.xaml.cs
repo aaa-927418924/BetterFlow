@@ -6,6 +6,7 @@ using System.Windows;
 using System.Windows.Interop;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Media.Animation;
 using System.Windows.Media.Imaging;
 using BetterFlow.Services;
 using ToolStripMenuItem = System.Windows.Forms.ToolStripMenuItem;
@@ -24,6 +25,7 @@ public partial class MainWindow : System.Windows.Window
     private readonly GlobalHotkey _hotkey = new();
     private readonly MicrophoneRecorder _recorder = new();
     private readonly ContinuousMicrophoneRecorder _continuousRecorder = new();
+    private readonly MicrophoneLevelMonitor _microphoneLevelMonitor = new();
     private readonly DiscordPushToMuteController _discordPushToMute = new();
     private readonly CancellationTokenSource _lifetime = new();
     private readonly OpenCodeService _openCode = new();
@@ -66,6 +68,7 @@ public partial class MainWindow : System.Windows.Window
     private bool _loadingOpenCodeModelUi;
     private bool _loadingStatisticsUi;
     private bool _loadingMicrophoneDeviceUi;
+    private double _displayedMicrophoneLevel;
     private bool _openCodeReady;
     private string? _recordingPrecedingTextContext;
     private string? _pendingRawTranscriptFallback;
@@ -132,10 +135,11 @@ public partial class MainWindow : System.Windows.Window
         _indicator = new IndicatorWindow();
         _transcriptPreviewWindow = new TranscriptPreviewWindow();
         _answerWindow = new AnswerWindow();
-        _recorder.AudioLevelChanged += _indicator.SetAudioLevel;
+        _recorder.AudioLevelChanged += HandleRecorderAudioLevelChanged;
         _recorder.SilenceTimeoutReached += HandleNormalAudioSilenceTimeout;
         _recorder.SilenceDetectionFailed += HandleNormalAudioSilenceDetectionFailure;
-        _continuousRecorder.AudioLevelChanged += _indicator.SetAudioLevel;
+        _continuousRecorder.AudioLevelChanged += HandleRecorderAudioLevelChanged;
+        _microphoneLevelMonitor.AudioLevelChanged += SetMicrophoneInputLevel;
         _hotkey.VoiceCommandCaptureStartRequested += _recorder.BeginVoiceCommandCapture;
         _hotkey.VoiceCommandCaptureStopRequested += _recorder.EndVoiceCommandCapture;
         _undoWindow = new UndoWindow();
@@ -163,6 +167,7 @@ public partial class MainWindow : System.Windows.Window
         InitializeDiscordMuteSettingsUi();
         InitializeTrayIcon();
         Closing += MainWindow_Closing;
+        IsVisibleChanged += MainWindow_IsVisibleChanged;
         SystemEvents.SessionEnding += SystemEvents_SessionEnding;
     }
 
@@ -381,6 +386,67 @@ public partial class MainWindow : System.Windows.Window
         CorrectionDictionarySettingsPanel.IsEnabled = _asr is not null && !_isBusy && !IsAnyRecording;
         UpdateDiscordMuteControlsEnabled();
         UpdateSelectedTextAnswerModeDisplay();
+        SynchronizeMicrophoneLevelMonitoring();
+    }
+
+    private void MainWindow_IsVisibleChanged(object sender, DependencyPropertyChangedEventArgs e) =>
+        SynchronizeMicrophoneLevelMonitoring();
+
+    private void HandleRecorderAudioLevelChanged(float? level)
+    {
+        _indicator.SetAudioLevel(level);
+        SetMicrophoneInputLevel(level ?? 0);
+    }
+
+    private void SynchronizeMicrophoneLevelMonitoring()
+    {
+        if (_closing || !IsVisible || GeneralSettingsPage.Visibility != System.Windows.Visibility.Visible ||
+            _isBusy || IsAnyRecording)
+        {
+            _microphoneLevelMonitor.Stop();
+            return;
+        }
+
+        var selectedInput = MicrophoneDeviceCombo.SelectedItem as AudioInputDeviceOption;
+        var deviceNumber = selectedInput?.DeviceNumber ?? -1;
+        if (_microphoneLevelMonitor.IsMonitoring && _microphoneLevelMonitor.DeviceNumber == deviceNumber)
+            return;
+
+        try
+        {
+            _microphoneLevelMonitor.Start(deviceNumber);
+        }
+        catch
+        {
+            _microphoneLevelMonitor.Stop();
+        }
+    }
+
+    private void SetMicrophoneInputLevel(float? level)
+    {
+        if (!Dispatcher.CheckAccess())
+        {
+            if (!Dispatcher.HasShutdownStarted && !Dispatcher.HasShutdownFinished)
+                Dispatcher.BeginInvoke(new Action(() => SetMicrophoneInputLevel(level)));
+            return;
+        }
+
+        var targetLevel = Math.Clamp(level ?? 0, 0, 1);
+        var smoothing = targetLevel >= _displayedMicrophoneLevel ? 0.62 : 0.3;
+        _displayedMicrophoneLevel += (targetLevel - _displayedMicrophoneLevel) * smoothing;
+
+        AnimateMicrophoneLevelBar(MicrophoneLevelBarLeft, 3 + (_displayedMicrophoneLevel * 13 * 0.72));
+        AnimateMicrophoneLevelBar(MicrophoneLevelBarCenter, 3 + (_displayedMicrophoneLevel * 13));
+        AnimateMicrophoneLevelBar(MicrophoneLevelBarRight, 3 + (_displayedMicrophoneLevel * 13 * 0.82));
+    }
+
+    private static void AnimateMicrophoneLevelBar(System.Windows.Controls.Border bar, double height)
+    {
+        bar.BeginAnimation(System.Windows.FrameworkElement.HeightProperty,
+            new DoubleAnimation(height, TimeSpan.FromMilliseconds(70))
+            {
+                EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseOut }
+            });
     }
 
     private void InitializeDiscordMuteSettingsUi()
@@ -1014,6 +1080,7 @@ public partial class MainWindow : System.Windows.Window
 
     private void RefreshMicrophoneDeviceList(bool updateStatus)
     {
+        _microphoneLevelMonitor.Stop();
         try
         {
             _audioInputDevices = MicrophoneRecorder.GetInputDevices();
@@ -1045,6 +1112,7 @@ public partial class MainWindow : System.Windows.Window
             if (updateStatus)
                 MicrophoneDeviceStatus.Text = "入力デバイス一覧を読み込めませんでした。 " + ex.Message;
         }
+        SynchronizeMicrophoneLevelMonitoring();
     }
 
     private void MicrophoneDeviceCombo_SelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
@@ -1067,11 +1135,13 @@ public partial class MainWindow : System.Windows.Window
                 _audioInputDevices.FirstOrDefault(device => device.Id == AudioInputDeviceOption.SystemDefaultId);
             _loadingMicrophoneDeviceUi = false;
             MicrophoneDeviceStatus.Text = "マイク設定を保存できませんでした。 " + ex.Message;
+            SynchronizeMicrophoneLevelMonitoring();
             return;
         }
         MicrophoneDeviceStatus.Text = selected.DeviceNumber < 0
             ? "Windowsのシステム設定にある既定のマイクを使用します。"
             : string.Empty;
+        SynchronizeMicrophoneLevelMonitoring();
     }
 
     private void RefreshMicrophoneDevices_Click(object sender, System.Windows.RoutedEventArgs e)
@@ -2144,6 +2214,7 @@ public partial class MainWindow : System.Windows.Window
         SettingsDetailsTab.IsChecked = isDetails;
         SettingsInstructionsTab.IsChecked = isUserSystemPrompt;
         SettingsStatisticsTab.IsChecked = isStatistics;
+        SynchronizeMicrophoneLevelMonitoring();
     }
 
     private void InitializeStatisticsSettingsUi()
@@ -2645,6 +2716,7 @@ public partial class MainWindow : System.Windows.Window
             return;
         }
 
+        _microphoneLevelMonitor.Stop();
         var selectedInput = MicrophoneDeviceCombo.SelectedItem as AudioInputDeviceOption;
         var microphoneLabel = selectedInput is null || selectedInput.Id == AudioInputDeviceOption.SystemDefaultId
             ? "system-default"
@@ -3066,6 +3138,7 @@ public partial class MainWindow : System.Windows.Window
 
     private void StartRecorderWithFallback(Action<int> start, AudioInputDeviceOption? selectedInput)
     {
+        _microphoneLevelMonitor.Stop();
         try
         {
             start(selectedInput?.DeviceNumber ?? -1);
@@ -4990,6 +5063,7 @@ public partial class MainWindow : System.Windows.Window
 
         _closing = true;
         _lifetime.Cancel();
+        _microphoneLevelMonitor.Dispose();
         CancelTranscriptPreview();
         _autoDictionaryLearningMonitor?.Dispose();
         _selectionEditCancellation?.Cancel();

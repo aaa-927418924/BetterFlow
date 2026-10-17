@@ -583,10 +583,12 @@
                                             <Border Margin="35,0,17,0" Height="1" Background="#FFFFFF" />
 
                                             <Grid x:Name="MicrophoneSettingsPanel" Margin="35,33,0,0"
-                                                  Width="639" MinHeight="112">
+                                                  Width="639" MinHeight="130">
                                                 <Grid.RowDefinitions>
                                                     <RowDefinition Height="19" />
-                                                    <RowDefinition Height="23" />
+                                                    <RowDefinition Height="10" />
+                                                    <RowDefinition Height="28" />
+                                                    <RowDefinition Height="3" />
                                                     <RowDefinition Height="Auto" />
                                                     <RowDefinition Height="3" />
                                                     <RowDefinition Height="Auto" />
@@ -598,7 +600,23 @@
                                                 </Grid.ColumnDefinitions>
                                                 <TextBlock Grid.Row="0" Grid.ColumnSpan="3" Text="音声入力デバイス"
                                                            FontSize="16" Foreground="{StaticResource SettingsMutedBrush}" />
-                                                <ComboBox x:Name="MicrophoneDeviceCombo" Grid.Row="2" Grid.Column="0"
+                                                <Border x:Name="MicrophoneLevelMeter" Grid.Row="2" Grid.Column="2"
+                                                        Width="74" Height="28" HorizontalAlignment="Right"
+                                                        VerticalAlignment="Center" CornerRadius="14"
+                                                        Background="#252525" BorderBrush="#A0A0A0"
+                                                        BorderThickness="1" IsHitTestVisible="False"
+                                                        AutomationProperties.Name="マイク入力レベル">
+                                                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Center"
+                                                                VerticalAlignment="Center">
+                                                        <Border x:Name="MicrophoneLevelBarLeft" Width="6" Height="4"
+                                                                CornerRadius="3" Background="#F2F2F2" />
+                                                        <Border x:Name="MicrophoneLevelBarCenter" Width="6" Height="4"
+                                                                Margin="4,0" CornerRadius="3" Background="#F2F2F2" />
+                                                        <Border x:Name="MicrophoneLevelBarRight" Width="6" Height="4"
+                                                                CornerRadius="3" Background="#F2F2F2" />
+                                                    </StackPanel>
+                                                </Border>
+                                                <ComboBox x:Name="MicrophoneDeviceCombo" Grid.Row="4" Grid.Column="0"
                                                           Width="509" MinHeight="38" IsEditable="False"
                                                           Background="{StaticResource SettingsControlBrush}"
                                                           Foreground="{StaticResource SettingsControlTextBrush}"
@@ -609,13 +627,13 @@
                                                           SelectionChanged="MicrophoneDeviceCombo_SelectionChanged"
                                                           ToolTip="{Binding SelectedItem.DisplayName, RelativeSource={RelativeSource Self}}"
                                                           AutomationProperties.Name="音声入力デバイス" />
-                                                <Button x:Name="RefreshMicrophoneDevicesButton" Grid.Row="2" Grid.Column="2"
+                                                <Button x:Name="RefreshMicrophoneDevicesButton" Grid.Row="4" Grid.Column="2"
                                                         Content="再取得" Width="104" Height="38" Padding="6,0"
                                                         VerticalAlignment="Center"
                                                         Style="{StaticResource SettingsButtonStyle}"
                                                         Click="RefreshMicrophoneDevices_Click"
                                                         AutomationProperties.Name="音声入力デバイス一覧を再取得" />
-                                                <TextBlock x:Name="MicrophoneDeviceStatus" Grid.Row="4" Grid.ColumnSpan="3"
+                                                <TextBlock x:Name="MicrophoneDeviceStatus" Grid.Row="6" Grid.ColumnSpan="3"
                                                            MinHeight="27" FontSize="11" LineHeight="14"
                                                            TextWrapping="Wrap" Foreground="{StaticResource SettingsMutedBrush}"
                                                            AutomationProperties.LiveSetting="Polite" />
