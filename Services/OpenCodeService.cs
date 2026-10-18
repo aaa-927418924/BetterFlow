@@ -976,94 +976,25 @@ internal sealed class OpenCodeService : IDisposable
 
     private static OpenCodeCommand? FindOpenCodeCommand()
     {
-        var directories = (Environment.GetEnvironmentVariable("PATH") ?? string.Empty)
-            .Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-            .Select(path => path.Trim('"'))
-            .Where(Directory.Exists)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToArray();
+        if (!OpenCodeInstaller.IsUsableExecutable(AppPaths.OpenCodeExecutable))
+            return null;
 
-        OpenCodeCommand? commandScript = null;
-        foreach (var directory in directories)
-        {
-            var shim = Path.Combine(directory, "opencode.cmd");
-            if (!File.Exists(shim)) continue;
-            var target = ResolveNpmShimTarget(shim);
-            if (target is not null) return new OpenCodeCommand(target, OpenCodeLaunchKind.Executable);
-            commandScript ??= new OpenCodeCommand(shim, OpenCodeLaunchKind.CommandScript);
-        }
-
-        foreach (var directory in directories)
-        {
-            var executable = Path.Combine(directory, "opencode.exe");
-            if (File.Exists(executable))
-                return new OpenCodeCommand(executable, OpenCodeLaunchKind.Executable);
-        }
-
-        if (commandScript is not null) return commandScript;
-
-        foreach (var directory in directories)
-        {
-            var script = Path.Combine(directory, "opencode.ps1");
-            if (File.Exists(script))
-                return new OpenCodeCommand(script, OpenCodeLaunchKind.PowerShellScript);
-        }
-
-        if (OpenCodeInstaller.IsUsableExecutable(AppPaths.OpenCodeExecutable))
-            return new OpenCodeCommand(AppPaths.OpenCodeExecutable, OpenCodeLaunchKind.Executable);
-
-        return null;
-    }
-
-    private static string? ResolveNpmShimTarget(string shimPath)
-    {
-        try
-        {
-            var script = File.ReadAllText(shimPath);
-            var match = Regex.Match(script,
-                "\\\"%dp0%[\\\\/](?<relative>node_modules[\\\\/]opencode-ai[\\\\/]bin[\\\\/]opencode\\.exe)\\\"",
-                RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-            if (!match.Success) return null;
-            var relative = match.Groups["relative"].Value.Replace('\\', Path.DirectorySeparatorChar);
-            var target = Path.GetFullPath(Path.Combine(Path.GetDirectoryName(shimPath)!, relative));
-            return File.Exists(target) ? target : null;
-        }
-        catch { return null; }
+        return new OpenCodeCommand(AppPaths.OpenCodeExecutable);
     }
 
     private static ProcessStartInfo CreateStartInfo(OpenCodeCommand command, int port, string workspace)
     {
         var info = new ProcessStartInfo
         {
+            FileName = command.Path,
             WorkingDirectory = workspace,
             UseShellExecute = false,
             CreateNoWindow = true,
             RedirectStandardOutput = true,
             RedirectStandardError = true
         };
-        var arguments = $"serve --hostname 127.0.0.1 --port {port.ToString(System.Globalization.CultureInfo.InvariantCulture)}";
-        switch (command.Kind)
-        {
-            case OpenCodeLaunchKind.Executable:
-                info.FileName = command.Path;
-                foreach (var argument in new[] { "serve", "--hostname", "127.0.0.1", "--port", port.ToString(System.Globalization.CultureInfo.InvariantCulture) })
-                    info.ArgumentList.Add(argument);
-                break;
-            case OpenCodeLaunchKind.CommandScript:
-                info.FileName = Environment.GetEnvironmentVariable("ComSpec") ?? "cmd.exe";
-                info.ArgumentList.Add("/d");
-                info.ArgumentList.Add("/s");
-                info.ArgumentList.Add("/c");
-                info.ArgumentList.Add($"call \"{command.Path}\" {arguments}");
-                break;
-            case OpenCodeLaunchKind.PowerShellScript:
-                info.FileName = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System),
-                    "WindowsPowerShell", "v1.0", "powershell.exe");
-                foreach (var argument in new[] { "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", command.Path,
-                             "serve", "--hostname", "127.0.0.1", "--port", port.ToString(System.Globalization.CultureInfo.InvariantCulture) })
-                    info.ArgumentList.Add(argument);
-                break;
-        }
+        foreach (var argument in new[] { "serve", "--hostname", "127.0.0.1", "--port", port.ToString(System.Globalization.CultureInfo.InvariantCulture) })
+            info.ArgumentList.Add(argument);
         return info;
     }
 
@@ -1264,6 +1195,5 @@ internal sealed class OpenCodeService : IDisposable
         }
     }
 
-    private sealed record OpenCodeCommand(string Path, OpenCodeLaunchKind Kind);
-    private enum OpenCodeLaunchKind { Executable, CommandScript, PowerShellScript }
+    private sealed record OpenCodeCommand(string Path);
 }
