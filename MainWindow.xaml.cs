@@ -596,7 +596,7 @@ public partial class MainWindow : System.Windows.Window
         _hotkey.Unregister();
         _hotkeyRegistered = false;
         DiscordMuteShortcutChangeButton.Content = "入力中…";
-        DiscordMuteShortcutCaptureStatus.Text = "Discordに登録したキーの組み合わせを押してください。右Alt単独またはF1～F24も使えます。Escでキャンセルします。";
+        DiscordMuteShortcutCaptureStatus.Text = "Discordに登録したキーの組み合わせを押してください。右Alt・右Ctrl単独またはF1～F24も使えます。Escでキャンセルします。";
         UpdateDiscordMuteControlsEnabled();
         DiscordMuteShortcutChangeButton.Focus();
     }
@@ -617,6 +617,14 @@ public partial class MainWindow : System.Windows.Window
             return;
         }
 
+        if (key == Key.RightCtrl
+            && (modifiers & (ModifierKeys.Shift | ModifierKeys.Alt | ModifierKeys.Windows)) == ModifierKeys.None
+            && !Keyboard.IsKeyDown(Key.LeftCtrl))
+        {
+            ApplyDiscordMuteShortcut(new HotkeyBinding(0, HotkeyBinding.RightControlVirtualKey));
+            return;
+        }
+
         if (IsModifierKey(key))
         {
             DiscordMuteShortcutCaptureStatus.Text = $"{FormatPressedModifiers(modifiers)}を押しています。続けて組み合わせるキーを押してください。";
@@ -626,7 +634,7 @@ public partial class MainWindow : System.Windows.Window
         var binding = new HotkeyBinding(ToNativeModifiers(modifiers), (uint)KeyInterop.VirtualKeyFromKey(key));
         if (!DiscordPushToMuteController.IsSupportedBinding(binding))
         {
-            DiscordMuteShortcutCaptureStatus.Text = "修飾キーとの組み合わせ、右Alt単独、またはF1～F24を設定してください。";
+            DiscordMuteShortcutCaptureStatus.Text = "修飾キーとの組み合わせ、右Alt・右Ctrl単独、またはF1～F24を設定してください。";
             return;
         }
 
@@ -4828,7 +4836,7 @@ public partial class MainWindow : System.Windows.Window
         _hotkey.Unregister();
         _hotkeyRegistered = false;
         ShortcutChangeButton.Content = "入力中…";
-        ShortcutCaptureStatus.Text = "右Alt単独、またはCtrl / Shift / Altなどとの組み合わせを押してください。Escでキャンセルできます。";
+        ShortcutCaptureStatus.Text = "右Alt・右Ctrl単独、またはCtrl / Shift / Altなどとの組み合わせを押してください。Escでキャンセルできます。";
         ShortcutChangeButton.Focus();
     }
 
@@ -4871,6 +4879,15 @@ public partial class MainWindow : System.Windows.Window
             return;
         }
 
+        if (key == Key.RightCtrl
+            && (modifiers & (ModifierKeys.Shift | ModifierKeys.Alt | ModifierKeys.Windows)) == ModifierKeys.None
+            && !Keyboard.IsKeyDown(Key.LeftCtrl))
+        {
+            ApplyShortcut(new HotkeyBinding(0, HotkeyBinding.RightControlVirtualKey));
+            e.Handled = true;
+            return;
+        }
+
         if (IsModifierKey(key))
         {
             ShortcutCaptureStatus.Text = $"{FormatPressedModifiers(modifiers)}を押しています。続けて組み合わせるキーを押してください。";
@@ -4882,7 +4899,7 @@ public partial class MainWindow : System.Windows.Window
         var virtualKey = KeyInterop.VirtualKeyFromKey(key);
         if (nativeModifiers == 0)
         {
-            ShortcutCaptureStatus.Text = "単独キーは登録できません。右Alt単独、または修飾キーとの組み合わせを使ってください。";
+            ShortcutCaptureStatus.Text = "単独キーは登録できません。右Alt・右Ctrl単独、または修飾キーとの組み合わせを使ってください。";
         }
         else if (virtualKey > 0)
         {

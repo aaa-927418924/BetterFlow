@@ -7,11 +7,13 @@ namespace BetterFlow.Services;
 internal readonly record struct HotkeyBinding(uint Modifiers, uint VirtualKey)
 {
     public const uint RightAltVirtualKey = 0xA5;
+    public const uint RightControlVirtualKey = 0xA3;
     public bool IsStandaloneRightAlt => Modifiers == 0 && VirtualKey == RightAltVirtualKey;
+    public bool IsStandaloneRightControl => Modifiers == 0 && VirtualKey == RightControlVirtualKey;
 
     public bool IsUsable => VirtualKey is > 0 and <= 0xFF
                             && (Modifiers & ~0x0Fu) == 0
-                            && (Modifiers != 0 || IsStandaloneRightAlt);
+                            && (Modifiers != 0 || IsStandaloneRightAlt || IsStandaloneRightControl);
 }
 
 internal sealed class GlobalHotkey : IDisposable
@@ -56,6 +58,7 @@ internal sealed class GlobalHotkey : IDisposable
     private bool _escapeMonitoring;
     private bool _escapePressed;
     private bool _rightAltPressed;
+    private bool _rightControlPressed;
     private bool _fullscreenAwareTargetKeyDown;
     private bool _fullscreenAwareTargetKeyConsumed;
     private volatile bool _voiceCommandPushToTalkEnabled;
@@ -78,7 +81,7 @@ internal sealed class GlobalHotkey : IDisposable
         if (handle == IntPtr.Zero || !binding.IsUsable)
             return false;
 
-        if (binding.IsStandaloneRightAlt || _isForegroundFullscreen is not null)
+        if (binding.IsStandaloneRightAlt || binding.IsStandaloneRightControl || _isForegroundFullscreen is not null)
         {
             InitializeModifierState();
             InstallKeyboardHook();
@@ -106,6 +109,7 @@ internal sealed class GlobalHotkey : IDisposable
         _escapeMonitoring = false;
         _escapePressed = false;
         _rightAltPressed = false;
+        _rightControlPressed = false;
         _fullscreenAwareTargetKeyDown = false;
         _fullscreenAwareTargetKeyConsumed = false;
         _voiceCommandPushToTalkEnabled = false;
@@ -138,7 +142,8 @@ internal sealed class GlobalHotkey : IDisposable
         if (enabled)
             return InstallKeyboardHook();
 
-        if (!_binding.IsStandaloneRightAlt && _isForegroundFullscreen is null && !_voiceCommandPushToTalkEnabled)
+        if (!_binding.IsStandaloneRightAlt && !_binding.IsStandaloneRightControl
+            && _isForegroundFullscreen is null && !_voiceCommandPushToTalkEnabled)
             RemoveKeyboardHook();
         return true;
     }
@@ -168,6 +173,7 @@ internal sealed class GlobalHotkey : IDisposable
         parts.Add(key switch
         {
             System.Windows.Input.Key.RightAlt => "右Alt",
+            System.Windows.Input.Key.RightCtrl => "右Ctrl",
             System.Windows.Input.Key.LeftAlt => "左Alt",
             System.Windows.Input.Key.Space => "Space",
             System.Windows.Input.Key.Return => "Enter",
@@ -285,29 +291,56 @@ internal sealed class GlobalHotkey : IDisposable
                 return CallNextHookEx(_keyboardHook, code, wParam, lParam);
             }
 
-            if (!_binding.IsStandaloneRightAlt)
-                return CallNextHookEx(_keyboardHook, code, wParam, lParam);
-
-            if (IsRightAltKey(keyInfo))
+            if (_binding.IsStandaloneRightAlt)
             {
-                if (isKeyDown && !IsOtherModifierDown())
+                if (IsRightAltKey(keyInfo))
                 {
-                    if (!_rightAltPressed)
+                    if (isKeyDown && !IsOtherModifierDown())
                     {
-                        _rightAltPressed = true;
-                        PostMessage(_handle, MessageId, new IntPtr(HotkeyId), IntPtr.Zero);
+                        if (!_rightAltPressed)
+                        {
+                            _rightAltPressed = true;
+                            PostMessage(_handle, MessageId, new IntPtr(HotkeyId), IntPtr.Zero);
+                        }
+                        return new IntPtr(1);
                     }
-                    return new IntPtr(1);
+
+                    if (isKeyUp && _rightAltPressed)
+                    {
+                        _rightAltPressed = false;
+                        return new IntPtr(1);
+                    }
                 }
 
-                if (isKeyUp && _rightAltPressed)
-                {
-                    _rightAltPressed = false;
-                    return new IntPtr(1);
-                }
+                UpdateModifierState(keyInfo, isKeyDown, isKeyUp);
             }
+            else if (_binding.IsStandaloneRightControl)
+            {
+                if (IsRightControlKey(keyInfo))
+                {
+                    if (isKeyDown && !IsOtherModifierDownExceptRightControl())
+                    {
+                        if (!_rightControlPressed)
+                        {
+                            _rightControlPressed = true;
+                            PostMessage(_handle, MessageId, new IntPtr(HotkeyId), IntPtr.Zero);
+                        }
+                        return new IntPtr(1);
+                    }
 
-            UpdateModifierState(keyInfo, isKeyDown, isKeyUp);
+                    if (isKeyUp && _rightControlPressed)
+                    {
+                        _rightControlPressed = false;
+                        return new IntPtr(1);
+                    }
+                }
+
+                UpdateModifierState(keyInfo, isKeyDown, isKeyUp);
+            }
+            else
+            {
+                return CallNextHookEx(_keyboardHook, code, wParam, lParam);
+            }
         }
 
         return CallNextHookEx(_keyboardHook, code, wParam, lParam);
@@ -341,6 +374,10 @@ internal sealed class GlobalHotkey : IDisposable
         _leftAltDown || _leftControlDown || _rightControlDown
         || _leftShiftDown || _rightShiftDown || _leftWindowsDown || _rightWindowsDown;
 
+    private bool IsOtherModifierDownExceptRightControl() =>
+        _leftAltDown || _rightAltDown || _leftControlDown
+        || _leftShiftDown || _rightShiftDown || _leftWindowsDown || _rightWindowsDown;
+
     private bool AreConfiguredModifiersDown()
     {
         uint active = 0;
@@ -366,6 +403,8 @@ internal sealed class GlobalHotkey : IDisposable
     private static uint NormalizeVirtualKey(KeyboardData keyInfo) =>
         keyInfo.VirtualKey == VkMenu && (keyInfo.Flags & LlkhfExtended) != 0
             ? HotkeyBinding.RightAltVirtualKey
+            : keyInfo.VirtualKey == VkControl && (keyInfo.Flags & LlkhfExtended) != 0
+                ? HotkeyBinding.RightControlVirtualKey
             : keyInfo.VirtualKey;
 
     private void UpdateModifierState(KeyboardData keyInfo, bool isKeyDown, bool isKeyUp)
@@ -398,6 +437,10 @@ internal sealed class GlobalHotkey : IDisposable
     private static bool IsRightAltKey(KeyboardData keyInfo) =>
         keyInfo.VirtualKey == HotkeyBinding.RightAltVirtualKey
         || (keyInfo.VirtualKey == VkMenu && (keyInfo.Flags & LlkhfExtended) != 0);
+
+    private static bool IsRightControlKey(KeyboardData keyInfo) =>
+        keyInfo.VirtualKey == HotkeyBinding.RightControlVirtualKey
+        || (keyInfo.VirtualKey == VkControl && (keyInfo.Flags & LlkhfExtended) != 0);
 
     private static bool IsKeyDown(int key) => (GetAsyncKeyState(key) & 0x8000) != 0;
 

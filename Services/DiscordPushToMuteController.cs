@@ -56,7 +56,7 @@ internal sealed class DiscordPushToMuteController : IDisposable
     public static bool IsSupportedBinding(HotkeyBinding binding) =>
         binding.VirtualKey is > 0 and <= 0xFF &&
         (binding.Modifiers & ~0x0Fu) == 0 &&
-        (binding.Modifiers != 0 || binding.VirtualKey == HotkeyBinding.RightAltVirtualKey ||
+        (binding.Modifiers != 0 || binding.IsStandaloneRightAlt || binding.IsStandaloneRightControl ||
          binding.VirtualKey is >= 0x70 and <= 0x87);
 
     private static bool IsDiscordDesktopRunning()
