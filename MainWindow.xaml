@@ -414,7 +414,7 @@
                                AutomationProperties.Name="Better Flow" />
                         <Button Content="×" HorizontalAlignment="Right" VerticalAlignment="Top"
                                 Style="{StaticResource WindowControlButtonStyle}" Click="CloseButton_Click"
-                                ToolTip="閉じる" AutomationProperties.Name="閉じる" />
+                                AutomationProperties.Name="閉じる" />
                     </Grid>
 
                     <ScrollViewer Grid.Row="1" Margin="0,16,-6,14" VerticalScrollBarVisibility="Auto"
@@ -493,7 +493,7 @@
                                       Click="SettingsStatisticsTab_Click" AutomationProperties.Name="統計" />
 
                         <Button Canvas.Left="166" Canvas.Top="52" Style="{StaticResource SettingsCloseButtonStyle}"
-                                Click="CloseButton_Click" ToolTip="閉じる" AutomationProperties.Name="閉じる">
+                                Click="CloseButton_Click" AutomationProperties.Name="閉じる">
                             <Path Width="19" Height="19" Data="M 1 1 L 18 18 M 18 1 L 1 18" Stroke="#AEAEAE"
                                   StrokeThickness="1.6" StrokeStartLineCap="Round" StrokeEndLineCap="Round" />
                         </Button>
@@ -566,7 +566,6 @@
                                                           PreviewMouseWheel="SettingsComboBox_PreviewMouseWheel"
                                                           DropDownOpened="OpenCodeModelCombo_DropDownOpened"
                                                           SelectionChanged="OpenCodeModelCombo_SelectionChanged"
-                                                          ToolTip="{Binding SelectedItem.DisplayName, RelativeSource={RelativeSource Self}}"
                                                           AutomationProperties.Name="OpenCode Desktopのモデル" />
                                                 <Button x:Name="RefreshOpenCodeModelsButton" Grid.Row="2" Grid.Column="2"
                                                         Content="再取得" Width="104" Height="38" Padding="6,0"
@@ -625,7 +624,6 @@
                                                           PreviewMouseWheel="SettingsComboBox_PreviewMouseWheel"
                                                           DropDownOpened="MicrophoneDeviceCombo_DropDownOpened"
                                                           SelectionChanged="MicrophoneDeviceCombo_SelectionChanged"
-                                                          ToolTip="{Binding SelectedItem.DisplayName, RelativeSource={RelativeSource Self}}"
                                                           AutomationProperties.Name="音声入力デバイス" />
                                                 <Button x:Name="RefreshMicrophoneDevicesButton" Grid.Row="2" Grid.Column="2"
                                                         Content="再取得" Width="104" Height="38" Padding="6,0"
@@ -646,15 +644,13 @@
                                                       IsThreeState="False" Style="{StaticResource SettingsCheckBoxStyle}"
                                                       Checked="IndicatorHintsCheckBox_Changed"
                                                       Unchecked="IndicatorHintsCheckBox_Changed"
-                                                      AutomationProperties.Name="インジケーターに操作ヒントを表示"
-                                                      ToolTip="録音やAI処理の操作方法を画面に表示します。" />
+                                                      AutomationProperties.Name="インジケーターに操作ヒントを表示" />
                                             <CheckBox x:Name="AutoStopOnSilenceCheckBox" Margin="39,8,0,0"
                                                       Width="604" Height="38" Content="60秒間無音の場合に自動で入力停止"
                                                       IsThreeState="False" Style="{StaticResource SettingsCheckBoxStyle}"
                                                       Checked="AutoStopOnSilenceCheckBox_Changed"
                                                       Unchecked="AutoStopOnSilenceCheckBox_Changed"
-                                                      AutomationProperties.Name="60秒間無音の場合に音声入力を自動停止"
-                                                      ToolTip="Silero VADで発話を検出します。60秒間発話がなければ録音を停止し、文章を貼り付けずにキャンセルします。" />
+                                                      AutomationProperties.Name="60秒間無音の場合に音声入力を自動停止" />
                                         </StackPanel>
                                     </ScrollViewer>
                                 </Grid>
@@ -666,8 +662,7 @@
                                             <Border Background="{StaticResource SettingsControlBrush}" CornerRadius="19" />
                                             <TextBox x:Name="DictionaryPreferredSpellingBox" Style="{StaticResource DictionaryInputStyle}"
                                                      MaxLength="100" TextChanged="DictionaryPreferredSpellingBox_TextChanged"
-                                                     AutomationProperties.Name="辞書に登録する正しい表記"
-                                                     ToolTip="ここに正しい表記を入力" />
+                                                     AutomationProperties.Name="辞書に登録する正しい表記" />
                                             <TextBlock x:Name="DictionaryPreferredPlaceholder" Text="ここに正しい表記を入力"
                                                        Margin="12,0" VerticalAlignment="Center" FontSize="12"
                                                        Foreground="#686868" IsHitTestVisible="False" />
@@ -676,8 +671,7 @@
                                             <Border Background="{StaticResource SettingsControlBrush}" CornerRadius="19" />
                                             <TextBox x:Name="DictionaryAlternativesBox" Style="{StaticResource DictionaryInputStyle}"
                                                      MaxLength="400" TextChanged="DictionaryAlternativesBox_TextChanged"
-                                                     AutomationProperties.Name="辞書に登録する誤認識・別表記"
-                                                     ToolTip="ここに間違った表記を入力" />
+                                                     AutomationProperties.Name="辞書に登録する誤認識・別表記" />
                                             <TextBlock x:Name="DictionaryAlternativesPlaceholder" Text="ここに間違った表記を入力"
                                                        Margin="12,0" VerticalAlignment="Center" FontSize="12"
                                                        Foreground="#686868" IsHitTestVisible="False" />
@@ -690,7 +684,6 @@
                                                    Width="639" Height="17" FontSize="11"
                                                    Foreground="{StaticResource SettingsMutedBrush}"
                                                    TextWrapping="NoWrap" TextTrimming="CharacterEllipsis"
-                                                   ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}"
                                                    AutomationProperties.LiveSetting="Polite" />
 
                                         <ScrollViewer Canvas.Left="26" Canvas.Top="80" Width="640" Height="584"
@@ -870,18 +863,7 @@
                                                   Unchecked="DisableShortcutInFullscreenCheckBox_Changed"
                                                   AutomationProperties.Name="フルスクリーン時にBetter Flowのショートカットキーを無効化">
                                             <TextBlock Text="フルスクリーン時はショートカットキーを無効化する"
-                                                       Foreground="{StaticResource SettingsTextBrush}">
-                                                <TextBlock.ToolTip>
-                                                    <ToolTip Background="#333333" Foreground="#F5F5F5"
-                                                             BorderBrush="#666666" BorderThickness="1"
-                                                             Padding="10,7" FontFamily="Inter, Yu Gothic UI"
-                                                             FontSize="12" Placement="Mouse" HasDropShadow="True">
-                                                        <TextBlock Width="300" TextWrapping="Wrap"
-                                                                   Foreground="#F5F5F5"
-                                                                   Text="動画を全画面表示している間やゲーム中は、Better Flowのショートカットを無効にします。ウィンドウを最大化しただけの場合は対象になりません。" />
-                                                    </ToolTip>
-                                                </TextBlock.ToolTip>
-                                            </TextBlock>
+                                                       Foreground="{StaticResource SettingsTextBrush}" />
                                         </CheckBox>
                                     </Canvas>
 
@@ -972,7 +954,6 @@
                                                     HorizontalAlignment="Left" VerticalAlignment="Center"
                                                     Background="Transparent" BorderThickness="0" Padding="0"
                                                     FocusVisualStyle="{x:Null}"
-                                                    ToolTip="プロフィール画像を変更"
                                                     Click="ProfileAvatarButton_Click"
                                                     AutomationProperties.Name="プロフィール画像を変更">
                                                 <Button.Template>
